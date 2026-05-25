@@ -1,0 +1,36 @@
+{
+  "name": "agenthub-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Business backend for AgentHub project versioning, build preview, and deploy flows.",
+  "scripts": {
+    "dev": "nest start --watch",
+    "start": "node dist/main.js",
+    "build": "nest build",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "archiver": "^7.0.1",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.2",
+    "express": "^5.1.0",
+    "extract-zip": "^2.0.1",
+    "fs-extra": "^11.3.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "simple-git": "^3.28.0",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@types/archiver": "^6.0.3",
+    "@types/express": "^5.0.3",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^24.1.0",
+    "typescript": "^5.9.2"
+  }
+}
