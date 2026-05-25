@@ -1,0 +1,260 @@
+import type {
+  AgentDefinition,
+  AppState,
+  Conversation,
+  Message,
+  RuntimeEvent,
+  Workspace,
+  WorkspaceSignal,
+  WorkflowEvent,
+  WorkflowEventRecord,
+} from './types'
+
+export type WorkspaceRoomKind = 'group' | 'direct'
+
+export type WorkspaceRoom = {
+  id: string
+  kind: WorkspaceRoomKind
+  title: string
+  subtitle: string
+  workspace: Workspace
+  conversation: Conversation
+  targetAgentId?: string
+  participantAgentIds: string[]
+}
+
+const STAGE_LABELS: Record<string, string> = {
+  chat: '自由对话',
+  requirements_intake: '需求澄清',
+  planning: '方案规划',
+  awaiting_confirmation: '等待确认',
+  execution: '执行中',
+  review: '审查验收',
+}
+
+/**
+ * Builds a lookup table for agents by id.
+ * Input: the full AppState.
+ * Output: a Map keyed by agent id.
+ */
+export function buildAgentMap(state: AppState): Map<string, AgentDefinition> {
+  return new Map(state.agents.map(agent => [agent.id, agent]))
+}
+
+/**
+ * Returns conversations that belong to one workspace.
+ * Input: AppState and a workspace id.
+ * Output: conversations sorted by recent activity.
+ */
+export function conversationsForWorkspace(state: AppState, workspaceId: string): Conversation[] {
+  return state.conversations
+    .filter(conversation => conversation.workspaceId === workspaceId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+}
+
+/**
+ * Resolves the direct agent id for a conversation when possible.
+ * Input: a conversation.
+ * Output: a participant agent id or undefined.
+ */
+export function directAgentId(conversation: Conversation | undefined): string | undefined {
+  if (!conversation || conversation.type !== 'direct') {
+    return undefined
+  }
+
+  return conversation.participants.find(participant => participant !== 'user')
+}
+
+/**
+ * Selects one primary chat conversation for a workspace.
+ * Input: AppState and workspace id.
+ * Output: the preferred group conversation or a direct fallback.
+ */
+export function primaryConversationForWorkspace(state: AppState, workspaceId: string): Conversation | undefined {
+  const workspace = state.workspaces.find(item => item.id === workspaceId)
+  const conversations = conversationsForWorkspace(state, workspaceId)
+
+  if (workspace?.workspaceType === 'chat') {
+    return conversations.find(conversation => conversation.type === 'direct') ?? conversations[0]
+  }
+
+  return conversations.find(conversation => conversation.type === 'group') ?? conversations[0]
+}
+
+/**
+ * Builds one UI chat room per workspace while hiding backend conversations.
+ * Input: the full AppState.
+ * Output: workspace rooms sorted by recent activity.
+ */
+export function workspaceRooms(state: AppState): WorkspaceRoom[] {
+  return state.workspaces
+    .map(workspace => {
+      const conversation = primaryConversationForWorkspace(state, workspace.id)
+
+      if (!conversation) {
+        return undefined
+      }
+
+      const targetAgentId = directAgentId(conversation)
+      const participantAgentIds = conversation.participants.filter(participant => participant !== 'user')
+      const title = conversation.type === 'group' ? workspace.name : conversation.title
+      const subtitle = conversation.type === 'group' ? workspace.goal : `${workspace.name} / ${workspace.goal}`
+
+      const room: WorkspaceRoom = {
+        id: workspace.id,
+        kind: conversation.type,
+        title,
+        subtitle,
+        workspace,
+        conversation,
+        participantAgentIds,
+        ...(targetAgentId ? { targetAgentId } : {}),
+      }
+
+      return room
+    })
+    .filter((room): room is WorkspaceRoom => Boolean(room))
+    .sort((left, right) => right.conversation.updatedAt.localeCompare(left.conversation.updatedAt))
+}
+
+/**
+ * Returns the first available UI workspace room id.
+ * Input: the full AppState.
+ * Output: workspace id for the first room or an empty string.
+ */
+export function firstWorkspaceRoomId(state: AppState): string {
+  return workspaceRooms(state)[0]?.id ?? ''
+}
+
+/**
+ * Returns the display label for a workspace room type.
+ * Input: room kind.
+ * Output: localized room kind label.
+ */
+export function workspaceRoomKindLabel(kind: WorkspaceRoomKind): string {
+  return kind === 'group' ? '群聊工作区' : '单聊工作区'
+}
+
+/**
+ * Returns messages that belong to one conversation.
+ * Input: AppState and a conversation id.
+ * Output: messages sorted by creation time.
+ */
+export function messagesForConversation(state: AppState, conversationId: string): Message[] {
+  return state.messages
+    .filter(message => message.conversationId === conversationId)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+}
+
+/**
+ * Formats an ISO timestamp into a compact UI time.
+ * Input: ISO timestamp string.
+ * Output: display-ready local time.
+ */
+export function formatTime(value: string): string {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return '--:--'
+  }
+
+  return date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+/**
+ * Converts a workflow event type into a readable label.
+ * Input: workflow event.
+ * Output: short label for timelines and workspace cards.
+ */
+export function eventLabel(event: WorkflowEvent): string {
+  switch (event.type) {
+    case 'task_stage_updated':
+      return `阶段更新：${STAGE_LABELS[event.taskStage] ?? event.taskStage}`
+    case 'agent_task_dispatched':
+      return `派发给 ${event.agentName}`
+    case 'agent_started':
+      return `${event.agentName} 开始执行`
+    case 'agent_finished':
+      return `${event.agentName} ${event.status === 'success' ? '完成' : '失败'}`
+    case 'preview_ready':
+      return '预览已就绪'
+    case 'zip_ready':
+      return '源码包已生成'
+    case 'assistant_delta':
+      return '正在流式回复'
+    case 'workflow_finished':
+      return '本轮工作流完成'
+    default:
+      return event.type.replaceAll('_', ' ')
+  }
+}
+
+/**
+ * Converts workflow events into the recent runtime event model used by the UI.
+ * Input: persisted workflow events and live runtime events.
+ * Output: newest runtime events first.
+ */
+export function mergeRuntimeEvents(records: WorkflowEventRecord[], liveEvents: RuntimeEvent[]): RuntimeEvent[] {
+  const persisted = records.map(record => ({
+    ...record.event,
+    receivedAt: record.createdAt,
+  }))
+
+  return [...persisted, ...liveEvents].sort((left, right) => right.receivedAt.localeCompare(left.receivedAt))
+}
+
+/**
+ * Computes status signals for one workspace room.
+ * Input: AppState, workspace room, and runtime events.
+ * Output: summarized signal values for room cards and watchers.
+ */
+export function workspaceRoomSignal(state: AppState, room: WorkspaceRoom, events: RuntimeEvent[]): WorkspaceSignal {
+  const runningAgents = state.agentRuns.filter(
+    run => run.workspaceId === room.workspace.id && run.conversationId === room.conversation.id && run.status === 'running',
+  ).length
+  const roomEvents = events.filter(
+    event => event.workspaceId === room.workspace.id && event.conversationId === room.conversation.id,
+  )
+  const artifactCount = state.artifacts.filter(artifact => artifact.workspaceId === room.workspace.id).length
+  const messageCount = state.messages.filter(message => message.conversationId === room.conversation.id).length
+
+  return {
+    runningAgents,
+    latestEventLabel: roomEvents[0] ? eventLabel(roomEvents[0]) : '暂无新事件',
+    artifactCount,
+    messageCount,
+  }
+}
+
+/**
+ * Returns the display label for a workflow stage.
+ * Input: raw stage value.
+ * Output: localized stage label.
+ */
+export function stageLabel(stage: string | undefined): string {
+  return stage ? STAGE_LABELS[stage] ?? stage : '自由对话'
+}
+
+/**
+ * Returns a stable visual tone for an agent id.
+ * Input: agent id.
+ * Output: CSS tone class suffix.
+ */
+export function agentTone(agentId: string): string {
+  if (agentId === 'engineer') {
+    return 'blue'
+  }
+
+  if (agentId === 'reviewer') {
+    return 'green'
+  }
+
+  if (agentId === 'product-manager') {
+    return 'amber'
+  }
+
+  return 'pink'
+}
