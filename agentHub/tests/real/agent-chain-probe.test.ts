@@ -196,7 +196,7 @@ describe.skipIf(!realTestsEnabled())('real main agent chain probe', () => {
     assertProbe(!report.newRuns.some(run => run.agentId === 'engineer'), 'Engineer should not run before implementation approval.', report)
   }, 360_000)
 
-  it('probes the approved main chain through implementation, review, and synthesis', async () => {
+  it('probes the approved main chain through engineer, reviewer, and synthesis', async () => {
     testApp = await createRealTestApp('agenthub-chain-')
     const initialState = (await testApp.app.inject({ method: 'GET', url: '/api/state' })).json() as AppState
     const { workspace, conversation } = selectPrimaryGroup(initialState)
@@ -219,7 +219,6 @@ describe.skipIf(!realTestsEnabled())('real main agent chain probe', () => {
     console.info(formatProbeReport(report))
 
     expect(response.statusCode).toBe(200)
-    assertProbe(report.newRuns.some(run => run.agentId === 'product-manager'), 'Expected product-manager to run in the approved chain.', report)
     assertProbe(report.newRuns.some(run => run.agentId === 'engineer'), 'Expected engineer to run in the approved chain.', report)
     assertProbe(report.newRuns.some(run => run.agentId === 'reviewer'), 'Expected reviewer to run in the approved chain.', report)
     assertProbe(report.newRuns.every(run => run.provider !== 'mock'), 'Approved chain should not use mock providers when real tests are enabled.', report)

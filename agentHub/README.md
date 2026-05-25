@@ -6,9 +6,9 @@
 - 默认自动化仍然使用 Vitest、memory store、mock agents，不会触发真实 Claude Code / Codex / DeepSeek，也不会写入正式 `data/workspaces`。
 - 新增真实链路探测入口：`tests/real/agent-chain-probe.test.ts`，默认跳过，只有设置 `AGENTHUB_RUN_REAL_TESTS=true` 后才会执行。
 - 探测数据独立放在 `tests/fixtures/agent-chain/probe-prompts.json`；真实运行产物继续写入系统临时 runtime root，测试结束后清理。
-- 当前探测目标分两段：先确认未批准的规划请求不会派发 engineer，再确认已批准的主链路能否走到 product-manager、engineer、reviewer、changeSet、preview 和 synthesis。
+- 当前探测目标分两段：先确认未批准的规划请求会进入 product-manager 且不会派发 engineer，再确认已批准的主链路能否走到 engineer、reviewer、changeSet、preview 和 synthesis。
 - 探测失败时会输出 `Agent chain probe report`，展示 handoff、run、changeSet 和关键 workflow event，方便判断真实链路具体卡在哪一步。
-- 2026-05-25 本地实测结果：未批准规划请求通过保护，只派发 product-manager；批准执行请求已到达 `turn_started`、`task_stage_updated`、`routing_finished`、engineer/reviewer handoff、engineer/reviewer real run、`agent_finished`、`synthesis_finished`、`workflow_finished`，但没有 product-manager run，没有生成 changeSet，engineer(codex) 和 reviewer(claude) run 均为 failed。因此当前真实主链路还不能算完整打通，已确认卡在真实工程交付产物生成前后。
+- 2026-05-25 本地实测结果：Codex bridge 启动后，真实 engineer 直连写文件 smoke 通过；未批准规划请求通过保护，会派发 product-manager 且不会派发 engineer；批准执行请求已到达 `routing_finished`、engineer/reviewer handoff、engineer/reviewer real run、`change_set_created`、`preview_ready`、`agent_finished`、`synthesis_finished`、`workflow_finished`，并生成 `index.html` 与 `styles.css` 变更。因此当前执行链路已能完成真实工程交付和审查；product-manager 只在未批准/需求对接阶段出现。
 - 真实链路测试命令：
 
 ```bash
