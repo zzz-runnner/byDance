@@ -2,8 +2,8 @@
 
 ## 2026-05-25 业务后端存储方案决策
 
-- `E:\byDance\docs\开发具体方案及技术栈.md` 已调整为 demo 阶段的本地磁盘存储方案：源码 zip、构建产物和部署产物先保存在业务后端服务器本地，不把阿里云 OSS 作为第一阶段依赖。
-- 业务后端后续建议通过 `StorageService` 抽象隔离存储实现，第一阶段使用 `LocalStorageService`；如果后续确实需要上线或公网分发，再替换为 OSS 实现。
+- `E:\byDance\docs\开发具体方案及技术栈.md` 已调整为本地磁盘存储方案：源码 zip、构建产物和部署产物保存在业务后端服务器本地，不使用阿里云 OSS 或其他对象存储。
+- 业务后端后续建议通过 `LocalStorageService` 集中管理本地路径、权限校验、静态访问 URL 和清理策略；如果存储空间不够，优先扩容服务器磁盘或挂载 NAS。
 - AgentHub 根目录边界不变：继续只负责 agent/runtime/API/CLI、真实子 Agent 调度、代码生成、审查、交付校验和自动返工；真实子 Agent 会直接把代码写入 `data/workspaces/{workspaceId}/repo`，业务后端后续基于已验收的 workspace repo 做产品版本固化、Docker 构建、本地构建预览、源码下载和部署发布。
 - demo 服务器约 60G 本地存储足够起步，但业务后端需要做产物清理：不长期保存 `node_modules`，清理临时构建目录，每个项目只保留最近若干 build/source 产物。
 
