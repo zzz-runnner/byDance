@@ -1,0 +1,4 @@
+{
+  "guardedIntake": "Plan the frontend scope for a tiny static status page. Requirements and acceptance criteria only; do not start implementation.",
+  "approvedMainChain": "Start implementation now. Build a tiny static frontend status page in the current workspace. Create only index.html and styles.css. index.html must reference ./styles.css and include the exact text AgentHub Main Chain Probe. Do not install dependencies, do not start a server, and do not modify other files."
+}

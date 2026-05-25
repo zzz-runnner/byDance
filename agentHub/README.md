@@ -1,5 +1,21 @@
 # AgentHub Local
 
+## 2026-05-25 Agent 链路探测状态
+
+- 根目录继续只作为 AgentHub runtime/API/CLI 仓库使用，不接入业务后端，不和前端目录做 workspace 绑定。
+- 默认自动化仍然使用 Vitest、memory store、mock agents，不会触发真实 Claude Code / Codex / DeepSeek，也不会写入正式 `data/workspaces`。
+- 新增真实链路探测入口：`tests/real/agent-chain-probe.test.ts`，默认跳过，只有设置 `AGENTHUB_RUN_REAL_TESTS=true` 后才会执行。
+- 探测数据独立放在 `tests/fixtures/agent-chain/probe-prompts.json`；真实运行产物继续写入系统临时 runtime root，测试结束后清理。
+- 当前探测目标分两段：先确认未批准的规划请求不会派发 engineer，再确认已批准的主链路能否走到 product-manager、engineer、reviewer、changeSet、preview 和 synthesis。
+- 探测失败时会输出 `Agent chain probe report`，展示 handoff、run、changeSet 和关键 workflow event，方便判断真实链路具体卡在哪一步。
+- 2026-05-25 本地实测结果：未批准规划请求通过保护，只派发 product-manager；批准执行请求已到达 `turn_started`、`task_stage_updated`、`routing_finished`、engineer/reviewer handoff、engineer/reviewer real run、`agent_finished`、`synthesis_finished`、`workflow_finished`，但没有 product-manager run，没有生成 changeSet，engineer(codex) 和 reviewer(claude) run 均为 failed。因此当前真实主链路还不能算完整打通，已确认卡在真实工程交付产物生成前后。
+- 真实链路测试命令：
+
+```bash
+$env:AGENTHUB_RUN_REAL_TESTS='true'
+npm run test:real:chain
+```
+
 ## 2026-05-25 前端拆分状态
 
 - Web 前端项目已从本仓库拆出到本机目录：`E:\byDance\agentHubFrontend`。
