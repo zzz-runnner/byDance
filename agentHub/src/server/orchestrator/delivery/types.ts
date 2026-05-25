@@ -21,6 +21,10 @@ export type DeliveryValidationResult = {
   status: DeliveryValidationStatus
   summary: string
   issues: DeliveryIssue[]
+  requiredFiles?: string[]
+  changedFiles?: string[]
+  previewReady?: boolean
+  changeSetReady?: boolean
 }
 
 export type ReviewVerdictResult = {

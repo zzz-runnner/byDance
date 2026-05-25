@@ -29,6 +29,7 @@ export async function runDeliveryValidation(
   repoPath: string,
   brief: RoutingTaskBrief,
   changedFiles: ChangedFile[],
+  previewReady?: boolean,
 ): Promise<DeliveryValidationResult | undefined> {
   if (!shouldValidateAgentDelivery(agent)) {
     return undefined
@@ -39,6 +40,7 @@ export async function runDeliveryValidation(
       task: brief.task,
       expectedOutput: brief.expectedOutput,
       changedFiles,
+      previewReady,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

@@ -682,6 +682,34 @@ export const ReviewVerdictEventSchema = WorkflowEventBaseSchema.extend({
   issues: z.array(z.string()),
 })
 
+export const RepairSuggestedEventSchema = WorkflowEventBaseSchema.extend({
+  type: z.literal('repair_suggested'),
+  reason: z.string(),
+  targetAgentId: z.string(),
+  issueCount: z.number().int().nonnegative(),
+})
+
+export const RepairStartedEventSchema = WorkflowEventBaseSchema.extend({
+  type: z.literal('repair_started'),
+  targetAgentId: z.string(),
+  attempt: z.number().int().positive(),
+  task: z.string(),
+})
+
+export const RepairFinishedEventSchema = WorkflowEventBaseSchema.extend({
+  type: z.literal('repair_finished'),
+  targetAgentId: z.string(),
+  attempt: z.number().int().positive(),
+  status: z.enum(['success', 'partial', 'failed']),
+  reviewerStatus: z.enum(['success', 'partial', 'failed']).optional(),
+})
+
+export const RepairBlockedEventSchema = WorkflowEventBaseSchema.extend({
+  type: z.literal('repair_blocked'),
+  reason: z.string(),
+  maxAttempts: z.number().int().nonnegative(),
+})
+
 export const ArtifactCreatedEventSchema = WorkflowEventBaseSchema.extend({
   type: z.literal('artifact_created'),
   artifactId: z.string(),
@@ -789,6 +817,10 @@ export const WorkflowEventSchema = z.discriminatedUnion('type', [
   AgentFinishedEventSchema,
   DeliveryValidationFinishedEventSchema,
   ReviewVerdictEventSchema,
+  RepairSuggestedEventSchema,
+  RepairStartedEventSchema,
+  RepairFinishedEventSchema,
+  RepairBlockedEventSchema,
   AgentSessionStartedEventSchema,
   AgentSessionFinishedEventSchema,
   SynthesisStartedEventSchema,

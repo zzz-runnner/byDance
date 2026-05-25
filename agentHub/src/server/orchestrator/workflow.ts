@@ -23,7 +23,7 @@ import { createAdapterForAgent, runAgentWithFallback } from '../adapters'
 import type { StateStore } from '../store/types'
 import { WorkspaceRuntimeManager } from '../runtime/workspace'
 import type { LocalToolGateway } from '../tool-gateway'
-import { buildAgentContextAssembly, buildSynthesisContextPackage, type SynthesisAgentResult } from './context'
+import { buildAgentContextAssembly, buildSynthesisContextPackage } from './context'
 import {
   createArtifactCreatedEvent,
   createChangeSetCreatedEvent,
@@ -32,6 +32,7 @@ import {
 } from './artifacts'
 import { decideRoutingWithPlanner, type PlannedRoutingDecision } from './planner'
 import { synthesizeLocally, synthesizeWithMainBrain, type PlannedSynthesis } from './synthesis'
+import { runAutomaticRepairIfNeeded, type TaskBriefRunResult } from './repair'
 import {
   completeTaskHandoff,
   createTaskHandoff,
@@ -83,10 +84,6 @@ export type WorkflowServices = {
   workflowEventLog?: WorkflowEventRecord[]
   diagnosticLogBuffer?: DiagnosticLog[]
   turnId?: string
-}
-
-type TaskBriefRunResult = SynthesisAgentResult & {
-  summary: string
 }
 
 type TaskRunSessionScope = {
@@ -368,6 +365,66 @@ async function buildReviewerEvidence(
     previewUrl: `/preview/${workspace.id}/index.html`,
     zipUrl: `/api/workspaces/${workspace.id}/zip`,
     sourceFileSummaries,
+  }
+}
+
+/**
+ * Adds a reviewer dispatch when an execution route asks engineer to change files without review.
+ * Input: workflow context, state, workspace, conversation, and routing. Output: routing with review safety applied.
+ */
+function applyReviewSafety(
+  services: WorkflowServices,
+  state: AppState,
+  workspace: Workspace,
+  conversation: Conversation,
+  routing: PlannedRoutingDecision,
+): PlannedRoutingDecision {
+  const decision = routing.decision
+  if (decision.kind !== 'dispatch_agents') {
+    return routing
+  }
+  const hasEngineer = decision.dispatches.some(brief => brief.agentId === 'engineer')
+  const hasReviewer = decision.dispatches.some(brief => brief.agentId === 'reviewer')
+  const reviewer = state.agents.find(agent => agent.id === 'reviewer')
+  if (!hasEngineer || hasReviewer || !reviewer) {
+    return routing
+  }
+
+  const engineerBrief = decision.dispatches.find(brief => brief.agentId === 'engineer')
+  const reviewBrief: RoutingTaskBrief = {
+    agentId: 'reviewer',
+    task: [
+      'Review the engineer delivery against the confirmed user request.',
+      engineerBrief ? `Engineer task: ${engineerBrief.task}` : undefined,
+      'Use changed files, delivery validation, preview, zip, and source summaries as evidence.',
+      'Return PASS, PARTIAL, or FAIL with concrete findings.',
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
+    requiredContext: ['projectBrief', 'recentMessages', 'artifacts', 'changeSets', 'reviewEvidence'],
+    expectedOutput: 'PASS/PARTIAL/FAIL verdict with concrete findings and remaining risks.',
+  }
+  emitWorkflowEvent(services, {
+    type: 'agent_progress',
+    workspaceId: workspace.id,
+    conversationId: conversation.id,
+    runId: `routing-${conversation.id}`,
+    agentId: 'orchestrator',
+    agentName: 'Project Orchestrator',
+    message: 'Added reviewer dispatch because an engineer execution requires review before final synthesis.',
+  })
+
+  return {
+    ...routing,
+    decision: {
+      ...decision,
+      execution: 'serial',
+      dispatches: [...decision.dispatches, reviewBrief],
+      targetAgents: Array.from(new Set([...decision.targetAgents, 'reviewer'])),
+      internalNote: [decision.internalNote, 'Review safety added reviewer after engineer execution.']
+        .filter(Boolean)
+        .join(' '),
+    },
   }
 }
 
@@ -785,7 +842,8 @@ async function runTaskBrief(
 
   const afterSnapshot = await readRepoSnapshot(services.runtime, runtime.repoPath)
   const { patch, changedFiles } = diffRepoSnapshots(beforeSnapshot, afterSnapshot)
-  const validation = await runDeliveryValidation(agent, runtime.repoPath, brief, changedFiles)
+  const previewReady = agent.id === 'engineer' && Boolean(runtime.previewUrl)
+  const validation = await runDeliveryValidation(agent, runtime.repoPath, brief, changedFiles, previewReady)
   if (validation) {
     emitWorkflowEvent(services, {
       type: 'delivery_validation_finished',
@@ -1651,7 +1709,8 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     })
   }
   const stageGuardedRouting = applyTaskStageGuard(workflowServices, state, workspace, conversation, plannedRouting, mainRoute.route)
-  const routing = applyExecutionSafety(workflowServices, state, workspace, conversation, stageGuardedRouting)
+  const reviewGuardedRouting = applyReviewSafety(workflowServices, state, workspace, conversation, stageGuardedRouting)
+  const routing = applyExecutionSafety(workflowServices, state, workspace, conversation, reviewGuardedRouting)
   const decision = routing.decision
   const visibleTurn = resolveVisibleTurn(decision)
 
@@ -1745,6 +1804,24 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       )
     }
   }
+
+  const repairedResults = await runAutomaticRepairIfNeeded(
+    workflowServices,
+    workspace,
+    conversation,
+    results,
+    decision.dispatches,
+    (brief, runState, sessionScope) => runTaskBrief(
+      workflowServices,
+      runState,
+      workspace,
+      conversation,
+      brief,
+      sessionScope,
+      mainRoute.route,
+    ),
+  )
+  results.splice(0, results.length, ...repairedResults)
 
   if (visibleTurn.finalizationMode === 'speaker_direct' && visibleTurn.speakerAgentId !== 'orchestrator' && results.length === 1) {
     emitWorkflowEvent(workflowServices, {

@@ -103,13 +103,17 @@ export function createMockGateway(): ModelGateway {
             dispatches: [
               {
                 agentId: 'engineer',
-                task: 'Implement the confirmed task in the workspace and report changed files and validation.',
+                task: input.userPrompt.includes('mock repair success')
+                  ? 'Implement mock delivery success by creating index.html and styles.css.'
+                  : 'Implement the confirmed task in the workspace and report changed files and validation.',
                 requiredContext: ['projectBrief', 'recentMessages', 'artifacts'],
                 expectedOutput: 'Implementation summary, changed files, tests, and preview status.',
               },
               {
                 agentId: 'reviewer',
-                task: 'Review the implemented result against the confirmed requirements.',
+                task: input.userPrompt.includes('mock review fail')
+                  ? 'mock review fail'
+                  : 'Review the implemented result against the confirmed requirements.',
                 requiredContext: ['projectBrief', 'recentMessages', 'artifacts', 'changeSets'],
                 expectedOutput: 'PASS/PARTIAL/FAIL verdict with findings.',
               },

@@ -16,6 +16,16 @@ $env:AGENTHUB_RUN_REAL_TESTS='true'
 npm run test:real:chain
 ```
 
+## 2026-05-25 Bridge、交付校验与自动返工
+
+- Codex engineer 启动前会先对 `AGENTHUB_CODEX_BRIDGE_URL` 做短超时 TCP 预检查；bridge 未启动时快速失败，并提示先运行 `npm run codex:bridge`，避免等待 Codex 多轮重试后才暴露错误。
+- 交付校验已增强：会提取任务中明确写出的文件名，检查必要文件、静态资源引用、changeSet、preview 状态和关键文本标记；校验结果继续写入 `delivery_validation_finished` 和 AgentRun delivery 日志。
+- Reviewer 上下文仍包含最新 changeSet、preview、zip 和变更文件摘要；后续可继续把更完整的 delivery validation 结构化结果注入 reviewer evidence。
+- 主脑执行阶段如果模型只派 engineer 而漏派 reviewer，后端会自动补 reviewer 审查任务，避免工程交付绕过质量门禁。
+- 主链路已支持一次自动返工：engineer 交付失败/部分失败、交付校验失败/部分失败、reviewer `FAIL/PARTIAL` 时，会自动派 engineer 修复一次，再派 reviewer 复查一次。
+- 自动返工最多一轮；二修后仍失败会发出 `repair_blocked`，不会无限循环。
+- 新增 workflow 事件：`repair_suggested`、`repair_started`、`repair_finished`、`repair_blocked`，CLI 会打印简短状态。
+
 ## 2026-05-25 前端拆分状态
 
 - Web 前端项目已从本仓库拆出到本机目录：`E:\byDance\agentHubFrontend`。

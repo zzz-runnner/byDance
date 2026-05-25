@@ -8,10 +8,13 @@ type DeliveryValidatorInput = {
   task: string
   expectedOutput: string
   changedFiles: ChangedFile[]
+  previewReady?: boolean
 }
 
 const TEXT_FILE_EXTENSIONS = new Set(['.js', '.ts', '.jsx', '.tsx', '.wxml', '.vue'])
 const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.vite'])
+const FILE_REFERENCE_PATTERN = /(?:^|[\s"'`(：:，,。])([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.(?:html|css|js|ts|jsx|tsx|json|md|wxml|wxss|vue|py|java|go|rs|txt))/g
+const KEY_TEXT_PATTERN = /(?:exact text|contains?|include(?:s)?|包含|文字|标题)\s*[:：]?\s*["'`“”]?([^"'`“”。，.]+)["'`“”]?/gi
 
 /**
  * Returns a repo-relative path normalized for matching and metadata.
@@ -46,6 +49,82 @@ async function exists(filePath: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * Extracts explicit file names mentioned in the task text.
+ * Input: user task and expected output text. Output: unique normalized relative file paths.
+ */
+function extractRequiredFiles(input: DeliveryValidatorInput): string[] {
+  const text = `${input.task}\n${input.expectedOutput}`
+  const files = new Set<string>()
+  let match = FILE_REFERENCE_PATTERN.exec(text)
+  while (match) {
+    files.add(normalizeRelativePath(match[1]))
+    match = FILE_REFERENCE_PATTERN.exec(text)
+  }
+  return [...files]
+}
+
+/**
+ * Extracts simple required text markers from explicit task wording.
+ * Input: user task text. Output: short text markers that should appear in changed files.
+ */
+function extractRequiredTextMarkers(task: string): string[] {
+  const markers = new Set<string>()
+  let match = KEY_TEXT_PATTERN.exec(task)
+  while (match) {
+    const marker = match[1].trim()
+    if (marker.length >= 4 && marker.length <= 120) {
+      markers.add(marker)
+    }
+    match = KEY_TEXT_PATTERN.exec(task)
+  }
+  return [...markers]
+}
+
+/**
+ * Validates that explicitly requested files were produced.
+ * Input: repository path and required files. Output: delivery issues for missing files.
+ */
+async function validateRequiredFiles(repoPath: string, requiredFiles: string[]): Promise<DeliveryIssue[]> {
+  const issues: DeliveryIssue[] = []
+  for (const requiredFile of requiredFiles) {
+    if (!(await exists(resolveRepoPath(repoPath, requiredFile)))) {
+      issues.push({ severity: 'blocking', message: `Required file was not delivered: ${requiredFile}`, path: requiredFile })
+    }
+  }
+  return issues
+}
+
+/**
+ * Validates required marker text against changed text files.
+ * Input: repository path, changed files, and marker list. Output: delivery issues for missing marker text.
+ */
+async function validateRequiredTextMarkers(
+  repoPath: string,
+  changedFiles: ChangedFile[],
+  markers: string[],
+): Promise<DeliveryIssue[]> {
+  if (!markers.length) {
+    return []
+  }
+  const readableFiles = changedFiles
+    .filter(file => file.status !== 'deleted')
+    .map(file => normalizeRelativePath(file.path))
+    .filter(file => ['.html', '.css', '.js', '.ts', '.jsx', '.tsx', '.md', '.txt'].includes(path.extname(file).toLowerCase()))
+  const contents: string[] = []
+  for (const file of readableFiles.slice(0, 12)) {
+    try {
+      contents.push(await readFile(resolveRepoPath(repoPath, file), 'utf8'))
+    } catch {
+      // Missing changed files are reported by required-file validation when explicit.
+    }
+  }
+  const combined = contents.join('\n')
+  return markers
+    .filter(marker => !combined.includes(marker))
+    .map(marker => ({ severity: 'warning' as const, message: `Required text marker was not found in changed files: ${marker}` }))
 }
 
 /**
@@ -208,20 +287,31 @@ function shouldValidateStaticSite(input: DeliveryValidatorInput): boolean {
  * Input: repository path, task details, and changed files. Output: validation result.
  */
 export async function validateDelivery(input: DeliveryValidatorInput): Promise<DeliveryValidationResult> {
+  const requiredFiles = extractRequiredFiles(input)
+  const changedFilePaths = input.changedFiles.map(file => normalizeRelativePath(file.path))
   if (!input.changedFiles.length) {
     return {
       status: 'skipped',
       summary: 'No changed files to validate.',
       issues: [],
+      requiredFiles,
+      changedFiles: changedFilePaths,
+      previewReady: input.previewReady ?? false,
+      changeSetReady: false,
     }
   }
 
   const issues: DeliveryIssue[] = []
+  issues.push(...await validateRequiredFiles(input.repoPath, requiredFiles))
+  issues.push(...await validateRequiredTextMarkers(input.repoPath, input.changedFiles, extractRequiredTextMarkers(input.task)))
   if (shouldValidateStaticSite(input)) {
     issues.push(...await validateStaticSite(input.repoPath))
   }
   if (shouldValidateWechat(input)) {
     issues.push(...await validateWechatMiniprogram(input.repoPath))
+  }
+  if (shouldValidateStaticSite(input) && input.previewReady === false) {
+    issues.push({ severity: 'warning', message: 'Static delivery did not produce a preview artifact.' })
   }
 
   const blockingCount = issues.filter(issue => issue.severity === 'blocking').length
@@ -231,5 +321,9 @@ export async function validateDelivery(input: DeliveryValidatorInput): Promise<D
       ? `Delivery validation found ${blockingCount} blocking issue(s).`
       : 'Delivery validation passed.',
     issues,
+    requiredFiles,
+    changedFiles: changedFilePaths,
+    previewReady: input.previewReady ?? false,
+    changeSetReady: input.changedFiles.length > 0,
   }
 }

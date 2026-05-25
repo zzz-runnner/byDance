@@ -66,6 +66,14 @@ export function formatWorkflowEvent(event: WorkflowEvent): string {
       return `[${event.agentName} ${event.stream}] 输出结束：${event.byteLength} bytes, ${event.chunkCount} chunks`
     case 'agent_finished':
       return `[${event.agentName}] 已完成：${event.status} | baseCommit=${event.baseCommit}`
+    case 'repair_suggested':
+      return `[repair] auto repair suggested -> @${event.targetAgentId} | issues=${event.issueCount}`
+    case 'repair_started':
+      return `[repair] auto repair attempt ${event.attempt} -> @${event.targetAgentId}`
+    case 'repair_finished':
+      return `[repair] auto repair finished: ${event.status}${event.reviewerStatus ? ` | reviewer=${event.reviewerStatus}` : ''}`
+    case 'repair_blocked':
+      return `[repair] stopped: ${event.reason}`
     case 'agent_session_started':
       return `[${event.agentName}] 私聊会话已接收：${event.content}`
     case 'agent_session_finished':

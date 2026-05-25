@@ -6,6 +6,7 @@ import { isoNow } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import type { LocalToolGateway } from '../tool-gateway'
 import { buildAgentPrompt, buildStdinPrompt, resolveCliCommand } from './command'
+import { checkCodexBridge } from './codex-bridge'
 import { createAgentOutputEmitter } from './stream-events'
 import type { AgentAdapter, AgentAdapterInput, AgentAdapterResult } from './types'
 
@@ -293,6 +294,18 @@ export function createCodexAdapter(env: ServerEnv, toolGateway: LocalToolGateway
   return {
     provider: 'codex',
     async run(input: AgentAdapterInput): Promise<AgentAdapterResult> {
+      const bridgeCheck = await checkCodexBridge(env.AGENTHUB_CODEX_BRIDGE_URL)
+      if (!bridgeCheck.ok) {
+        return {
+          status: 'failed',
+          content: bridgeCheck.message,
+          artifacts: [],
+          logs: [
+            'codex_bridge_unavailable',
+            bridgeCheck.message,
+          ],
+        }
+      }
       const outputPath = path.join(tmpdir(), `agenthub-codex-${randomUUID()}.txt`)
       const prompt = buildAgentPrompt(input.task, input.contextPackage, input.agent.outputSchema)
       const processEnv = await buildCodexProcessEnv(env)

@@ -54,6 +54,22 @@ describe('validateDelivery', () => {
     expect(result.issues[0]?.message).toContain('missing')
   })
 
+  it('reports explicitly required files that were not delivered', async () => {
+    const repoPath = await createRepo()
+    await writeFile(path.join(repoPath, 'index.html'), '<main>Only HTML</main>', 'utf8')
+
+    const result = await validateDelivery({
+      repoPath,
+      task: 'Create index.html and styles.css for a static web page.',
+      expectedOutput: 'Both files exist.',
+      changedFiles: [{ path: 'index.html', status: 'added', additions: 1, deletions: 0 }],
+    })
+
+    expect(result.status).toBe('partial')
+    expect(result.requiredFiles).toContain('styles.css')
+    expect(result.issues.some(issue => issue.path === 'styles.css')).toBe(true)
+  })
+
   it('detects called WeChat cloud functions that are not implemented', async () => {
     const repoPath = await createRepo()
     await writeFile(path.join(repoPath, 'project.config.json'), JSON.stringify({ cloudfunctionRoot: 'cloudfunctions' }), 'utf8')
