@@ -54,6 +54,7 @@ function createDemoAgent(input: Pick<AgentDefinition, 'id' | 'name' | 'role' | '
 function createDemoWorkspace(id: string, name: string, goal: string, type: Workspace['workspaceType']): Workspace {
   return {
     id,
+    projectId: id.replace(/^ws-/, 'proj-'),
     name,
     goal,
     workspaceType: type,
@@ -203,8 +204,8 @@ export function createDemoState(): AppState {
     workspaceId: 'ws-demo-vote',
     type: 'zip',
     title: '候选人投票小程序源码包',
-    content: '一键下载当前 workspace 代码和产物。',
-    url: '/api/workspaces/ws-demo-vote/zip',
+    content: '一键下载当前业务项目代码和产物。',
+    url: '/api/projects/proj-demo-vote/workspace.zip',
     createdByAgentId: 'orchestrator',
     createdAt: now,
   }

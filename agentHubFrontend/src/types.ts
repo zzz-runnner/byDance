@@ -30,12 +30,13 @@ export type WorkspaceSignal = {
 }
 
 export type StreamMessageInput = {
+  projectId?: string
   workspaceId: string
   conversationId: string
   content: string
   agentId?: string
 }
 
-export type RuntimeEvent = WorkflowEvent & {
+export type LiveWorkflowEvent = WorkflowEvent & {
   receivedAt: string
 }

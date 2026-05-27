@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Activity, Boxes, Braces, CheckCircle2, Clock3, FileArchive, GitPullRequest, RadioTower, ShieldCheck } from 'lucide-react'
 import { buildAgentMap, eventLabel, formatTime, stageLabel, workspaceRoomKindLabel, type WorkspaceRoom } from '../appModel'
-import type { AppState, RuntimeEvent } from '../types'
+import type { AppState, LiveWorkflowEvent } from '../types'
 import { AgentAvatar } from './AgentAvatar'
 import { GlassPanel } from './GlassPanel'
 import { StatusPill } from './StatusPill'
@@ -9,12 +9,12 @@ import { StatusPill } from './StatusPill'
 type InsightDockProps = {
   state: AppState
   room: WorkspaceRoom | undefined
-  events: RuntimeEvent[]
+  events: LiveWorkflowEvent[]
 }
 
 /**
  * Renders the right-side workflow, run, and artifact dock.
- * Input: app state, active workspace room, and runtime events.
+ * Input: app state, active workspace room, and workflow events.
  * Output: operational details for the selected workspace room.
  */
 export function InsightDock({ state, room, events }: InsightDockProps) {

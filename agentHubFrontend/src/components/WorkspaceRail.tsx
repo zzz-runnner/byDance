@@ -1,6 +1,6 @@
 import { MessagesSquare, Plus, RadioTower, Search, UserRound } from 'lucide-react'
 import { workspaceRoomKindLabel, workspaceRoomSignal, type WorkspaceRoom } from '../appModel'
-import type { AppState, RuntimeEvent } from '../types'
+import type { AppState, LiveWorkflowEvent } from '../types'
 import { AgentAvatar } from './AgentAvatar'
 import { GlassPanel } from './GlassPanel'
 import { StatusPill } from './StatusPill'
@@ -9,14 +9,14 @@ type WorkspaceRailProps = {
   state: AppState
   rooms: WorkspaceRoom[]
   activeWorkspaceId: string
-  events: RuntimeEvent[]
+  events: LiveWorkflowEvent[]
   onSelectWorkspace: (workspaceId: string) => void
   onCreateWorkspace: () => void
 }
 
 /**
  * Renders the left workspace navigation rail.
- * Input: app state, active workspace id, runtime events, and selection callbacks.
+ * Input: app state, active workspace id, workflow events, and selection callbacks.
  * Output: a list of selectable workspaces with live signals.
  */
 export function WorkspaceRail({
@@ -63,14 +63,14 @@ export function WorkspaceRail({
 type WorkspaceButtonProps = {
   state: AppState
   room: WorkspaceRoom
-  events: RuntimeEvent[]
+  events: LiveWorkflowEvent[]
   active: boolean
   onSelectWorkspace: (workspaceId: string) => void
 }
 
 /**
  * Renders one workspace button with its derived signal summary.
- * Input: app state, workspace, runtime events, active flag, and select callback.
+ * Input: app state, workspace, workflow events, active flag, and select callback.
  * Output: a button for switching workspaces.
  */
 function WorkspaceButton({ state, room, events, active, onSelectWorkspace }: WorkspaceButtonProps) {
@@ -116,14 +116,14 @@ function WorkspaceButton({ state, room, events, active, onSelectWorkspace }: Wor
 type WorkspaceWatchButtonProps = {
   state: AppState
   room: WorkspaceRoom
-  events: RuntimeEvent[]
+  events: LiveWorkflowEvent[]
   active: boolean
   onSelectWorkspace: (workspaceId: string) => void
 }
 
 /**
  * Renders one compact workspace watcher item.
- * Input: app state, workspace, runtime events, active flag, and selection callback.
+ * Input: app state, workspace, workflow events, active flag, and selection callback.
  * Output: a compact button for the watch strip.
  */
 export function WorkspaceWatchButton({

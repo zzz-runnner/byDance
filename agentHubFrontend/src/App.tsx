@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { LayoutDashboard, PlugZap } from 'lucide-react'
-import { createWorkspace, fetchAgentHubState, streamAgentHubMessage } from './api/agenthub'
+import {
+  createBusinessWorkspace,
+  fetchBusinessWorkbenchState,
+  streamBusinessProjectMessage,
+} from './api/businessBackend'
 import {
   directAgentId,
   firstWorkspaceRoomId,
-  mergeRuntimeEvents,
+  mergeWorkflowEvents,
   messagesForConversation,
   workspaceRooms,
 } from './appModel'
@@ -18,7 +22,7 @@ import { StatusPill } from './components/StatusPill'
 import { WatchStrip } from './components/WatchStrip'
 import { WorkspaceRail } from './components/WorkspaceRail'
 import { createDemoState } from './fixtures/demoState'
-import type { AppState, ConnectionStatus, Message, RuntimeEvent, WorkflowEvent, Workspace } from './types'
+import type { AppState, ConnectionStatus, LiveWorkflowEvent, Message, WorkflowEvent, Workspace } from './types'
 
 /**
  * Creates a temporary UI message for optimistic chat rendering.
@@ -55,6 +59,7 @@ function createLocalWorkspace(name: string, goal: string, workspaceType: Workspa
 
   return {
     id,
+    projectId: id,
     name,
     goal,
     workspaceType,
@@ -71,9 +76,9 @@ function createLocalWorkspace(name: string, goal: string, workspaceType: Workspa
 /**
  * Creates simulated workflow events for the offline demo path.
  * Input: workspace id and conversation id.
- * Output: runtime events that mirror the backend workflow event shape.
+ * Output: live workflow events that mirror the backend workflow event shape.
  */
-function createDemoRuntimeEvents(workspaceId: string, conversationId: string): RuntimeEvent[] {
+function createDemoWorkflowEvents(workspaceId: string, conversationId: string): LiveWorkflowEvent[] {
   const receivedAt = new Date().toISOString()
   const events: WorkflowEvent[] = [
     {
@@ -126,20 +131,20 @@ function firstWorkspaceId(state: AppState): string {
 /**
  * Renders the AgentHub web workbench.
  * Input: none.
- * Output: the complete multi-workspace AI conversation UI.
+ * Output: the complete business-backed multi-workspace AI conversation UI.
  */
 export function App() {
   const [state, setState] = useState<AppState>(() => createDemoState())
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting')
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(() => firstWorkspaceId(createDemoState()))
-  const [liveEvents, setLiveEvents] = useState<RuntimeEvent[]>([])
+  const [liveWorkflowEvents, setLiveWorkflowEvents] = useState<LiveWorkflowEvent[]>([])
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([])
   const [streamingMessages, setStreamingMessages] = useState<Record<string, Message>>({})
   const [sending, setSending] = useState(false)
 
-  const runtimeEvents = useMemo(
-    () => mergeRuntimeEvents(state.workflowEvents, liveEvents),
-    [liveEvents, state.workflowEvents],
+  const workflowEvents = useMemo(
+    () => mergeWorkflowEvents(state.workflowEvents, liveWorkflowEvents),
+    [liveWorkflowEvents, state.workflowEvents],
   )
   const rooms = useMemo(() => workspaceRooms(state), [state])
   const activeRoom = rooms.find(room => room.id === activeWorkspaceId) ?? rooms[0]
@@ -156,13 +161,13 @@ export function App() {
     let cancelled = false
 
     /**
-     * Loads real backend state when the API is available.
+     * Loads real business backend state when the API is available.
      * Input: none.
      * Output: updates the page state or switches to demo mode.
      */
     async function loadState() {
       try {
-        const nextState = await fetchAgentHubState()
+        const nextState = await fetchBusinessWorkbenchState()
 
         if (cancelled) {
           return
@@ -216,7 +221,7 @@ export function App() {
       : undefined
 
     if (connectionStatus === 'live') {
-      const nextState = await createWorkspace(name, goal, createDirectRoom ? 'chat' : 'dev', targetAgentId)
+      const nextState = await createBusinessWorkspace(name, goal, createDirectRoom ? 'chat' : 'dev', targetAgentId)
       setState(nextState)
       setActiveWorkspaceId(firstWorkspaceId(nextState))
       return
@@ -250,7 +255,7 @@ export function App() {
    */
   function handleStreamEvent(event: WorkflowEvent) {
     const receivedAt = new Date().toISOString()
-    setLiveEvents(previous => [...previous, { ...event, receivedAt }])
+    setLiveWorkflowEvents(previous => [...previous, { ...event, receivedAt }])
 
     if (event.type === 'assistant_message_started') {
       setStreamingMessages(previous => ({
@@ -283,7 +288,7 @@ export function App() {
   }
 
   /**
-   * Sends a chat message to the active direct or group workspace room.
+   * Sends a chat message to the active direct or group workspace room through the business backend.
    * Input: message content.
    * Output: streams backend events or simulates a demo response.
    */
@@ -301,7 +306,7 @@ export function App() {
 
     try {
       if (connectionStatus !== 'live') {
-        const demoEvents = createDemoRuntimeEvents(activeWorkspace.id, activeConversation.id)
+        const demoEvents = createDemoWorkflowEvents(activeWorkspace.id, activeConversation.id)
         const reply = createTemporaryMessage(
           activeWorkspace.id,
           activeConversation.id,
@@ -311,13 +316,14 @@ export function App() {
             ? '收到，这是单聊任务。我会基于当前 Agent 的长期上下文给出可执行建议。'
             : '收到，Orchestrator 已拆解任务：先澄清范围，再派发工程师实现，最后让 Reviewer 验收。',
         )
-        setLiveEvents(previous => [...previous, ...demoEvents])
+        setLiveWorkflowEvents(previous => [...previous, ...demoEvents])
         setOptimisticMessages(previous => [...previous, reply])
         return
       }
 
-      await streamAgentHubMessage(
+      await streamBusinessProjectMessage(
         {
+          projectId: activeWorkspace.projectId ?? activeWorkspace.id,
           workspaceId: activeWorkspace.id,
           conversationId: activeConversation.id,
           content,
@@ -326,7 +332,7 @@ export function App() {
         handleStreamEvent,
       )
 
-      const nextState = await fetchAgentHubState()
+      const nextState = await fetchBusinessWorkbenchState()
       setState(nextState)
       setOptimisticMessages([])
       setStreamingMessages({})
@@ -363,13 +369,13 @@ export function App() {
             state={state}
             rooms={rooms}
             activeWorkspaceId={activeWorkspaceId}
-            events={runtimeEvents}
+            events={workflowEvents}
             onSelectWorkspace={handleSelectWorkspace}
           />
           <div className="topbar-actions">
             <StatusPill
               status={connectionStatus === 'live' ? 'success' : connectionStatus === 'connecting' ? 'running' : 'demo'}
-              label={connectionStatus === 'live' ? 'API live' : connectionStatus === 'connecting' ? 'connecting' : 'demo mode'}
+              label={connectionStatus === 'live' ? 'backend live' : connectionStatus === 'connecting' ? 'connecting' : 'demo mode'}
             />
             <GlassPanel compact className="metric-chip">
               <LayoutDashboard size={15} />
@@ -387,7 +393,7 @@ export function App() {
             state={state}
             rooms={rooms}
             activeWorkspaceId={activeWorkspaceId}
-            events={runtimeEvents}
+            events={workflowEvents}
             onSelectWorkspace={handleSelectWorkspace}
             onCreateWorkspace={handleCreateWorkspace}
           />
@@ -402,7 +408,7 @@ export function App() {
           <InsightDock
             state={state}
             room={activeRoom}
-            events={runtimeEvents}
+            events={workflowEvents}
           />
         </section>
       </div>

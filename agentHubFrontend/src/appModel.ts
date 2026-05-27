@@ -2,8 +2,8 @@ import type {
   AgentDefinition,
   AppState,
   Conversation,
+  LiveWorkflowEvent,
   Message,
-  RuntimeEvent,
   Workspace,
   WorkspaceSignal,
   WorkflowEvent,
@@ -193,11 +193,11 @@ export function eventLabel(event: WorkflowEvent): string {
 }
 
 /**
- * Converts workflow events into the recent runtime event model used by the UI.
- * Input: persisted workflow events and live runtime events.
- * Output: newest runtime events first.
+ * Converts workflow events into the recent live event model used by the UI.
+ * Input: persisted workflow events and live streamed workflow events.
+ * Output: newest workflow events first.
  */
-export function mergeRuntimeEvents(records: WorkflowEventRecord[], liveEvents: RuntimeEvent[]): RuntimeEvent[] {
+export function mergeWorkflowEvents(records: WorkflowEventRecord[], liveEvents: LiveWorkflowEvent[]): LiveWorkflowEvent[] {
   const persisted = records.map(record => ({
     ...record.event,
     receivedAt: record.createdAt,
@@ -208,10 +208,10 @@ export function mergeRuntimeEvents(records: WorkflowEventRecord[], liveEvents: R
 
 /**
  * Computes status signals for one workspace room.
- * Input: AppState, workspace room, and runtime events.
+ * Input: AppState, workspace room, and workflow events.
  * Output: summarized signal values for room cards and watchers.
  */
-export function workspaceRoomSignal(state: AppState, room: WorkspaceRoom, events: RuntimeEvent[]): WorkspaceSignal {
+export function workspaceRoomSignal(state: AppState, room: WorkspaceRoom, events: LiveWorkflowEvent[]): WorkspaceSignal {
   const runningAgents = state.agentRuns.filter(
     run => run.workspaceId === room.workspace.id && run.conversationId === room.conversation.id && run.status === 'running',
   ).length

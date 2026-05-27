@@ -1,8 +1,8 @@
 # AgentHub Frontend
 
-AgentHub Web frontend is split out from `E:\byDance\agentHub` and keeps its own dependencies, lockfile, build output, and runtime commands.
+AgentHub Web frontend keeps its own dependencies, lockfile, build output, and runtime commands.
 
-This directory is not an npm workspace package and does not depend on the AgentHub runtime through `file:` links. The local API is expected to run separately from `E:\byDance\agentHub`.
+This directory is not an npm workspace package and does not depend on the AgentHub runtime through `file:` links. The frontend talks to the business backend, and the business backend owns the bridge to AgentHub Runtime.
 
 ## Commands
 
@@ -14,20 +14,20 @@ npm run check
 npm run preview
 ```
 
-## Runtime Link
+## Backend Link
 
 - Dev server: `http://127.0.0.1:5173`
-- Backend API proxy target: `http://127.0.0.1:8787`
-- API endpoints consumed by the frontend: `/api/state`, `/api/messages/stream`, `/api/workspaces`, `/api/conversations`
-- Preview assets are proxied through `/preview`
+- Business backend proxy target: `http://127.0.0.1:8790`
+- API endpoints consumed by the frontend: `/api/projects`, `/api/projects/:projectId/state`, `/api/projects/:projectId/messages/stream`
+- Preview and delivery assets are proxied through `/preview`, `/build-preview`, and `/deploy`
 
-If the AgentHub runtime API is unavailable, the frontend falls back to local demo data.
+If the business backend API is unavailable, the frontend falls back to local demo data.
 
 ## Boundary
 
 - Frontend owns UI, local demo fixtures, browser state, and Vite build output.
-- `E:\byDance\agentHub` owns AgentHub runtime, local API, CLI, orchestration, adapters, workspace runtime, and storage.
-- Business backend is intentionally out of scope for this split.
+- `E:\byDance\agentHubBackend` owns business projects, conversations, versions, builds, deployments, and the API contract consumed by the frontend.
+- `E:\byDance\agentHub` owns AgentHub Runtime, local API, CLI, orchestration, adapters, workspace runtime, and storage.
 
 ## 当前状态
 
@@ -37,8 +37,8 @@ If the AgentHub runtime API is unavailable, the frontend falls back to local dem
 - 工作区列表已收紧卡片高度，避免左侧工作区卡片被网格拉伸出过多底部留白。
 - 聊天区正文、输入框和卡片辅助文字已提升字号，消息操作按钮常态显示。
 - 当前工作台背景图片使用 `src/asset/background/newBG.png`。
-- 后端 API 未运行时，页面仍会回退到本地 demo 数据；后端运行在 `127.0.0.1:8787` 后会通过 Vite proxy 进入 live 状态。
-- 当前目录已初始化为 Git 仓库，`main` 分支跟踪 `origin/main`，远程地址为 `git@github.com:zzz-runnner/agentHubFrontend.git`。
+- 业务后端 API 未运行时，页面仍会回退到本地 demo 数据；业务后端运行在 `127.0.0.1:8790` 后会通过 Vite proxy 进入 live 状态。
+- 当前目录由根仓库 `E:\byDance` 统一管理 Git，前端只保留自己的依赖和构建配置。
 
 ## 验证记录
 

@@ -1,18 +1,18 @@
 import type { WorkspaceRoom } from '../appModel'
-import type { AppState, RuntimeEvent } from '../types'
+import type { AppState, LiveWorkflowEvent } from '../types'
 import { WorkspaceWatchButton } from './WorkspaceRail'
 
 type WatchStripProps = {
   state: AppState
   rooms: WorkspaceRoom[]
   activeWorkspaceId: string
-  events: RuntimeEvent[]
+  events: LiveWorkflowEvent[]
   onSelectWorkspace: (workspaceId: string) => void
 }
 
 /**
  * Renders the multi-workspace watch strip.
- * Input: app state, active workspace, runtime events, and selection callback.
+ * Input: app state, active workspace, workflow events, and selection callback.
  * Output: compact watcher cards for up to four workspaces.
  */
 export function WatchStrip({ state, rooms, activeWorkspaceId, events, onSelectWorkspace }: WatchStripProps) {

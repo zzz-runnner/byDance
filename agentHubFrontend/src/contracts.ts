@@ -47,6 +47,7 @@ export type Artifact = {
 
 export type Workspace = {
   id: string
+  projectId?: string
   name: string
   goal: string
   workspaceType: WorkspaceType
@@ -54,6 +55,8 @@ export type Workspace = {
   runtimeType: RuntimeType
   runtimeStatus: RuntimeStatus
   projectBrief: string
+  agentHubPreviewUrl?: string
+  agentHubZipUrl?: string
   pinnedMessageIds: string[]
   createdAt: string
   updatedAt: string
