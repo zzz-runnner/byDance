@@ -515,6 +515,24 @@ a {
   background: rgba(219, 94, 168, 0.72);
 }
 
+.agent-avatar--generated {
+  overflow: hidden;
+  padding: 2px;
+}
+
+.agent-avatar--sm.agent-avatar--generated {
+  padding: 1px;
+}
+
+.agent-avatar__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  filter: saturate(1.06) contrast(1.02);
+}
+
 .agent-avatar--orb {
   border: 0;
   background: transparent;
