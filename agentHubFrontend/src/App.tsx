@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { LayoutDashboard, PlugZap } from 'lucide-react'
+import { LayoutDashboard, PlugZap, RefreshCcw, ServerCrash, Wifi, WifiOff } from 'lucide-react'
 import {
   createBusinessWorkspace,
   fetchBusinessWorkbenchState,
@@ -15,14 +15,18 @@ import {
 import backgroundImage from './asset/background/newBG.png'
 import { BackgroundCanvas } from './components/BackgroundCanvas'
 import { ChatPane } from './components/ChatPane'
+import { CreateWorkspaceDialog, type CreateWorkspaceInput } from './components/CreateWorkspaceDialog'
 import { GlassPanel } from './components/GlassPanel'
 import { InsightDock } from './components/InsightDock'
 import { OrbMark } from './components/OrbMark'
 import { StatusPill } from './components/StatusPill'
-import { WatchStrip } from './components/WatchStrip'
 import { WorkspaceRail } from './components/WorkspaceRail'
 import { createDemoState } from './fixtures/demoState'
 import type { AppState, ConnectionStatus, LiveWorkflowEvent, Message, WorkflowEvent, Workspace } from './types'
+
+type DataMode = 'auto' | 'live' | 'mock'
+
+const INITIAL_DEMO_STATE = createDemoState()
 
 /**
  * Creates a temporary UI message for optimistic chat rendering.
@@ -88,7 +92,7 @@ function createDemoWorkflowEvents(workspaceId: string, conversationId: string): 
       taskStage: 'execution',
       executionReadiness: 'execution_in_progress',
       needsUserConfirmation: false,
-      reason: 'Web Demo 模式下模拟 Orchestrator 进入执行阶段。',
+      reason: 'Mock 模式下模拟 Orchestrator 进入执行阶段。',
     },
     {
       type: 'agent_task_dispatched',
@@ -134,20 +138,40 @@ function firstWorkspaceId(state: AppState): string {
  * Output: the complete business-backed multi-workspace AI conversation UI.
  */
 export function App() {
-  const [state, setState] = useState<AppState>(() => createDemoState())
+  const [state, setState] = useState<AppState>(INITIAL_DEMO_STATE)
+  const [dataMode, setDataMode] = useState<DataMode>('auto')
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting')
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState(() => firstWorkspaceId(createDemoState()))
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(() => firstWorkspaceId(INITIAL_DEMO_STATE))
   const [liveWorkflowEvents, setLiveWorkflowEvents] = useState<LiveWorkflowEvent[]>([])
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([])
   const [streamingMessages, setStreamingMessages] = useState<Record<string, Message>>({})
   const [sending, setSending] = useState(false)
+  const [loadingState, setLoadingState] = useState(false)
+  const [workspaceQuery, setWorkspaceQuery] = useState('')
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false)
+  const [createWorkspaceError, setCreateWorkspaceError] = useState('')
 
   const workflowEvents = useMemo(
     () => mergeWorkflowEvents(state.workflowEvents, liveWorkflowEvents),
     [liveWorkflowEvents, state.workflowEvents],
   )
   const rooms = useMemo(() => workspaceRooms(state), [state])
-  const activeRoom = rooms.find(room => room.id === activeWorkspaceId) ?? rooms[0]
+  const filteredRooms = useMemo(() => {
+    const query = workspaceQuery.trim().toLowerCase()
+
+    if (!query) {
+      return rooms
+    }
+
+    return rooms.filter(room => {
+      const searchText = [room.title, room.subtitle, room.targetAgentId ?? '', ...room.participantAgentIds]
+        .join(' ')
+        .toLowerCase()
+      return searchText.includes(query)
+    })
+  }, [rooms, workspaceQuery])
+  const activeRoom = filteredRooms.find(room => room.id === activeWorkspaceId) ?? filteredRooms[0] ?? rooms[0]
   const activeConversationId = activeRoom?.conversation.id ?? ''
   const currentMessages = [
     ...messagesForConversation(state, activeConversationId),
@@ -157,41 +181,63 @@ export function App() {
     message => message.conversationId === activeConversationId,
   )
 
-  useEffect(() => {
-    let cancelled = false
+  /**
+   * Loads real business backend state or falls back to the demo state.
+   * Input: selected data mode and preserve-selection flag.
+   * Output: updates connection state and current workbench snapshot.
+   */
+  async function loadWorkbenchState(nextMode: DataMode, preserveSelection = false) {
+    setLoadingState(true)
+    setCreateWorkspaceError('')
 
-    /**
-     * Loads real business backend state when the API is available.
-     * Input: none.
-     * Output: updates the page state or switches to demo mode.
-     */
-    async function loadState() {
-      try {
-        const nextState = await fetchBusinessWorkbenchState()
-
-        if (cancelled) {
-          return
-        }
-
-        setState(nextState)
-        setConnectionStatus('live')
-        setActiveWorkspaceId(firstWorkspaceId(nextState))
-      } catch {
-        if (!cancelled) {
-          setConnectionStatus('demo')
-          const demo = createDemoState()
-          setState(demo)
+    try {
+      if (nextMode === 'mock') {
+        const demo = createDemoState()
+        setState(demo)
+        setConnectionStatus('demo')
+        if (!preserveSelection) {
           setActiveWorkspaceId(firstWorkspaceId(demo))
         }
+        return
       }
+
+      const nextState = await fetchBusinessWorkbenchState()
+      setState(nextState)
+      setConnectionStatus('live')
+      if (!preserveSelection) {
+        setActiveWorkspaceId(firstWorkspaceId(nextState))
+      }
+    } catch {
+      if (nextMode === 'live') {
+        setConnectionStatus('error')
+        return
+      }
+
+      const demo = createDemoState()
+      setState(demo)
+      setConnectionStatus('demo')
+      if (!preserveSelection) {
+        setActiveWorkspaceId(firstWorkspaceId(demo))
+      }
+    } finally {
+      setLoadingState(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadWorkbenchState(dataMode)
+  }, [dataMode])
+
+  useEffect(() => {
+    if (activeRoom) {
+      return
     }
 
-    void loadState()
-
-    return () => {
-      cancelled = true
+    const nextRoom = filteredRooms[0] ?? rooms[0]
+    if (nextRoom) {
+      setActiveWorkspaceId(nextRoom.id)
     }
-  }, [])
+  }, [activeRoom, filteredRooms, rooms])
 
   /**
    * Switches the active workspace room.
@@ -204,48 +250,55 @@ export function App() {
 
   /**
    * Creates a workspace through the backend or local demo state.
-   * Input: none.
-   * Output: prompts for workspace details and updates state.
+   * Input: workspace form payload.
+   * Output: updates the workbench state and selects the new workspace.
    */
-  async function handleCreateWorkspace() {
-    const name = window.prompt('新工作区名称', '新 AgentHub 工作区')?.trim()
+  async function handleCreateWorkspace(input: CreateWorkspaceInput) {
+    setCreateWorkspaceError('')
+    setCreatingWorkspace(true)
 
-    if (!name) {
-      return
+    const createDirectRoom = input.roomMode === 'direct'
+    const targetAgentId = input.targetAgentId
+
+    try {
+      if (connectionStatus === 'live' && dataMode !== 'mock') {
+        const nextState = await createBusinessWorkspace(
+          input.name,
+          input.goal,
+          createDirectRoom ? 'chat' : input.workspaceType,
+          targetAgentId,
+        )
+        setState(nextState)
+        setActiveWorkspaceId(firstWorkspaceId(nextState))
+        setCreateDialogOpen(false)
+        return
+      }
+
+      const workspace = createLocalWorkspace(input.name, input.goal, createDirectRoom ? 'chat' : input.workspaceType)
+      const conversation = {
+        id: `${workspace.id}-${createDirectRoom ? targetAgentId : 'group'}`,
+        workspaceId: workspace.id,
+        type: createDirectRoom ? 'direct' : 'group',
+        title: createDirectRoom ? `${targetAgentId ?? 'engineer'} 单聊工作区` : '项目主群聊',
+        participants: createDirectRoom
+          ? ['user', targetAgentId ?? 'engineer']
+          : ['user', 'orchestrator', 'product-manager', 'engineer', 'reviewer'],
+        createdAt: workspace.createdAt,
+        updatedAt: workspace.updatedAt,
+      } as const
+
+      setState(previous => ({
+        ...previous,
+        workspaces: [workspace, ...previous.workspaces],
+        conversations: [conversation, ...previous.conversations],
+      }))
+      setActiveWorkspaceId(workspace.id)
+      setCreateDialogOpen(false)
+    } catch (error) {
+      setCreateWorkspaceError(error instanceof Error ? error.message : '创建工作区失败。')
+    } finally {
+      setCreatingWorkspace(false)
     }
-
-    const goal = window.prompt('工作区目标', '通过多 Agent 协作完成一个可预览产物。')?.trim() || '通过多 Agent 协作完成一个可预览产物。'
-    const createDirectRoom = window.confirm('是否创建单聊工作区？选择“取消”会创建群聊工作区。')
-    const targetAgentId = createDirectRoom
-      ? window.prompt('单聊目标 Agent', 'engineer')?.trim() || 'engineer'
-      : undefined
-
-    if (connectionStatus === 'live') {
-      const nextState = await createBusinessWorkspace(name, goal, createDirectRoom ? 'chat' : 'dev', targetAgentId)
-      setState(nextState)
-      setActiveWorkspaceId(firstWorkspaceId(nextState))
-      return
-    }
-
-    const workspace = createLocalWorkspace(name, goal, createDirectRoom ? 'chat' : 'dev')
-    const conversation = {
-      id: `${workspace.id}-${createDirectRoom ? targetAgentId : 'group'}`,
-      workspaceId: workspace.id,
-      type: createDirectRoom ? 'direct' : 'group',
-      title: createDirectRoom ? `${targetAgentId} 单聊工作区` : '项目主群聊',
-      participants: createDirectRoom
-        ? ['user', targetAgentId ?? 'engineer']
-        : ['user', 'orchestrator', 'product-manager', 'engineer', 'reviewer'],
-      createdAt: workspace.createdAt,
-      updatedAt: workspace.updatedAt,
-    } as const
-
-    setState(previous => ({
-      ...previous,
-      workspaces: [workspace, ...previous.workspaces],
-      conversations: [conversation, ...previous.conversations],
-    }))
-    setActiveWorkspaceId(workspace.id)
   }
 
   /**
@@ -305,7 +358,7 @@ export function App() {
     setSending(true)
 
     try {
-      if (connectionStatus !== 'live') {
+      if (connectionStatus !== 'live' || dataMode === 'mock') {
         const demoEvents = createDemoWorkflowEvents(activeWorkspace.id, activeConversation.id)
         const reply = createTemporaryMessage(
           activeWorkspace.id,
@@ -352,6 +405,89 @@ export function App() {
     }
   }
 
+  /**
+   * Reloads the current workbench state using the selected mode.
+   * Input: none.
+   * Output: refreshes state without forcing the user off the current workspace.
+   */
+  async function handleRefresh() {
+    await loadWorkbenchState(dataMode, true)
+  }
+
+  /**
+   * Updates the active data mode and clears transient chat state.
+   * Input: target data mode.
+   * Output: switches between auto, live-only, and mock-only sources.
+   */
+  function handleSwitchDataMode(nextMode: DataMode) {
+    if (nextMode === dataMode) {
+      return
+    }
+
+    setDataMode(nextMode)
+    setLiveWorkflowEvents([])
+    setOptimisticMessages([])
+    setStreamingMessages({})
+  }
+
+  /**
+   * Broadcasts text insertion requests to the chat composer.
+   * Input: string to insert into the composer.
+   * Output: dispatches a window event consumed by the chat composer.
+   */
+  function handleInsertComposerText(value: string) {
+    window.dispatchEvent(new CustomEvent<string>('agenthub:composer-insert', { detail: value }))
+  }
+
+  /**
+   * Resends the latest user message for the active conversation.
+   * Input: none.
+   * Output: triggers the same send path as a normal submission.
+   */
+  async function handleRegenerate() {
+    const lastUserMessage = [...currentMessages].reverse().find(message => message.senderType === 'user')
+
+    if (!lastUserMessage || sending) {
+      return
+    }
+
+    await handleSend(lastUserMessage.content)
+  }
+
+  /**
+   * Copies one message body into the system clipboard when supported.
+   * Input: message content.
+   * Output: writes to clipboard and silently ignores unsupported environments.
+   */
+  async function handleCopyMessage(content: string) {
+    if (!navigator.clipboard?.writeText) {
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(content)
+    } catch {
+      // Ignore clipboard errors in unsupported or restricted contexts.
+    }
+  }
+
+  /**
+   * Prefills the composer with a quoted message stub.
+   * Input: message content.
+   * Output: inserts a short reply scaffold in the composer.
+   */
+  function handleReplyToMessage(content: string) {
+    handleInsertComposerText(`引用上一条消息：\n${content}\n\n`)
+  }
+
+  const modeLabel = dataMode === 'mock' ? 'mock only' : dataMode === 'live' ? 'live only' : 'auto'
+  const connectionPillStatus =
+    connectionStatus === 'live' ? 'success' : connectionStatus === 'connecting' ? 'running' : connectionStatus === 'error' ? 'failed' : 'demo'
+  const connectionPillLabel =
+    connectionStatus === 'live' ? 'backend live' : connectionStatus === 'connecting' ? 'connecting' : connectionStatus === 'error' ? 'backend error' : 'demo mode'
+  const sourceTargetLabel = dataMode === 'mock' ? '本地 Mock 数据' : dataMode === 'live' ? '业务后端 API' : '自动探测，失败回退 Mock'
+  const ConnectionIcon = connectionStatus === 'live' ? Wifi : connectionStatus === 'error' ? ServerCrash : WifiOff
+
   return (
     <main className="app-shell" style={{ backgroundImage: `url(${backgroundImage})` }}>
       <BackgroundCanvas />
@@ -365,18 +501,35 @@ export function App() {
               <h1>多 Agent 协作工作台</h1>
             </div>
           </div>
-          <WatchStrip
-            state={state}
-            rooms={rooms}
-            activeWorkspaceId={activeWorkspaceId}
-            events={workflowEvents}
-            onSelectWorkspace={handleSelectWorkspace}
-          />
           <div className="topbar-actions">
-            <StatusPill
-              status={connectionStatus === 'live' ? 'success' : connectionStatus === 'connecting' ? 'running' : 'demo'}
-              label={connectionStatus === 'live' ? 'backend live' : connectionStatus === 'connecting' ? 'connecting' : 'demo mode'}
-            />
+            <GlassPanel compact className="mode-toggle">
+              <button
+                className={`mode-toggle__button ${dataMode === 'auto' ? 'is-active' : ''}`}
+                type="button"
+                onClick={() => handleSwitchDataMode('auto')}
+              >
+                Auto
+              </button>
+              <button
+                className={`mode-toggle__button ${dataMode === 'live' ? 'is-active' : ''}`}
+                type="button"
+                onClick={() => handleSwitchDataMode('live')}
+              >
+                Live
+              </button>
+              <button
+                className={`mode-toggle__button ${dataMode === 'mock' ? 'is-active' : ''}`}
+                type="button"
+                onClick={() => handleSwitchDataMode('mock')}
+              >
+                Mock
+              </button>
+            </GlassPanel>
+            <GlassPanel compact className="metric-chip">
+              <ConnectionIcon size={15} />
+              {modeLabel}
+            </GlassPanel>
+            <StatusPill status={connectionPillStatus} label={connectionPillLabel} />
             <GlassPanel compact className="metric-chip">
               <LayoutDashboard size={15} />
               {state.workspaces.length} 工作区
@@ -385,17 +538,23 @@ export function App() {
               <PlugZap size={15} />
               {state.agents.length} Agents
             </GlassPanel>
+            <button className="icon-button" type="button" onClick={() => void handleRefresh()} title="刷新工作台">
+              <RefreshCcw size={16} />
+            </button>
           </div>
         </header>
 
         <section className="workbench">
           <WorkspaceRail
             state={state}
-            rooms={rooms}
+            rooms={filteredRooms}
             activeWorkspaceId={activeWorkspaceId}
             events={workflowEvents}
+            query={workspaceQuery}
+            loading={loadingState}
             onSelectWorkspace={handleSelectWorkspace}
-            onCreateWorkspace={handleCreateWorkspace}
+            onQueryChange={setWorkspaceQuery}
+            onCreateWorkspace={() => setCreateDialogOpen(true)}
           />
           <ChatPane
             state={state}
@@ -403,6 +562,10 @@ export function App() {
             messages={currentMessages}
             streamingMessages={currentStreamingMessages}
             sending={sending}
+            onRegenerate={() => void handleRegenerate()}
+            onReplyToMessage={handleReplyToMessage}
+            onCopyMessage={content => void handleCopyMessage(content)}
+            onInsertComposerText={handleInsertComposerText}
             onSend={handleSend}
           />
           <InsightDock
@@ -412,6 +575,20 @@ export function App() {
           />
         </section>
       </div>
+
+      <CreateWorkspaceDialog
+        open={createDialogOpen}
+        agents={state.agents}
+        submitting={creatingWorkspace}
+        errorMessage={createWorkspaceError}
+        sourceTargetLabel={sourceTargetLabel}
+        onClose={() => {
+          if (!creatingWorkspace) {
+            setCreateDialogOpen(false)
+          }
+        }}
+        onSubmit={handleCreateWorkspace}
+      />
     </main>
   )
 }

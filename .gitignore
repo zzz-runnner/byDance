@@ -10,6 +10,7 @@ out/
 # Logs
 *.log
 logs/
+agentHubFrontend/.agent-vite.*
 
 # Environment files
 .env

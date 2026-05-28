@@ -1,4 +1,4 @@
-import type { FormEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ArrowUp, Braces, Copy, ExternalLink, FileArchive, Globe2, MessageSquareReply, RefreshCcw } from 'lucide-react'
 import { buildAgentMap, formatTime, workspaceRoomKindLabel, type WorkspaceRoom } from '../appModel'
 import type { AppState, Artifact, Message } from '../types'
@@ -13,6 +13,10 @@ type ChatPaneProps = {
   messages: Message[]
   streamingMessages: Message[]
   sending: boolean
+  onRegenerate: () => void
+  onReplyToMessage: (content: string) => void
+  onCopyMessage: (content: string) => void
+  onInsertComposerText: (content: string) => void
   onSend: (content: string) => void
 }
 
@@ -21,7 +25,18 @@ type ChatPaneProps = {
  * Input: app state, active workspace room, messages, streaming messages, send state, and send callback.
  * Output: the chat timeline and composer.
  */
-export function ChatPane({ state, room, messages, streamingMessages, sending, onSend }: ChatPaneProps) {
+export function ChatPane({
+  state,
+  room,
+  messages,
+  streamingMessages,
+  sending,
+  onRegenerate,
+  onReplyToMessage,
+  onCopyMessage,
+  onInsertComposerText,
+  onSend,
+}: ChatPaneProps) {
   const agentMap = buildAgentMap(state)
   const activeAgent = room?.targetAgentId ? agentMap.get(room.targetAgentId) : undefined
   const allMessages = [...messages, ...streamingMessages]
@@ -39,7 +54,7 @@ export function ChatPane({ state, room, messages, streamingMessages, sending, on
             <span className="chat-subtitle">
               {room?.kind === 'direct'
                 ? `固定发送给 ${activeAgent?.name ?? room.targetAgentId ?? 'Agent'}`
-                : '不 @ 时由 Orchestrator 判断，@ 子 Agent 时在群聊内定向回复'}
+                : '支持 @ 指定 Agent，也支持让 Orchestrator 自行拆解任务'}
             </span>
           </div>
         </div>
@@ -48,7 +63,7 @@ export function ChatPane({ state, room, messages, streamingMessages, sending, on
             status={sending ? 'running' : 'ready'}
             label={sending ? 'streaming' : room?.kind === 'group' ? 'orchestrated' : 'direct'}
           />
-          <button className="icon-button" type="button" title="重新生成">
+          <button className="icon-button" type="button" title="重新生成上一条任务" onClick={onRegenerate} disabled={sending || !room}>
             <RefreshCcw size={16} />
           </button>
         </div>
@@ -61,6 +76,8 @@ export function ChatPane({ state, room, messages, streamingMessages, sending, on
               key={message.id}
               message={message}
               senderName={message.senderType === 'agent' ? agentMap.get(message.senderId)?.name : undefined}
+              onReply={onReplyToMessage}
+              onCopy={onCopyMessage}
             />
           ))
         ) : (
@@ -68,7 +85,12 @@ export function ChatPane({ state, room, messages, streamingMessages, sending, on
         )}
       </div>
 
-      <ChatComposer room={room} sending={sending} onSend={onSend} />
+      <ChatComposer
+        room={room}
+        sending={sending}
+        onSend={onSend}
+        onInsertComposerText={onInsertComposerText}
+      />
     </GlassPanel>
   )
 }
@@ -76,6 +98,8 @@ export function ChatPane({ state, room, messages, streamingMessages, sending, on
 type MessageBubbleProps = {
   message: Message
   senderName?: string
+  onReply: (content: string) => void
+  onCopy: (content: string) => void
 }
 
 /**
@@ -83,7 +107,7 @@ type MessageBubbleProps = {
  * Input: message record and optional sender display name.
  * Output: a message bubble row.
  */
-function MessageBubble({ message, senderName }: MessageBubbleProps) {
+function MessageBubble({ message, senderName, onReply, onCopy }: MessageBubbleProps) {
   const isUser = message.senderType === 'user'
   const senderLabel = isUser ? '你' : senderName ?? message.senderId
 
@@ -105,11 +129,11 @@ function MessageBubble({ message, senderName }: MessageBubbleProps) {
             </div>
           ) : null}
           <div className="message-actions">
-            <button type="button">
+            <button type="button" onClick={() => onReply(message.content)}>
               <MessageSquareReply size={14} />
               回复
             </button>
-            <button type="button">
+            <button type="button" onClick={() => onCopy(message.content)}>
               <Copy size={14} />
               复制
             </button>
@@ -173,8 +197,8 @@ function EmptyChatState({ room }: EmptyChatStateProps) {
   return (
     <div className="empty-chat">
       <OrbMark size="lg" pulse />
-      <h2>{room ? '开启这一轮协作' : '先选择一个工作区'}</h2>
-      <p>群聊工作区支持 @ 子 Agent 定向回复；单聊工作区会把上下文固定发给目标 Agent。</p>
+      <h2>{room ? '开始这一轮协作' : '先选择一个工作区'}</h2>
+      <p>群聊工作区支持 @ 指向 Agent；单聊工作区会把上下文固定发送给目标 Agent。</p>
     </div>
   )
 }
@@ -182,6 +206,7 @@ function EmptyChatState({ room }: EmptyChatStateProps) {
 type ChatComposerProps = {
   room: WorkspaceRoom | undefined
   sending: boolean
+  onInsertComposerText: (content: string) => void
   onSend: (content: string) => void
 }
 
@@ -190,49 +215,128 @@ type ChatComposerProps = {
  * Input: active workspace room, sending flag, and send callback.
  * Output: textarea composer with command chips.
  */
-function ChatComposer({ room, sending, onSend }: ChatComposerProps) {
+function ChatComposer({ room, sending, onInsertComposerText, onSend }: ChatComposerProps) {
+  const storageKey = room ? `agenthub:draft:${room.conversation.id}` : ''
+  const [value, setValue] = useState('')
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
   const placeholder =
     room?.kind === 'direct'
       ? `发送给 ${room.targetAgentId ?? 'Agent'}，例如：/run 检查当前产物并给出结论`
       : '给群聊工作区发送任务，例如：@engineer 实现页面并让 @reviewer 验收'
 
+  useEffect(() => {
+    if (!room) {
+      setValue('')
+      return
+    }
+
+    const draft = window.localStorage.getItem(storageKey) ?? ''
+    setValue(draft)
+  }, [room, storageKey])
+
+  useEffect(() => {
+    if (!storageKey) {
+      return
+    }
+
+    window.localStorage.setItem(storageKey, value)
+  }, [storageKey, value])
+
+  useEffect(() => {
+    function handleInsert(event: Event) {
+      const customEvent = event as CustomEvent<string>
+      const inserted = customEvent.detail ?? ''
+      setValue(previous => `${previous}${inserted}`)
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus()
+      })
+    }
+
+    window.addEventListener('agenthub:composer-insert', handleInsert)
+    return () => {
+      window.removeEventListener('agenthub:composer-insert', handleInsert)
+    }
+  }, [])
+
   /**
    * Submits composer content when the form is sent.
-   * Input: form submit event.
+   * Input: none.
    * Output: calls onSend and clears the textarea.
    */
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const form = event.currentTarget
-    const formData = new FormData(form)
-    const content = String(formData.get('message') ?? '').trim()
+  function handleSubmit() {
+    const content = value.trim()
 
     if (!content || sending || !room) {
       return
     }
 
     onSend(content)
-    form.reset()
+    setValue('')
+    window.localStorage.removeItem(storageKey)
+  }
+
+  /**
+   * Handles keyboard shortcuts for submit while preserving multiline input.
+   * Input: textarea keydown event.
+   * Output: submits on Enter without Shift.
+   */
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      handleSubmit()
+    }
+  }
+
+  function insertChip(valueToInsert: string) {
+    onInsertComposerText(valueToInsert)
   }
 
   return (
-    <form className="composer" onSubmit={handleSubmit}>
+    <form
+      className="composer"
+      onSubmit={event => {
+        event.preventDefault()
+        handleSubmit()
+      }}
+    >
       {room?.kind === 'group' ? (
         <div className="composer-chips">
-          <button type="button">@product-manager</button>
-          <button type="button">@engineer</button>
-          <button type="button">@reviewer</button>
-          <button type="button">/run</button>
+          <button type="button" onClick={() => insertChip('@product-manager ')}>
+            @product-manager
+          </button>
+          <button type="button" onClick={() => insertChip('@engineer ')}>
+            @engineer
+          </button>
+          <button type="button" onClick={() => insertChip('@reviewer ')}>
+            @reviewer
+          </button>
+          <button type="button" onClick={() => insertChip('/run ')}>
+            /run
+          </button>
         </div>
       ) : (
         <div className="composer-chips">
-          <button type="button">@{room?.targetAgentId ?? 'agent'}</button>
-          <button type="button">/run</button>
+          <button type="button" onClick={() => insertChip(`@${room?.targetAgentId ?? 'agent'} `)}>
+            @{room?.targetAgentId ?? 'agent'}
+          </button>
+          <button type="button" onClick={() => insertChip('/run ')}>
+            /run
+          </button>
         </div>
       )}
       <div className="composer-box">
-        <textarea name="message" rows={2} placeholder={placeholder} disabled={!room || sending} />
-        <button className="send-button" type="submit" disabled={!room || sending} title="发送">
+        <textarea
+          ref={textareaRef}
+          name="message"
+          rows={2}
+          value={value}
+          onChange={event => setValue(event.currentTarget.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          disabled={!room || sending}
+        />
+        <button className="send-button" type="submit" disabled={!room || sending} title="发送消息">
           <ArrowUp size={18} />
         </button>
       </div>

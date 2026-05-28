@@ -10,7 +10,10 @@ type WorkspaceRailProps = {
   rooms: WorkspaceRoom[]
   activeWorkspaceId: string
   events: LiveWorkflowEvent[]
+  query: string
+  loading: boolean
   onSelectWorkspace: (workspaceId: string) => void
+  onQueryChange: (value: string) => void
   onCreateWorkspace: () => void
 }
 
@@ -24,7 +27,10 @@ export function WorkspaceRail({
   rooms,
   activeWorkspaceId,
   events,
+  query,
+  loading,
   onSelectWorkspace,
+  onQueryChange,
   onCreateWorkspace,
 }: WorkspaceRailProps) {
   return (
@@ -41,20 +47,32 @@ export function WorkspaceRail({
 
       <label className="search-box">
         <Search size={15} />
-        <input type="search" placeholder="搜索工作区" />
+        <input
+          type="search"
+          placeholder="搜索工作区"
+          value={query}
+          onChange={event => onQueryChange(event.currentTarget.value)}
+        />
       </label>
 
       <div className="workspace-list">
-        {rooms.map(room => (
-          <WorkspaceButton
-            key={room.id}
-            state={state}
-            room={room}
-            events={events}
-            active={room.id === activeWorkspaceId}
-            onSelectWorkspace={onSelectWorkspace}
-          />
-        ))}
+        {rooms.length > 0 ? (
+          rooms.map(room => (
+            <WorkspaceButton
+              key={room.id}
+              state={state}
+              room={room}
+              events={events}
+              active={room.id === activeWorkspaceId}
+              onSelectWorkspace={onSelectWorkspace}
+            />
+          ))
+        ) : (
+          <div className="workspace-empty-state">
+            <strong>{loading ? '正在刷新工作区...' : '没有匹配的工作区'}</strong>
+            <span>{loading ? '稍后会自动更新列表。' : '调整搜索关键词，或直接创建一个新工作区。'}</span>
+          </div>
+        )}
       </div>
     </GlassPanel>
   )
