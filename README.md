@@ -29,6 +29,7 @@ It supports both:
 
 - Group workspaces backed by the main orchestrated conversation
 - Direct workspaces backed by a runtime direct conversation for one target agent
+- Group chat composer supports a WeChat-style `@` picker for child agents, while direct rooms keep a fixed target and do not show the picker
 
 ## Dependency Management
 

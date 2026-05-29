@@ -565,7 +565,6 @@ export function App() {
             onRegenerate={() => void handleRegenerate()}
             onReplyToMessage={handleReplyToMessage}
             onCopyMessage={content => void handleCopyMessage(content)}
-            onInsertComposerText={handleInsertComposerText}
             onSend={handleSend}
           />
           <InsightDock

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ArrowUp, Braces, Copy, ExternalLink, FileArchive, Globe2, MessageSquareReply, RefreshCcw } from 'lucide-react'
 import { buildAgentMap, formatTime, workspaceRoomKindLabel, type WorkspaceRoom } from '../appModel'
-import type { AppState, Artifact, Message } from '../types'
+import type { AgentDefinition, AppState, Artifact, Message } from '../types'
 import { AgentAvatar } from './AgentAvatar'
+import { AgentMentionPicker, type AgentMentionOption } from './AgentMentionPicker'
 import { GlassPanel } from './GlassPanel'
 import { OrbMark } from './OrbMark'
 import { StatusPill } from './StatusPill'
@@ -16,8 +17,68 @@ type ChatPaneProps = {
   onRegenerate: () => void
   onReplyToMessage: (content: string) => void
   onCopyMessage: (content: string) => void
-  onInsertComposerText: (content: string) => void
   onSend: (content: string) => void
+}
+
+type MentionMatch = {
+  start: number
+  end: number
+  query: string
+}
+
+/**
+ * Builds the available child-agent options for one group room.
+ * Input: active room and the agent lookup table.
+ * Output: unique agent options used by the @ mention popup.
+ */
+function groupMentionOptions(room: WorkspaceRoom | undefined, agentMap: Map<string, AgentDefinition>): AgentMentionOption[] {
+  if (!room || room.kind !== 'group') {
+    return []
+  }
+
+  return [...new Set(room.participantAgentIds)]
+    .filter(agentId => agentId !== 'orchestrator')
+    .map(agentId => ({
+      id: agentId,
+      name: agentMap.get(agentId)?.name ?? agentId,
+    }))
+}
+
+/**
+ * Detects the active @ mention token around the current textarea caret.
+ * Input: composer text and the current selection bounds.
+ * Output: the mention range with query text, or null when no mention is active.
+ */
+function findActiveMention(value: string, selectionStart: number | null, selectionEnd: number | null): MentionMatch | null {
+  if (selectionStart === null || selectionEnd === null || selectionStart !== selectionEnd) {
+    return null
+  }
+
+  let start = selectionStart
+  while (start > 0 && !/\s/.test(value[start - 1] ?? '')) {
+    start -= 1
+  }
+
+  if (value[start] !== '@') {
+    return null
+  }
+
+  let end = selectionStart
+  while (end < value.length && !/\s/.test(value[end] ?? '')) {
+    end += 1
+  }
+
+  const query = value.slice(start + 1, end)
+
+  if (query.includes('@')) {
+    return null
+  }
+
+  return {
+    start,
+    end,
+    query,
+  }
 }
 
 /**
@@ -34,11 +95,11 @@ export function ChatPane({
   onRegenerate,
   onReplyToMessage,
   onCopyMessage,
-  onInsertComposerText,
   onSend,
 }: ChatPaneProps) {
   const agentMap = buildAgentMap(state)
   const activeAgent = room?.targetAgentId ? agentMap.get(room.targetAgentId) : undefined
+  const mentionOptions = groupMentionOptions(room, agentMap)
   const allMessages = [...messages, ...streamingMessages]
 
   return (
@@ -88,8 +149,8 @@ export function ChatPane({
       <ChatComposer
         room={room}
         sending={sending}
+        mentionOptions={mentionOptions}
         onSend={onSend}
-        onInsertComposerText={onInsertComposerText}
       />
     </GlassPanel>
   )
@@ -206,33 +267,55 @@ function EmptyChatState({ room }: EmptyChatStateProps) {
 type ChatComposerProps = {
   room: WorkspaceRoom | undefined
   sending: boolean
-  onInsertComposerText: (content: string) => void
+  mentionOptions: AgentMentionOption[]
   onSend: (content: string) => void
 }
 
 /**
  * Renders the message composer at the bottom of the chat pane.
- * Input: active workspace room, sending flag, and send callback.
- * Output: textarea composer with command chips.
+ * Input: active workspace room, sending flag, mention options, and send callback.
+ * Output: textarea composer with command chips and the group-chat @ picker.
  */
-function ChatComposer({ room, sending, onInsertComposerText, onSend }: ChatComposerProps) {
+function ChatComposer({ room, sending, mentionOptions, onSend }: ChatComposerProps) {
   const storageKey = room ? `agenthub:draft:${room.conversation.id}` : ''
   const [value, setValue] = useState('')
+  const [mentionMatch, setMentionMatch] = useState<MentionMatch | null>(null)
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0)
+  const [isComposing, setIsComposing] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const selectionRef = useRef({ start: 0, end: 0 })
 
   const placeholder =
     room?.kind === 'direct'
       ? `发送给 ${room.targetAgentId ?? 'Agent'}，例如：/run 检查当前产物并给出结论`
       : '给群聊工作区发送任务，例如：@engineer 实现页面并让 @reviewer 验收'
+  const filteredMentionOptions =
+    room?.kind === 'group' && mentionMatch
+      ? mentionOptions.filter(option => {
+          const query = mentionMatch.query.trim().toLowerCase()
+
+          if (!query) {
+            return true
+          }
+
+          return `${option.id} ${option.name}`.toLowerCase().includes(query)
+        })
+      : []
+  const showMentionPicker = room?.kind === 'group' && !isComposing && filteredMentionOptions.length > 0 && Boolean(mentionMatch)
 
   useEffect(() => {
     if (!room) {
       setValue('')
+      setMentionMatch(null)
+      selectionRef.current = { start: 0, end: 0 }
       return
     }
 
     const draft = window.localStorage.getItem(storageKey) ?? ''
     setValue(draft)
+    setMentionMatch(null)
+    setActiveMentionIndex(0)
+    selectionRef.current = { start: draft.length, end: draft.length }
   }, [room, storageKey])
 
   useEffect(() => {
@@ -244,20 +327,94 @@ function ChatComposer({ room, sending, onInsertComposerText, onSend }: ChatCompo
   }, [storageKey, value])
 
   useEffect(() => {
+    if (room?.kind !== 'group') {
+      setMentionMatch(null)
+    }
+  }, [room?.kind])
+
+  useEffect(() => {
+    setActiveMentionIndex(0)
+  }, [mentionMatch?.query, mentionMatch?.start, room?.id])
+
+  useEffect(() => {
     function handleInsert(event: Event) {
       const customEvent = event as CustomEvent<string>
       const inserted = customEvent.detail ?? ''
-      setValue(previous => `${previous}${inserted}`)
-      requestAnimationFrame(() => {
-        textareaRef.current?.focus()
-      })
+      insertTextAtSelection(inserted)
     }
 
     window.addEventListener('agenthub:composer-insert', handleInsert)
     return () => {
       window.removeEventListener('agenthub:composer-insert', handleInsert)
     }
-  }, [])
+  }, [value, room?.kind])
+
+  /**
+   * Recomputes the active @ mention token for the current caret location.
+   * Input: textarea value and selection bounds.
+   * Output: updates the local mention popup state.
+   */
+  function syncMentionState(nextValue: string, selectionStart: number | null, selectionEnd: number | null) {
+    if (room?.kind !== 'group') {
+      setMentionMatch(null)
+      return
+    }
+
+    setMentionMatch(findActiveMention(nextValue, selectionStart, selectionEnd))
+  }
+
+  /**
+   * Writes the next draft value and restores the caret after React updates.
+   * Input: next draft string and the desired caret position.
+   * Output: updates the textarea value, caret, and mention state.
+   */
+  function applyComposerValue(nextValue: string, caretPosition: number) {
+    setValue(nextValue)
+    selectionRef.current = { start: caretPosition, end: caretPosition }
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current
+
+      if (!textarea) {
+        return
+      }
+
+      textarea.focus()
+      textarea.setSelectionRange(caretPosition, caretPosition)
+      syncMentionState(nextValue, caretPosition, caretPosition)
+    })
+  }
+
+  /**
+   * Inserts plain text at the current caret instead of always appending to the end.
+   * Input: content to insert into the composer.
+   * Output: updates the draft and places the caret after the inserted text.
+   */
+  function insertTextAtSelection(content: string) {
+    const textarea = textareaRef.current
+    const selectionStart =
+      document.activeElement === textarea ? textarea?.selectionStart ?? selectionRef.current.start : selectionRef.current.start
+    const selectionEnd =
+      document.activeElement === textarea ? textarea?.selectionEnd ?? selectionRef.current.end : selectionRef.current.end
+    const nextValue = `${value.slice(0, selectionStart)}${content}${value.slice(selectionEnd)}`
+    setMentionMatch(null)
+    applyComposerValue(nextValue, selectionStart + content.length)
+  }
+
+  /**
+   * Replaces the active @ token with one concrete child-agent mention.
+   * Input: the agent option selected from the mention popup.
+   * Output: inserts a normalized @agent-id token and closes the popup.
+   */
+  function insertMention(option: AgentMentionOption) {
+    if (!mentionMatch) {
+      return
+    }
+
+    const replacement = `@${option.id} `
+    const nextValue = `${value.slice(0, mentionMatch.start)}${replacement}${value.slice(mentionMatch.end)}`
+    setMentionMatch(null)
+    applyComposerValue(nextValue, mentionMatch.start + replacement.length)
+  }
 
   /**
    * Submits composer content when the form is sent.
@@ -273,23 +430,68 @@ function ChatComposer({ room, sending, onInsertComposerText, onSend }: ChatCompo
 
     onSend(content)
     setValue('')
+    setMentionMatch(null)
+    selectionRef.current = { start: 0, end: 0 }
     window.localStorage.removeItem(storageKey)
   }
 
   /**
    * Handles keyboard shortcuts for submit while preserving multiline input.
    * Input: textarea keydown event.
-   * Output: submits on Enter without Shift.
+   * Output: navigates the mention popup or submits on Enter without Shift.
    */
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.nativeEvent.isComposing || isComposing) {
+      return
+    }
+
+    if (showMentionPicker) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setActiveMentionIndex(previous => (previous + 1) % filteredMentionOptions.length)
+        return
+      }
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setActiveMentionIndex(previous => (previous - 1 + filteredMentionOptions.length) % filteredMentionOptions.length)
+        return
+      }
+
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault()
+        insertMention(filteredMentionOptions[activeMentionIndex] ?? filteredMentionOptions[0])
+        return
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMentionMatch(null)
+        return
+      }
+    }
+
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       handleSubmit()
     }
   }
 
+  /**
+   * Refreshes mention parsing after caret movement or direct text edits.
+   * Input: current textarea element.
+   * Output: syncs the popup state with the current caret position.
+   */
+  function handleCursorChange(textarea: HTMLTextAreaElement) {
+    selectionRef.current = {
+      start: textarea.selectionStart ?? textarea.value.length,
+      end: textarea.selectionEnd ?? textarea.value.length,
+    }
+    syncMentionState(textarea.value, textarea.selectionStart, textarea.selectionEnd)
+  }
+
   function insertChip(valueToInsert: string) {
-    onInsertComposerText(valueToInsert)
+    insertTextAtSelection(valueToInsert)
   }
 
   return (
@@ -326,12 +528,30 @@ function ChatComposer({ room, sending, onInsertComposerText, onSend }: ChatCompo
         </div>
       )}
       <div className="composer-box">
+        {showMentionPicker ? (
+          <AgentMentionPicker
+            options={filteredMentionOptions}
+            activeIndex={activeMentionIndex}
+            onSelect={insertMention}
+          />
+        ) : null}
         <textarea
           ref={textareaRef}
           name="message"
           rows={2}
           value={value}
-          onChange={event => setValue(event.currentTarget.value)}
+          onChange={event => {
+            const nextValue = event.currentTarget.value
+            setValue(nextValue)
+            handleCursorChange(event.currentTarget)
+          }}
+          onClick={event => handleCursorChange(event.currentTarget)}
+          onKeyUp={event => handleCursorChange(event.currentTarget)}
+          onCompositionStart={() => setIsComposing(true)}
+          onCompositionEnd={event => {
+            setIsComposing(false)
+            handleCursorChange(event.currentTarget)
+          }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           disabled={!room || sending}

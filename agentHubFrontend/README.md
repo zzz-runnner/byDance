@@ -23,6 +23,13 @@ npm run preview
 
 If the business backend API is unavailable, the frontend falls back to local demo data.
 
+## Current UI Status
+
+- One workspace maps to one chat window in the web workbench.
+- Group workspaces now support a WeChat-style `@` mention picker for child agents inside the composer.
+- Direct workspaces keep a fixed target agent and do not open the `@` picker.
+- Composer shortcut chips still exist as a fallback, and all insertions now respect the current caret position.
+
 ## Boundary
 
 - Frontend owns UI, local demo fixtures, browser state, and Vite build output.
