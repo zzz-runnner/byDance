@@ -41,6 +41,12 @@ The current local path is focused on one workspace equals one chat window.
 - One non-mention specialist question can be routed by `agentHub` to a single visible child agent based on runtime agent metadata, task stage, and message content.
 - The visible speaker identity now flows through `routing_finished.speakerAgentId`, so the frontend can show the actual replying agent instead of always showing Orchestrator.
 - Frontend chat now restores the last active workspace after refresh, auto-scrolls to the bottom on room switch, keeps follow-scroll near the bottom during streaming, shows a jump-to-bottom button when the user scrolls up, and renders temporary waiting bubbles during routing and reply generation.
+- The main chat surface now groups each user turn into one visible block: user message, `本轮过程`, inline artifact cards, and the final agent result.
+- `本轮过程` stays expanded while a turn is still running, auto-collapses after the turn completes, and remains expanded for failed or partial turns.
+- Preview, diff, review, zip, and text artifacts are now rendered inside the chat stream instead of depending on the right-side status dock.
+- The right-side workflow dock is no longer part of the main local operator path; the primary UX is now the central chat timeline.
+- Main-brain routing now reads child-agent `routingProfile` metadata in the planner context and prefers the matching specialist first, especially during requirement-intake and planning turns.
+- Requirement and planning turns now stay on the formal product handoff path instead of short-circuiting into an unmanaged direct reply, so the local workflow still records product-manager handoffs before implementation.
 - `agentHubBackend/` is still outside the local live path and remains untouched.
 
 ## Dependency Management
@@ -114,6 +120,27 @@ Additional live smoke tests were executed against `http://127.0.0.1:8790` and th
 - Direct workspaces create a real runtime direct conversation
 - Preview and zip responses return non-empty bodies
 - Real engineer and reviewer runs finish successfully
+
+Latest local code verification for this checkpoint:
+
+```powershell
+cd E:\byDance\agentHubFrontend
+npm run build
+
+cd E:\byDance\agentHub
+npm run build
+npm run test
+
+cd E:\byDance\locateBackend
+npm run build
+```
+
+Result:
+
+- `agentHubFrontend` production build passed
+- `agentHub` TypeScript build passed
+- `agentHub` unit and integration tests passed
+- `locateBackend` TypeScript build passed
 
 ## Current Limits
 

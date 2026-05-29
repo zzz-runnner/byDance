@@ -1,7 +1,39 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { ArrowDown, ArrowUp, Braces, Copy, ExternalLink, FileArchive, Globe2, MessageSquareReply, RefreshCcw } from 'lucide-react'
-import { buildAgentMap, formatTime, workspaceRoomKindLabel, type WorkspaceRoom } from '../appModel'
-import type { AgentDefinition, AppState, Artifact, Message } from '../types'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  Braces,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Download,
+  ExternalLink,
+  FileArchive,
+  FileText,
+  Globe2,
+  LoaderCircle,
+  MessageSquareReply,
+  RefreshCcw,
+  ShieldCheck,
+  TerminalSquare,
+} from 'lucide-react'
+import {
+  buildAgentMap,
+  formatTime,
+  workspaceRoomKindLabel,
+  type WorkspaceRoom,
+} from '../appModel'
+import {
+  buildChatTimeline,
+  type ChatProcessTone,
+  type ChatTimelineItem,
+  type ChatTurn,
+  type ChatTurnArtifact,
+  type ChatTurnProcessEntry,
+} from '../chatTimeline'
+import type { AgentDefinition, AppState, Artifact, LiveWorkflowEvent, Message } from '../types'
 import { AgentAvatar } from './AgentAvatar'
 import { AgentMentionPicker, type AgentMentionOption } from './AgentMentionPicker'
 import { GlassPanel } from './GlassPanel'
@@ -13,6 +45,7 @@ type ChatPaneProps = {
   room: WorkspaceRoom | undefined
   messages: Message[]
   streamingMessages: Message[]
+  workflowEvents: LiveWorkflowEvent[]
   sending: boolean
   activeConversationId: string
   onRegenerate: () => void
@@ -83,8 +116,35 @@ function findActiveMention(value: string, selectionStart: number | null, selecti
 }
 
 /**
+ * Returns the default expansion state for one turn process panel.
+ * Input: one chat turn.
+ * Output: true when the process should stay open by default.
+ */
+function shouldDefaultExpandTurn(turn: ChatTurn): boolean {
+  return turn.status === 'running' || turn.status === 'failed' || turn.status === 'partial'
+}
+
+/**
+ * Returns a readable status label for the process header.
+ * Input: one chat turn.
+ * Output: short Chinese label.
+ */
+function processStatusLabel(turn: ChatTurn): string {
+  if (turn.status === 'failed') {
+    return '失败'
+  }
+  if (turn.status === 'partial') {
+    return '部分完成'
+  }
+  if (turn.status === 'completed') {
+    return '已完成'
+  }
+  return '进行中'
+}
+
+/**
  * Renders the central chat surface for direct and group workspace rooms.
- * Input: app state, active workspace room, messages, streaming messages, send state, and send callback.
+ * Input: app state, active workspace room, messages, streaming messages, workflow events, and send state.
  * Output: the chat timeline and composer.
  */
 export function ChatPane({
@@ -92,6 +152,7 @@ export function ChatPane({
   room,
   messages,
   streamingMessages,
+  workflowEvents,
   sending,
   activeConversationId,
   onRegenerate,
@@ -102,9 +163,33 @@ export function ChatPane({
   const agentMap = buildAgentMap(state)
   const activeAgent = room?.targetAgentId ? agentMap.get(room.targetAgentId) : undefined
   const mentionOptions = groupMentionOptions(room, agentMap)
-  const allMessages = [...messages, ...streamingMessages]
+  const timelineItems = useMemo(
+    () =>
+      room
+        ? buildChatTimeline({
+            state,
+            workspaceId: room.workspace.id,
+            conversationId: room.conversation.id,
+            messages,
+            streamingMessages,
+            workflowEvents,
+          })
+        : [],
+    [messages, room, state, streamingMessages, workflowEvents],
+  )
+  const scrollSignature = useMemo(
+    () =>
+      timelineItems
+        .map(item => item.kind === 'message'
+          ? `${item.message.id}:${item.message.createdAt}`
+          : `${item.turn.id}:${item.turn.updatedAt}:${item.turn.processEntries.length}:${item.turn.artifacts.length}`)
+        .join('|'),
+    [timelineItems],
+  )
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [isNearBottom, setIsNearBottom] = useState(true)
+  const [artifactDialog, setArtifactDialog] = useState<ChatTurnArtifact | null>(null)
+  const [turnExpandOverrides, setTurnExpandOverrides] = useState<Record<string, boolean>>({})
 
   /**
    * Scrolls the chat list to the latest message.
@@ -127,11 +212,24 @@ export function ChatPane({
   }, [activeConversationId])
 
   useEffect(() => {
-    if (!allMessages.length || !isNearBottom) {
+    if (!timelineItems.length || !isNearBottom) {
       return
     }
     scrollToBottom(messages.length > 0 ? 'smooth' : 'auto')
-  }, [allMessages.length, isNearBottom, messages.length])
+  }, [isNearBottom, messages.length, scrollSignature, timelineItems.length])
+
+  useEffect(() => {
+    const activeTurnIds = new Set(
+      timelineItems
+        .filter((item): item is Extract<ChatTimelineItem, { kind: 'turn' }> => item.kind === 'turn')
+        .map(item => item.turn.id),
+    )
+
+    setTurnExpandOverrides(previous => {
+      const nextEntries = Object.entries(previous).filter(([turnId]) => activeTurnIds.has(turnId))
+      return Object.fromEntries(nextEntries)
+    })
+  }, [timelineItems])
 
   /**
    * Tracks whether the user is still close enough to the latest message.
@@ -146,6 +244,36 @@ export function ChatPane({
     setIsNearBottom(distanceToBottom <= 96)
   }
 
+  /**
+   * Returns whether one turn process panel is currently expanded.
+   * Input: one chat turn.
+   * Output: expanded state after user overrides and defaults.
+   */
+  function isTurnExpanded(turn: ChatTurn): boolean {
+    return turnExpandOverrides[turn.id] ?? shouldDefaultExpandTurn(turn)
+  }
+
+  /**
+   * Toggles one turn process panel while preserving the default auto-collapse behavior.
+   * Input: one chat turn.
+   * Output: updates the local expansion override table.
+   */
+  function toggleTurn(turn: ChatTurn) {
+    const defaultExpanded = shouldDefaultExpandTurn(turn)
+    const currentExpanded = turnExpandOverrides[turn.id] ?? defaultExpanded
+    const nextExpanded = !currentExpanded
+
+    setTurnExpandOverrides(previous => {
+      const next = { ...previous }
+      if (nextExpanded === defaultExpanded) {
+        delete next[turn.id]
+      } else {
+        next[turn.id] = nextExpanded
+      }
+      return next
+    })
+  }
+
   return (
     <GlassPanel className="chat-pane">
       <header className="chat-header">
@@ -158,8 +286,8 @@ export function ChatPane({
             <h1>{room?.title ?? '选择一个工作区'}</h1>
             <span className="chat-subtitle">
               {room?.kind === 'direct'
-                ? `固定发送给 ${activeAgent?.name ?? room.targetAgentId ?? 'Agent'}`
-                : '支持 @ 指定 Agent，也支持让 Orchestrator 自行拆解任务'}
+                ? `固定发给 ${activeAgent?.name ?? room.targetAgentId ?? 'Agent'}`
+                : '支持 @ 指定子 Agent，执行过程、产物和最终结果都会直接落在聊天记录里'}
             </span>
           </div>
         </div>
@@ -175,21 +303,34 @@ export function ChatPane({
       </header>
 
       <div className="chat-scroll" ref={scrollRef} onScroll={handleScroll}>
-        {allMessages.length > 0 ? (
-          allMessages.map(message => (
-            <MessageBubble
-              key={message.id}
-              message={message}
-              senderName={message.senderType === 'agent' ? agentMap.get(message.senderId)?.name : undefined}
-              onReply={onReplyToMessage}
-              onCopy={onCopyMessage}
-            />
-          ))
+        {timelineItems.length > 0 ? (
+          timelineItems.map(item =>
+            item.kind === 'message' ? (
+              <MessageBubble
+                key={item.id}
+                message={item.message}
+                senderName={item.message.senderType === 'agent' ? agentMap.get(item.message.senderId)?.name : undefined}
+                onReply={onReplyToMessage}
+                onCopy={onCopyMessage}
+              />
+            ) : (
+              <TurnBlock
+                key={item.id}
+                turn={item.turn}
+                agentMap={agentMap}
+                expanded={isTurnExpanded(item.turn)}
+                onToggle={() => toggleTurn(item.turn)}
+                onReply={onReplyToMessage}
+                onCopy={onCopyMessage}
+                onOpenArtifact={setArtifactDialog}
+              />
+            ),
+          )
         ) : (
           <EmptyChatState room={room} />
         )}
       </div>
-      {!isNearBottom && allMessages.length > 0 ? (
+      {!isNearBottom && timelineItems.length > 0 ? (
         <button className="chat-jump-button" type="button" onClick={() => scrollToBottom('smooth')}>
           <ArrowDown size={14} />
           回到底部
@@ -202,7 +343,142 @@ export function ChatPane({
         mentionOptions={mentionOptions}
         onSend={onSend}
       />
+
+      {artifactDialog ? (
+        <ArtifactDialog
+          artifact={artifactDialog}
+          onClose={() => setArtifactDialog(null)}
+        />
+      ) : null}
     </GlassPanel>
+  )
+}
+
+type TurnBlockProps = {
+  turn: ChatTurn
+  agentMap: Map<string, AgentDefinition>
+  expanded: boolean
+  onToggle: () => void
+  onReply: (content: string) => void
+  onCopy: (content: string) => void
+  onOpenArtifact: (artifact: ChatTurnArtifact) => void
+}
+
+/**
+ * Renders one complete chat turn with user input, process, artifacts, and the final result.
+ * Input: one grouped turn plus UI callbacks.
+ * Output: a turn block inside the chat timeline.
+ */
+function TurnBlock({
+  turn,
+  agentMap,
+  expanded,
+  onToggle,
+  onReply,
+  onCopy,
+  onOpenArtifact,
+}: TurnBlockProps) {
+  const finalMessage = turn.finalMessage ?? turn.streamingMessage
+  const finalSpeakerName = finalMessage?.senderType === 'agent' ? agentMap.get(finalMessage.senderId)?.name : undefined
+
+  return (
+    <article className="turn-block">
+      <MessageBubble
+        message={turn.userMessage}
+        onReply={onReply}
+        onCopy={onCopy}
+      />
+
+      {(turn.processEntries.length > 0 || turn.status === 'running') ? (
+        <section className={`turn-process turn-process--${turn.status}`}>
+          <button className="turn-process__header" type="button" onClick={onToggle}>
+            <span className="turn-process__title">
+              <TerminalSquare size={15} />
+              本轮过程
+            </span>
+            <span className="turn-process__meta">
+              <StatusPill status={turnStatusPillStatus(turn)} label={processStatusLabel(turn)} />
+              <em>{turn.processEntries.length} 条</em>
+              {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+            </span>
+          </button>
+
+          {expanded ? (
+            <div className="turn-process__body">
+              {turn.processEntries.length > 0 ? (
+                turn.processEntries.map(entry => (
+                  <ProcessEntryRow
+                    key={entry.id}
+                    entry={entry}
+                    agentName={entry.agentId ? agentMap.get(entry.agentId)?.name : undefined}
+                  />
+                ))
+              ) : (
+                <div className="turn-process__empty">
+                  <LoaderCircle size={15} />
+                  <span>正在等待更多过程事件...</span>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {turn.artifacts.length > 0 ? (
+        <div className="turn-artifact-grid">
+          {turn.artifacts.map(artifact => (
+            <TurnArtifactCard
+              key={artifact.id}
+              artifact={artifact}
+              agentName={artifact.agentId ? agentMap.get(artifact.agentId)?.name : undefined}
+              onOpenArtifact={onOpenArtifact}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {finalMessage ? (
+        <MessageBubble
+          message={finalMessage}
+          senderName={finalSpeakerName}
+          onReply={onReply}
+          onCopy={onCopy}
+          renderArtifacts={false}
+          forceStreaming={Boolean(turn.streamingMessage && !turn.finalMessage)}
+        />
+      ) : turn.status === 'running' ? (
+        <PendingResultBubble />
+      ) : null}
+    </article>
+  )
+}
+
+type ProcessEntryRowProps = {
+  entry: ChatTurnProcessEntry
+  agentName?: string
+}
+
+/**
+ * Renders one readable process row inside the turn process panel.
+ * Input: process entry and optional agent display name.
+ * Output: one process row.
+ */
+function ProcessEntryRow({ entry, agentName }: ProcessEntryRowProps) {
+  const Icon = toneIcon(entry.tone, entry.label)
+
+  return (
+    <div className={`process-entry process-entry--${entry.tone}`}>
+      <span className="process-entry__icon">
+        <Icon size={14} />
+      </span>
+      <div className="process-entry__content">
+        <div className="process-entry__headline">
+          <strong>{agentName ? entry.label.replace(entry.agentId ?? '', agentName) : entry.label}</strong>
+          <time>{formatTime(entry.time)}</time>
+        </div>
+        {entry.detail ? <p>{entry.detail}</p> : null}
+      </div>
+    </div>
   )
 }
 
@@ -211,16 +487,25 @@ type MessageBubbleProps = {
   senderName?: string
   onReply: (content: string) => void
   onCopy: (content: string) => void
+  renderArtifacts?: boolean
+  forceStreaming?: boolean
 }
 
 /**
- * Renders one chat message with optional artifact cards.
+ * Renders one chat message with optional inline artifacts.
  * Input: message record and optional sender display name.
- * Output: a message bubble row.
+ * Output: one chat bubble row.
  */
-function MessageBubble({ message, senderName, onReply, onCopy }: MessageBubbleProps) {
+function MessageBubble({
+  message,
+  senderName,
+  onReply,
+  onCopy,
+  renderArtifacts = true,
+  forceStreaming = false,
+}: MessageBubbleProps) {
   const isUser = message.senderType === 'user'
-  const isStreamingPlaceholder = !isUser && /\.\.\.|…/.test(message.content)
+  const isStreamingPlaceholder = forceStreaming || (!isUser && message.content.trim().length === 0)
   const senderLabel = isUser ? '你' : senderName ?? message.senderId
 
   return (
@@ -240,10 +525,10 @@ function MessageBubble({ message, senderName, onReply, onCopy }: MessageBubblePr
               <span />
             </div>
           ) : null}
-          {message.artifacts.length > 0 ? (
+          {renderArtifacts && message.artifacts.length > 0 ? (
             <div className="artifact-grid">
               {message.artifacts.map(artifact => (
-                <ArtifactCard key={artifact.id} artifact={artifact} />
+                <InlineArtifactCard key={artifact.id} artifact={artifact} />
               ))}
             </div>
           ) : null}
@@ -264,16 +549,16 @@ function MessageBubble({ message, senderName, onReply, onCopy }: MessageBubblePr
   )
 }
 
-type ArtifactCardProps = {
+type InlineArtifactCardProps = {
   artifact: Artifact
 }
 
 /**
- * Renders a compact card for code, preview, zip, diff, and file artifacts.
- * Input: artifact metadata.
- * Output: a clickable artifact card when the artifact has a URL.
+ * Renders inline artifacts for standalone messages that still carry embedded cards.
+ * Input: raw artifact metadata.
+ * Output: one inline artifact card.
  */
-function ArtifactCard({ artifact }: ArtifactCardProps) {
+function InlineArtifactCard({ artifact }: InlineArtifactCardProps) {
   const Icon = artifact.type === 'zip' ? FileArchive : artifact.type === 'web-preview' ? Globe2 : Braces
   const actionLabel = artifact.type === 'web-preview' ? '打开预览' : artifact.type === 'zip' ? '下载' : '查看'
   const content = (
@@ -303,6 +588,184 @@ function ArtifactCard({ artifact }: ArtifactCardProps) {
   )
 }
 
+type TurnArtifactCardProps = {
+  artifact: ChatTurnArtifact
+  agentName?: string
+  onOpenArtifact: (artifact: ChatTurnArtifact) => void
+}
+
+/**
+ * Renders one artifact card that lives between the process panel and the final result.
+ * Input: turn artifact, optional agent name, and open callback.
+ * Output: one chat-stream artifact card.
+ */
+function TurnArtifactCard({ artifact, agentName, onOpenArtifact }: TurnArtifactCardProps) {
+  const Icon = artifactIcon(artifact.kind)
+  const actionLabel = artifact.kind === 'zip'
+    ? '下载源码'
+    : artifact.kind === 'preview'
+      ? '打开预览'
+      : '查看详情'
+  const isExternalOnly = artifact.kind === 'zip' && Boolean(artifact.url)
+
+  const content = (
+    <>
+      <span className={`artifact-icon artifact-icon--${artifact.kind}`}>
+        <Icon size={18} />
+      </span>
+      <span>
+        <strong>{artifact.title}</strong>
+        <small>{artifact.summary}</small>
+        {artifact.verdict ? <b className={`artifact-verdict artifact-verdict--${artifactVerdictTone(artifact.verdict)}`}>{artifact.verdict}</b> : null}
+        {agentName ? <i>{agentName}</i> : null}
+      </span>
+      <em>
+        {actionLabel}
+        {isExternalOnly ? <Download size={13} /> : <ExternalLink size={13} />}
+      </em>
+    </>
+  )
+
+  if (isExternalOnly && artifact.url) {
+    return (
+      <a className="artifact-card artifact-card--turn" href={artifact.url} target="_blank" rel="noreferrer">
+        {content}
+      </a>
+    )
+  }
+
+  return (
+    <button className="artifact-card artifact-card--turn" type="button" onClick={() => onOpenArtifact(artifact)}>
+      {content}
+    </button>
+  )
+}
+
+type ArtifactDialogProps = {
+  artifact: ChatTurnArtifact
+  onClose: () => void
+}
+
+/**
+ * Renders the preview, diff, review, or text artifact dialog above the chat pane.
+ * Input: selected artifact and close callback.
+ * Output: modal dialog.
+ */
+function ArtifactDialog({ artifact, onClose }: ArtifactDialogProps) {
+  useEffect(() => {
+    function handleEscape(event: globalThis.KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onClose()
+      }
+    }
+
+    window.addEventListener('keydown', handleEscape)
+    return () => {
+      window.removeEventListener('keydown', handleEscape)
+    }
+  }, [onClose])
+
+  return (
+    <div className="artifact-dialog-backdrop" role="presentation" onClick={onClose}>
+      <div className="artifact-dialog" role="dialog" aria-modal="true" onClick={event => event.stopPropagation()}>
+        <div className="artifact-dialog__header">
+          <div>
+            <p className="eyebrow">Artifact</p>
+            <h3>{artifact.title}</h3>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} title="关闭">
+            <ChevronDown size={16} />
+          </button>
+        </div>
+
+        <div className="artifact-dialog__body">
+          {artifact.kind === 'preview' && artifact.url ? (
+            <iframe className="artifact-preview-frame" src={artifact.url} title={artifact.title} />
+          ) : null}
+
+          {artifact.kind === 'diff' ? (
+            <div className="artifact-detail-stack">
+              <p>{artifact.summary}</p>
+              {artifact.files?.length ? (
+                <div className="diff-file-list">
+                  {artifact.files.map(file => (
+                    <div className="diff-file-row" key={file.path}>
+                      <span className={`diff-file-badge diff-file-badge--${file.status}`}>{file.status}</span>
+                      <code>{file.path}</code>
+                      <em>
+                        +{file.additions} / -{file.deletions}
+                      </em>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <pre className="artifact-code-block">{artifact.patch || 'No patch text available.'}</pre>
+            </div>
+          ) : null}
+
+          {artifact.kind === 'review' ? (
+            <div className="artifact-detail-stack">
+              {artifact.verdict ? <StatusPill status={artifactVerdictPillStatus(artifact.verdict)} label={artifact.verdict} /> : null}
+              <p>{artifact.summary}</p>
+              {artifact.issues?.length ? (
+                <ul className="artifact-issue-list">
+                  {artifact.issues.map((issue, index) => (
+                    <li key={`${artifact.id}-${index}`}>{issue}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="artifact-dialog__empty">这一轮没有额外问题。</p>
+              )}
+            </div>
+          ) : null}
+
+          {(artifact.kind === 'text' || artifact.kind === 'artifact') ? (
+            <div className="artifact-detail-stack">
+              <p>{artifact.summary}</p>
+              {artifact.detailText ? <pre className="artifact-code-block artifact-code-block--plain">{artifact.detailText}</pre> : null}
+            </div>
+          ) : null}
+        </div>
+
+        {artifact.url && artifact.kind !== 'preview' ? (
+          <div className="artifact-dialog__footer">
+            <a className="artifact-dialog__link" href={artifact.url} target="_blank" rel="noreferrer">
+              在新窗口打开
+              <ExternalLink size={14} />
+            </a>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Renders one placeholder result bubble while the final answer is still streaming.
+ * Input: none.
+ * Output: pending result bubble.
+ */
+function PendingResultBubble() {
+  return (
+    <article className="message-row">
+      <AgentAvatar agentId="orchestrator" />
+      <div className="message-stack">
+        <div className="message-meta">
+          <strong>正在等待结果</strong>
+        </div>
+        <div className="message-bubble message-bubble--agent">
+          <p>过程还在继续，最终结果会显示在这里。</p>
+          <div className="message-typing-dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+        </div>
+      </div>
+    </article>
+  )
+}
+
 type EmptyChatStateProps = {
   room: WorkspaceRoom | undefined
 }
@@ -317,7 +780,7 @@ function EmptyChatState({ room }: EmptyChatStateProps) {
     <div className="empty-chat">
       <OrbMark size="lg" pulse />
       <h2>{room ? '开始这一轮协作' : '先选择一个工作区'}</h2>
-      <p>群聊工作区支持 @ 指向 Agent；单聊工作区会把上下文固定发送给目标 Agent。</p>
+      <p>群聊工作区支持 @ 指向 Agent，执行过程、预览、Diff 和审查结果都会直接进入聊天记录。</p>
     </div>
   )
 }
@@ -346,7 +809,7 @@ function ChatComposer({ room, sending, mentionOptions, onSend }: ChatComposerPro
   const placeholder =
     room?.kind === 'direct'
       ? `发送给 ${room.targetAgentId ?? 'Agent'}，例如：/run 检查当前产物并给出结论`
-      : '给群聊工作区发送任务，例如：@engineer 实现页面并让 @reviewer 验收'
+      : '给群聊工作区发送任务，例如：@engineer 实现页面，并让 @reviewer 验收'
   const filteredMentionOptions =
     room?.kind === 'group' && mentionMatch
       ? mentionOptions.filter(option => {
@@ -405,7 +868,7 @@ function ChatComposer({ room, sending, mentionOptions, onSend }: ChatComposerPro
     return () => {
       window.removeEventListener('agenthub:composer-insert', handleInsert)
     }
-  }, [value, room?.kind])
+  }, [room?.kind, value])
 
   /**
    * Recomputes the active @ mention token for the current caret location.
@@ -620,4 +1083,99 @@ function ChatComposer({ room, sending, mentionOptions, onSend }: ChatComposerPro
       </div>
     </form>
   )
+}
+
+/**
+ * Chooses the artifact icon for one card kind.
+ * Input: artifact kind.
+ * Output: matching Lucide icon component.
+ */
+function artifactIcon(kind: ChatTurnArtifact['kind']) {
+  if (kind === 'preview') {
+    return Globe2
+  }
+  if (kind === 'diff') {
+    return Braces
+  }
+  if (kind === 'review') {
+    return ShieldCheck
+  }
+  if (kind === 'zip') {
+    return FileArchive
+  }
+  return FileText
+}
+
+/**
+ * Converts one turn status into the shared status-pill variant.
+ * Input: one chat turn.
+ * Output: pill status keyword.
+ */
+function turnStatusPillStatus(turn: ChatTurn): 'running' | 'success' | 'failed' | 'ready' {
+  if (turn.status === 'failed') {
+    return 'failed'
+  }
+  if (turn.status === 'running') {
+    return 'running'
+  }
+  return 'success'
+}
+
+/**
+ * Picks one icon based on process tone and row label.
+ * Input: tone and label text.
+ * Output: icon component.
+ */
+function toneIcon(tone: ChatProcessTone, label: string) {
+  if (/审查|校验|结论/i.test(label)) {
+    return ShieldCheck
+  }
+  if (/预览/i.test(label)) {
+    return Globe2
+  }
+  if (/Diff|代码/i.test(label)) {
+    return Braces
+  }
+  if (/输出|日志/i.test(label)) {
+    return TerminalSquare
+  }
+  if (tone === 'danger') {
+    return AlertTriangle
+  }
+  if (tone === 'success') {
+    return CheckCircle2
+  }
+  return LoaderCircle
+}
+
+/**
+ * Maps artifact verdict text into one display tone suffix.
+ * Input: verdict text.
+ * Output: visual tone name.
+ */
+function artifactVerdictTone(verdict: string): 'success' | 'warning' | 'danger' {
+  const normalized = verdict.toLowerCase()
+  if (normalized === 'fail' || normalized === 'failed') {
+    return 'danger'
+  }
+  if (normalized === 'partial') {
+    return 'warning'
+  }
+  return 'success'
+}
+
+/**
+ * Maps artifact verdict text into one status-pill variant.
+ * Input: verdict text.
+ * Output: status pill keyword.
+ */
+function artifactVerdictPillStatus(verdict: string): 'success' | 'failed' | 'running' | 'ready' {
+  const tone = artifactVerdictTone(verdict)
+  if (tone === 'danger') {
+    return 'failed'
+  }
+  if (tone === 'warning') {
+    return 'running'
+  }
+  return 'success'
 }

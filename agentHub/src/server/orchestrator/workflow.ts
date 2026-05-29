@@ -93,6 +93,14 @@ type TaskRunSessionScope = {
 }
 
 /**
+ * Returns whether this stage should still go through the planner and handoff path.
+ * Input: current task stage. Output: true when direct child-speaker shortcut should be skipped.
+ */
+function shouldKeepPlannerDispatch(taskStage: TurnRoute['taskStage'] | undefined): boolean {
+  return taskStage === 'requirements_intake' || taskStage === 'planning' || taskStage === 'awaiting_confirmation'
+}
+
+/**
  * Runs an async task while emitting a recurring heartbeat event.
  * Input: workflow services, a starter event, a heartbeat factory, and a task. Output: task result.
  */
@@ -186,9 +194,40 @@ function applyTaskStageGuard(
   conversation: Conversation,
   routing: PlannedRoutingDecision,
   route?: TurnRoute,
+  userContent?: string,
 ): PlannedRoutingDecision {
   if (!route || routing.decision.kind !== 'dispatch_agents') {
-    return routing
+    if (!route || route.taskStage !== 'requirements_intake' && route.taskStage !== 'planning') {
+      return routing
+    }
+
+    if (!userContent?.trim()) {
+      return routing
+    }
+
+    emitWorkflowEvent(services, {
+      type: 'agent_progress',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      runId: `routing-${conversation.id}`,
+      agentId: 'orchestrator',
+      agentName: '项目协调 Agent',
+      message: `当前处于${route.taskStage === 'requirements_intake' ? '需求对接' : '方案规划'}阶段，已改为由产品经理先接管本轮澄清。`,
+    })
+
+    return {
+      ...routing,
+      decision: {
+        kind: 'dispatch_agents',
+        finalResponse: '我先让产品经理跟你对接这一轮，把需求、范围和验收标准收清楚。',
+        execution: 'serial',
+        dispatches: [buildProductClarificationBrief(userContent, route.taskStage)],
+        targetAgents: ['product-manager'],
+        speakerAgentId: 'product-manager',
+        finalizationMode: 'speaker_direct',
+        internalNote: 'Task-stage guard converted a non-dispatch turn into a product-manager clarification dispatch.',
+      },
+    }
   }
 
   if (route.taskStage === 'execution' || route.taskStage === 'review') {
@@ -259,6 +298,33 @@ function applyTaskStageGuard(
   }
 
   return routing
+}
+
+/**
+ * Builds the self-contained product-manager brief used before execution is approved.
+ * Input: raw user request and the current non-execution task stage.
+ * Output: product-manager dispatch brief.
+ */
+function buildProductClarificationBrief(
+  userContent: string,
+  taskStage: Extract<TurnRoute['taskStage'], 'requirements_intake' | 'planning'>,
+): RoutingTaskBrief {
+  return {
+    agentId: 'product-manager',
+    task:
+      taskStage === 'requirements_intake'
+        ? `Clarify the user's intent, scope, modules, constraints, and acceptance criteria before implementation.\nUser request:\n${userContent}`
+        : `Refine the current plan into a concise product-facing proposal with scope, user flow, risks, and acceptance criteria.\nUser request:\n${userContent}`,
+    requiredContext: [
+      'workspace goal',
+      'recent conversation messages',
+      'current task stage',
+    ],
+    expectedOutput:
+      taskStage === 'requirements_intake'
+        ? 'A concise clarification reply or a structured requirement package that the user can confirm.'
+        : 'A concise final plan that the user can confirm before implementation starts.',
+  }
 }
 
 /**
@@ -1828,7 +1894,8 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
   if (
     dynamicVisibleSpeaker &&
     !input.agentId &&
-    !routeAllowsExecution(mainRoute.route)
+    !routeAllowsExecution(mainRoute.route) &&
+    !shouldKeepPlannerDispatch(mainRoute.route.taskStage)
   ) {
     logDiagnostic(workflowServices, {
       level: 'info',
@@ -2049,7 +2116,15 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       elapsedMs: plannedRouting.modelElapsedMs ?? 0,
     })
   }
-  const stageGuardedRouting = applyTaskStageGuard(workflowServices, state, workspace, conversation, plannedRouting, mainRoute.route)
+  const stageGuardedRouting = applyTaskStageGuard(
+    workflowServices,
+    state,
+    workspace,
+    conversation,
+    plannedRouting,
+    mainRoute.route,
+    input.content,
+  )
   const reviewGuardedRouting = applyReviewSafety(workflowServices, state, workspace, conversation, stageGuardedRouting)
   const routing = applyExecutionSafety(workflowServices, state, workspace, conversation, reviewGuardedRouting)
   const decision = routing.decision

@@ -17,7 +17,6 @@ import { BackgroundCanvas } from './components/BackgroundCanvas'
 import { ChatPane } from './components/ChatPane'
 import { CreateWorkspaceDialog, type CreateWorkspaceInput } from './components/CreateWorkspaceDialog'
 import { GlassPanel } from './components/GlassPanel'
-import { InsightDock } from './components/InsightDock'
 import { OrbMark } from './components/OrbMark'
 import { StatusPill } from './components/StatusPill'
 import { WorkspaceRail } from './components/WorkspaceRail'
@@ -619,17 +618,13 @@ export function App() {
             room={activeRoom}
             messages={currentMessages}
             streamingMessages={currentStreamingMessages}
+            workflowEvents={workflowEvents}
             sending={sending}
             activeConversationId={activeConversationId}
             onRegenerate={() => void handleRegenerate()}
             onReplyToMessage={handleReplyToMessage}
             onCopyMessage={content => void handleCopyMessage(content)}
             onSend={handleSend}
-          />
-          <InsightDock
-            state={state}
-            room={activeRoom}
-            events={workflowEvents}
           />
         </section>
       </div>

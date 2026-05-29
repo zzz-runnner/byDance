@@ -89,14 +89,49 @@ function buildAgentSearchText(agent: AgentDefinition): string {
     agent.role,
     agent.description,
     agent.whenToUse,
+    ...agent.skills,
     profile?.routingSummary,
     ...(profile?.responsibilities ?? []),
     ...(profile?.goodAt ?? []),
+    ...(profile?.notFor ?? []),
     ...(profile?.exampleRequests ?? []),
   ]
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
+}
+
+/**
+ * Scores how well one agent's declared stage ownership matches the current turn stage.
+ * Input: agent profile plus optional workflow stage. Output: bonus or penalty.
+ */
+function stageAlignmentScore(agent: AgentDefinition, taskStage?: WorkflowTaskStage): number {
+  const profile = agent.routingProfile
+  if (!profile || !taskStage) {
+    return 0
+  }
+
+  let score = 0
+  if (profile.preferredStages?.includes(taskStage)) {
+    score += 3.4
+  }
+
+  if (profile.speakerMode === 'direct_speaker') {
+    score += 0.8
+  }
+
+  if (
+    ['requirements_intake', 'planning', 'awaiting_confirmation'].includes(taskStage) &&
+    agent.permissions.fileWrite
+  ) {
+    score -= 2.2
+  }
+
+  if (taskStage === 'execution' && agent.permissions.fileWrite) {
+    score += 1.2
+  }
+
+  return score
 }
 
 /**
@@ -123,9 +158,7 @@ function scoreAgent(agent: AgentDefinition, content: string, taskStage?: Workflo
     }
   }
 
-  if (profile?.preferredStages?.includes(taskStage ?? 'chat')) {
-    score += 2.2
-  }
+  score += stageAlignmentScore(agent, taskStage)
 
   for (const blockedText of profile?.notFor ?? []) {
     if (normalized.includes(blockedText.toLowerCase())) {
@@ -165,7 +198,7 @@ export function selectDynamicVisibleSpeaker(input: DynamicSpeakerSelectionInput)
   }
 
   const scoreGap = best.score - (second?.score ?? 0)
-  if (best.score < 4.8 || scoreGap < 1.4) {
+  if (best.score < 4 || scoreGap < 1) {
     return undefined
   }
 

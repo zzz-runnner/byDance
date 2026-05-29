@@ -574,6 +574,17 @@ export function buildPlannerContextPackage(input: PlannerContextInput): string {
     role: agent.role,
     description: agent.description,
     whenToUse: agent.whenToUse,
+    routingProfile: agent.routingProfile
+      ? {
+          routingSummary: agent.routingProfile.routingSummary,
+          responsibilities: agent.routingProfile.responsibilities,
+          goodAt: agent.routingProfile.goodAt,
+          notFor: agent.routingProfile.notFor,
+          preferredStages: agent.routingProfile.preferredStages,
+          exampleRequests: agent.routingProfile.exampleRequests,
+          speakerMode: agent.routingProfile.speakerMode,
+        }
+      : undefined,
     modelProvider: agent.modelProvider,
     tools: agent.tools,
     permissions: agent.permissions,
