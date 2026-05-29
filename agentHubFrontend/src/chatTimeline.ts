@@ -52,6 +52,8 @@ export type ChatTurnArtifact = {
   detailText?: string
   patch?: string
   files?: ChangedFile[]
+  fileCount?: number
+  byteLength?: number
 }
 
 export type ChatTurn = {
@@ -434,7 +436,22 @@ function artifactToChatArtifact(artifact: Artifact): ChatTurnArtifact {
     url: artifact.url,
     agentId: artifact.createdByAgentId,
     detailText: artifact.type === 'text' ? artifact.content : undefined,
+    fileCount: readNumericMetadata(artifact.metadata, 'fileCount'),
+    byteLength: readNumericMetadata(artifact.metadata, 'byteLength'),
   }
+}
+
+/**
+ * Reads one numeric artifact metadata field when it is available.
+ * Input: raw metadata record and the desired numeric key.
+ * Output: numeric value or undefined when the field is absent or invalid.
+ */
+function readNumericMetadata(
+  metadata: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
+  const value = metadata?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 /**

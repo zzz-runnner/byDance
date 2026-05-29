@@ -43,7 +43,7 @@ The frontend is now `live-only`. If the business backend API is unavailable, the
 - Each user turn renders as one chat block with the user message, a `本轮过程` section, inline artifact cards, and the final agent result.
 - `本轮过程` stays expanded while a turn is active, auto-collapses after completion, and stays open for failed or partial turns.
 - `本轮过程` now shows structured execution cards for routing, dispatch, progress, logs, validation, synthesis, and reply output, with readable log excerpts inside the chat stream.
-- Each execution card stays collapsed by default, so users can keep the chat stream compact and expand only the steps they need to inspect.
+- Artifact cards inside the chat stream stay compact by default and surface only the key summary, while the full preview, diff, review, and long text remain in the artifact dialog.
 - Preview, diff, review, zip, and text artifacts live inside the main chat stream.
 - Preview dialogs now show `loading / slow / error` states before the iframe becomes ready.
 - The first page load now shows a blocking loading screen, and backend disconnection shows a blocking error screen with retry.

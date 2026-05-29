@@ -494,64 +494,31 @@ type ProcessEntryCardProps = {
  */
 function ProcessEntryCard({ entry, agentName }: ProcessEntryCardProps) {
   const Icon = processEntryIcon(entry)
-  const [expanded, setExpanded] = useState(false)
-  const hasExpandableBody = Boolean(entry.summary || entry.detail || entry.logExcerpt)
-  const topContent = (
-    <>
-      <span className="process-card__icon">
-        <Icon size={14} />
-      </span>
-      <div className="process-card__content">
-        <div className="process-card__headline">
-          <strong>{entry.title}</strong>
-          <time>{formatTime(entry.time)}</time>
-        </div>
-        <div className="process-card__meta">
-          {entry.badge ? <span className={`process-card__badge process-card__badge--${entry.kind}`}>{entry.badge}</span> : null}
-          {agentName ? <span className="process-card__agent">{agentName}</span> : null}
-          {entry.meta ? <span className="process-card__meta-text">{entry.meta}</span> : null}
-        </div>
-      </div>
-      {hasExpandableBody ? (
-        <span className="process-card__chevron" aria-hidden="true">
-          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-        </span>
-      ) : null}
-    </>
-  )
 
   return (
-    <article
-      className={[
-        'process-card',
-        `process-card--${entry.kind}`,
-        `process-card--${entry.tone}`,
-        hasExpandableBody ? 'process-card--collapsible' : '',
-        expanded ? 'is-expanded' : 'is-collapsed',
-      ].filter(Boolean).join(' ')}
-    >
-      {hasExpandableBody ? (
-        <button
-          className="process-card__top process-card__top--toggle"
-          type="button"
-          onClick={() => setExpanded(previous => !previous)}
-          aria-expanded={expanded}
-        >
-          {topContent}
-        </button>
-      ) : (
-        <div className="process-card__top">{topContent}</div>
-      )}
-      {expanded ? (
-        <div className="process-card__body">
-          {entry.summary ? (
-            <MarkdownRenderer content={entry.summary} mode="process" className="markdown-content--process-body" />
-          ) : null}
-          {entry.logExcerpt ? <ProcessLogBlock entry={entry} /> : null}
-          {entry.detail ? (
-            <MarkdownRenderer content={entry.detail} mode="process" className="markdown-content--process-detail" />
-          ) : null}
+    <article className={`process-card process-card--${entry.kind} process-card--${entry.tone}`}>
+      <div className="process-card__top">
+        <span className="process-card__icon">
+          <Icon size={14} />
+        </span>
+        <div className="process-card__content">
+          <div className="process-card__headline">
+            <strong>{entry.title}</strong>
+            <time>{formatTime(entry.time)}</time>
+          </div>
+          <div className="process-card__meta">
+            {entry.badge ? <span className={`process-card__badge process-card__badge--${entry.kind}`}>{entry.badge}</span> : null}
+            {agentName ? <span className="process-card__agent">{agentName}</span> : null}
+            {entry.meta ? <span className="process-card__meta-text">{entry.meta}</span> : null}
+          </div>
         </div>
+      </div>
+      {entry.summary ? (
+        <MarkdownRenderer content={entry.summary} mode="process" className="markdown-content--process-body" />
+      ) : null}
+      {entry.logExcerpt ? <ProcessLogBlock entry={entry} /> : null}
+      {entry.detail ? (
+        <MarkdownRenderer content={entry.detail} mode="process" className="markdown-content--process-detail" />
       ) : null}
     </article>
   )
@@ -679,6 +646,7 @@ type InlineArtifactCardProps = {
 function InlineArtifactCard({ artifact }: InlineArtifactCardProps) {
   const Icon = artifact.type === 'zip' ? FileArchive : artifact.type === 'web-preview' ? Globe2 : Braces
   const actionLabel = artifact.type === 'web-preview' ? '打开预览' : artifact.type === 'zip' ? '下载' : '查看'
+  const summary = buildInlineArtifactCardSummary(artifact)
   const content = (
     <>
       <span className="artifact-icon">
@@ -686,9 +654,7 @@ function InlineArtifactCard({ artifact }: InlineArtifactCardProps) {
       </span>
       <div className="artifact-card__copy">
         <strong>{artifact.title}</strong>
-        <div className="artifact-card__summary">
-          <MarkdownRenderer content={artifact.content} mode="compact" className="markdown-content--compact" />
-        </div>
+        <ArtifactCardSummary preview={summary} />
       </div>
       <em>
         {actionLabel}
@@ -721,6 +687,7 @@ type TurnArtifactCardProps = {
  */
 function TurnArtifactCard({ artifact, agentName, onOpenArtifact }: TurnArtifactCardProps) {
   const Icon = artifactIcon(artifact.kind)
+  const preview = buildTurnArtifactCardPreview(artifact)
   const actionLabel = artifact.kind === 'zip'
     ? '下载源码'
     : artifact.kind === 'preview'
@@ -735,9 +702,7 @@ function TurnArtifactCard({ artifact, agentName, onOpenArtifact }: TurnArtifactC
       </span>
       <div className="artifact-card__copy">
         <strong>{artifact.title}</strong>
-        <div className="artifact-card__summary">
-          <MarkdownRenderer content={artifact.summary} mode="compact" className="markdown-content--compact" />
-        </div>
+        <ArtifactCardSummary preview={preview} />
         {artifact.verdict ? <b className={`artifact-verdict artifact-verdict--${artifactVerdictTone(artifact.verdict)}`}>{artifact.verdict}</b> : null}
         {agentName ? <i>{agentName}</i> : null}
       </div>
@@ -761,6 +726,138 @@ function TurnArtifactCard({ artifact, agentName, onOpenArtifact }: TurnArtifactC
       {content}
     </button>
   )
+}
+
+type ArtifactCardPreview = {
+  summary?: string
+  metaItems: string[]
+  peekItems: string[]
+}
+
+type ArtifactCardSummaryProps = {
+  preview: ArtifactCardPreview
+}
+
+/**
+ * Renders the compact summary block used by artifact cards in the chat stream.
+ * Input: precomputed artifact preview text, meta items, and peek rows.
+ * Output: one compact artifact summary body.
+ */
+function ArtifactCardSummary({ preview }: ArtifactCardSummaryProps) {
+  return (
+    <>
+      {preview.summary ? (
+        <div className="artifact-card__summary">
+          <MarkdownRenderer content={preview.summary} mode="compact" className="markdown-content--compact" />
+        </div>
+      ) : null}
+      {preview.metaItems.length ? (
+        <div className="artifact-card__meta-row">
+          {preview.metaItems.map((item, index) => (
+            <span className="artifact-card__meta-chip" key={`${item}-${index}`}>
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {preview.peekItems.length ? (
+        <div className="artifact-card__peek-list">
+          {preview.peekItems.map((item, index) => (
+            <span className="artifact-card__peek-item" key={`${item}-${index}`}>
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </>
+  )
+}
+
+/**
+ * Builds a compact summary for standalone inline artifacts.
+ * Input: raw artifact payload attached to one message.
+ * Output: compact summary text plus light metadata for the card body.
+ */
+function buildInlineArtifactCardSummary(artifact: Artifact): ArtifactCardPreview {
+  const fullContent = artifact.content.trim()
+  const isFullTextVisible = shouldShowFullArtifactText(fullContent)
+  const fileCount = readArtifactMetadataNumber(artifact.metadata, 'fileCount')
+  const byteLength = readArtifactMetadataNumber(artifact.metadata, 'byteLength')
+  const metaItems = [
+    artifact.type === 'web-preview' ? (artifact.url ? 'preview ready' : 'preview unavailable') : undefined,
+    artifact.type === 'zip' && fileCount !== undefined ? `${fileCount} files` : undefined,
+    artifact.type === 'zip' && byteLength !== undefined ? formatArtifactByteLength(byteLength) : undefined,
+    !isFullTextVisible && fullContent ? 'summary only' : undefined,
+  ].filter(Boolean) as string[]
+
+  return {
+    summary: isFullTextVisible ? fullContent : buildArtifactExcerpt(fullContent, 180),
+    metaItems,
+    peekItems: [],
+  }
+}
+
+/**
+ * Builds one compact artifact preview tuned for the chat-stream card.
+ * Input: turn artifact payload.
+ * Output: condensed summary, metrics, and short peek rows.
+ */
+function buildTurnArtifactCardPreview(artifact: ChatTurnArtifact): ArtifactCardPreview {
+  if (artifact.kind === 'preview') {
+    return {
+      summary: buildArtifactExcerpt(artifact.summary, 160) || 'Preview generated.',
+      metaItems: [artifact.url ? 'preview ready' : 'preview unavailable'],
+      peekItems: artifact.url ? ['Open the card to inspect the page preview.'] : [],
+    }
+  }
+
+  if (artifact.kind === 'diff') {
+    const files = artifact.files ?? []
+    const totals = summarizeArtifactDiff(files)
+    return {
+      summary: buildArtifactExcerpt(artifact.summary, 180) || 'Diff ready.',
+      metaItems: [
+        files.length ? `${files.length} files` : undefined,
+        files.length ? `+${totals.additions} / -${totals.deletions}` : undefined,
+      ].filter(Boolean) as string[],
+      peekItems: files.slice(0, 3).map(file =>
+        clipArtifactText(`${file.status} ${file.path} (+${file.additions} / -${file.deletions})`, 110),
+      ),
+    }
+  }
+
+  if (artifact.kind === 'review') {
+    const issues = artifact.issues ?? []
+    return {
+      summary: buildArtifactExcerpt(artifact.summary, 180) || 'Review verdict ready.',
+      metaItems: [
+        artifact.verdict ?? 'review',
+        `${issues.length} issues`,
+      ],
+      peekItems: issues.slice(0, 2).map(issue => clipArtifactText(issue, 110)),
+    }
+  }
+
+  if (artifact.kind === 'zip') {
+    return {
+      summary: buildArtifactExcerpt(artifact.summary, 160) || 'Source archive ready.',
+      metaItems: [
+        artifact.fileCount !== undefined ? `${artifact.fileCount} files` : undefined,
+        artifact.byteLength !== undefined ? formatArtifactByteLength(artifact.byteLength) : undefined,
+        artifact.url ? 'download ready' : undefined,
+      ].filter(Boolean) as string[],
+      peekItems: [],
+    }
+  }
+
+  const fullContent = (artifact.detailText ?? artifact.summary).trim()
+  const isFullTextVisible = shouldShowFullArtifactText(fullContent)
+
+  return {
+    summary: isFullTextVisible ? fullContent : buildArtifactExcerpt(fullContent, 220),
+    metaItems: !isFullTextVisible && fullContent ? ['summary only'] : [],
+    peekItems: [],
+  }
 }
 
 type ArtifactDialogProps = {
@@ -1433,4 +1530,97 @@ function artifactVerdictPillStatus(verdict: string): 'success' | 'failed' | 'run
     return 'running'
   }
   return 'success'
+}
+
+/**
+ * Sums additions and deletions across one diff artifact file list.
+ * Input: changed files attached to the artifact.
+ * Output: aggregate additions and deletions for compact card metrics.
+ */
+function summarizeArtifactDiff(files: ChatTurnArtifact['files']): { additions: number; deletions: number } {
+  return (files ?? []).reduce(
+    (totals, file) => ({
+      additions: totals.additions + file.additions,
+      deletions: totals.deletions + file.deletions,
+    }),
+    { additions: 0, deletions: 0 },
+  )
+}
+
+/**
+ * Chooses whether one text artifact is short enough to remain fully visible in the chat card.
+ * Input: raw artifact text.
+ * Output: true when the compact card can safely show the full text.
+ */
+function shouldShowFullArtifactText(content: string): boolean {
+  if (!content.trim()) {
+    return false
+  }
+
+  const lines = content.split(/\r?\n/).filter(line => line.trim().length > 0)
+  return lines.length <= 8 && content.length <= 300
+}
+
+/**
+ * Converts long Markdown-ish artifact text into a short readable excerpt for the chat card.
+ * Input: raw artifact text and an optional max length.
+ * Output: compact plain-text excerpt.
+ */
+function buildArtifactExcerpt(content: string, maxLength = 180): string {
+  return clipArtifactText(
+    content
+      .replace(/```[\s\S]*?```/g, '[code]')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/!\[[^\]]*]\([^)]*\)/g, '')
+      .replace(/\[([^\]]+)]\([^)]*\)/g, '$1')
+      .replace(/^[#>\-\*\d.\s|]+/gm, ' ')
+      .replace(/\|/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim(),
+    maxLength,
+  )
+}
+
+/**
+ * Clips one plain text fragment for narrow artifact cards.
+ * Input: raw text and the desired max length.
+ * Output: compact text that keeps the card height stable.
+ */
+function clipArtifactText(content: string, maxLength = 180): string {
+  const normalized = content.replace(/\s+/g, ' ').trim()
+  if (!normalized) {
+    return ''
+  }
+  if (normalized.length <= maxLength) {
+    return normalized
+  }
+  return `${normalized.slice(0, maxLength)}...`
+}
+
+/**
+ * Reads one numeric artifact metadata field when it exists on a runtime artifact.
+ * Input: generic artifact metadata and the desired key.
+ * Output: numeric metadata value or undefined.
+ */
+function readArtifactMetadataNumber(
+  metadata: Artifact['metadata'] | undefined,
+  key: string,
+): number | undefined {
+  const value = metadata?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * Formats one artifact byte count into a compact KB or MB label.
+ * Input: raw byte length.
+ * Output: human-readable size text.
+ */
+function formatArtifactByteLength(byteLength: number): string {
+  if (byteLength < 1024) {
+    return `${byteLength} B`
+  }
+  if (byteLength < 1024 * 1024) {
+    return `${(byteLength / 1024).toFixed(1)} KB`
+  }
+  return `${(byteLength / (1024 * 1024)).toFixed(1)} MB`
 }
