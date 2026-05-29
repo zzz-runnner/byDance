@@ -41,7 +41,7 @@ function projectIdOf(project: BusinessProject): string {
  * Input: optional agent list.
  * Output: AppState with empty project-scoped collections.
  */
-function createEmptyWorkbenchState(agents: AgentDefinition[] = []): AppState {
+export function createEmptyWorkbenchState(agents: AgentDefinition[] = []): AppState {
   return {
     workspaces: [],
     conversations: [],

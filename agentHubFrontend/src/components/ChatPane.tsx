@@ -46,6 +46,7 @@ type ChatPaneProps = {
   messages: Message[]
   streamingMessages: Message[]
   workflowEvents: LiveWorkflowEvent[]
+  loading: boolean
   sending: boolean
   activeConversationId: string
   onRegenerate: () => void
@@ -153,6 +154,7 @@ export function ChatPane({
   messages,
   streamingMessages,
   workflowEvents,
+  loading,
   sending,
   activeConversationId,
   onRegenerate,
@@ -327,7 +329,7 @@ export function ChatPane({
             ),
           )
         ) : (
-          <EmptyChatState room={room} />
+          <EmptyChatState room={room} loading={loading} />
         )}
       </div>
       {!isNearBottom && timelineItems.length > 0 ? (
@@ -768,6 +770,7 @@ function PendingResultBubble() {
 
 type EmptyChatStateProps = {
   room: WorkspaceRoom | undefined
+  loading: boolean
 }
 
 /**
@@ -775,12 +778,16 @@ type EmptyChatStateProps = {
  * Input: active workspace room.
  * Output: an empty-state panel for first messages.
  */
-function EmptyChatState({ room }: EmptyChatStateProps) {
+function EmptyChatState({ room, loading }: EmptyChatStateProps) {
   return (
     <div className="empty-chat">
       <OrbMark size="lg" pulse />
-      <h2>{room ? '开始这一轮协作' : '先选择一个工作区'}</h2>
-      <p>群聊工作区支持 @ 指向 Agent，执行过程、预览、Diff 和审查结果都会直接进入聊天记录。</p>
+      <h2>{loading && !room ? '正在连接工作区' : room ? '开始这一轮协作' : '先选择一个工作区'}</h2>
+      <p>
+        {loading && !room
+          ? '前端正在加载真实工作区和会话数据，完成后会直接进入当前列表。'
+          : '群聊工作区支持 @ 指向 Agent，执行过程、预览、Diff 和审查结果都会直接进入聊天记录。'}
+      </p>
     </div>
   )
 }

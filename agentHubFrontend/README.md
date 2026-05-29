@@ -31,6 +31,7 @@ If the business backend API is unavailable, the frontend falls back to local dem
 - Composer shortcut chips still exist as a fallback, and all insertions now respect the current caret position.
 - In local live mode, one explicit group-chat `@agent` mention now routes to that child agent for the visible reply instead of always falling back to Orchestrator.
 - Non-mention specialist questions can now route to one visible child agent through runtime routing metadata, so the final bubble can show the real specialist instead of a forced Orchestrator summary.
+- Auto mode now starts from an empty loading state and no longer flashes demo workspace lists before live backend data arrives.
 - The active workspace id is restored from `localStorage` after page refresh.
 - Chat switches now open at the latest message, keep follow-scroll during nearby streaming, and show a jump-to-bottom button when the user scrolls away from the bottom.
 - The chat list now renders temporary routing and reply placeholders so the user sees waiting bubbles before the final streamed message arrives.

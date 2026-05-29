@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { LayoutDashboard, PlugZap, RefreshCcw, ServerCrash, Wifi, WifiOff } from 'lucide-react'
 import {
   createBusinessWorkspace,
+  createEmptyWorkbenchState,
   fetchBusinessWorkbenchState,
   streamBusinessProjectMessage,
 } from './api/businessBackend'
@@ -25,8 +26,6 @@ import type { AppState, ConnectionStatus, LiveWorkflowEvent, Message, WorkflowEv
 
 type DataMode = 'auto' | 'live' | 'mock'
 const ACTIVE_WORKSPACE_STORAGE_KEY = 'agenthub.activeWorkspaceId'
-
-const INITIAL_DEMO_STATE = createDemoState()
 
 /**
  * Creates a temporary UI message for optimistic chat rendering.
@@ -133,25 +132,38 @@ function firstWorkspaceId(state: AppState): string {
 }
 
 /**
+ * Restores the preferred workspace when it still exists in the next snapshot.
+ * Input: next AppState snapshot and the preferred workspace id.
+ * Output: a valid workspace id or an empty string.
+ */
+function resolveWorkspaceId(state: AppState, preferredWorkspaceId: string): string {
+  if (preferredWorkspaceId && state.workspaces.some(workspace => workspace.id === preferredWorkspaceId)) {
+    return preferredWorkspaceId
+  }
+
+  return firstWorkspaceId(state)
+}
+
+/**
  * Renders the AgentHub web workbench.
  * Input: none.
  * Output: the complete business-backed multi-workspace AI conversation UI.
  */
 export function App() {
-  const [state, setState] = useState<AppState>(INITIAL_DEMO_STATE)
+  const [state, setState] = useState<AppState>(() => createEmptyWorkbenchState())
   const [dataMode, setDataMode] = useState<DataMode>('auto')
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting')
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(() => {
     if (typeof window === 'undefined') {
-      return firstWorkspaceId(INITIAL_DEMO_STATE)
+      return ''
     }
-    return window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY) ?? firstWorkspaceId(INITIAL_DEMO_STATE)
+    return window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY) ?? ''
   })
   const [liveWorkflowEvents, setLiveWorkflowEvents] = useState<LiveWorkflowEvent[]>([])
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([])
   const [streamingMessages, setStreamingMessages] = useState<Record<string, Message>>({})
   const [sending, setSending] = useState(false)
-  const [loadingState, setLoadingState] = useState(false)
+  const [loadingState, setLoadingState] = useState(true)
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [creatingWorkspace, setCreatingWorkspace] = useState(false)
@@ -188,30 +200,27 @@ export function App() {
 
   /**
    * Loads real business backend state or falls back to the demo state.
-   * Input: selected data mode and preserve-selection flag.
-   * Output: updates connection state and current workbench snapshot.
+   * Input: selected data mode.
+   * Output: updates connection state, snapshot, and workspace selection.
    */
-  async function loadWorkbenchState(nextMode: DataMode, preserveSelection = false) {
+  async function loadWorkbenchState(nextMode: DataMode) {
     setLoadingState(true)
     setCreateWorkspaceError('')
+    const preferredWorkspaceId = activeWorkspaceId
 
     try {
       if (nextMode === 'mock') {
         const demo = createDemoState()
         setState(demo)
         setConnectionStatus('demo')
-        if (!preserveSelection) {
-          setActiveWorkspaceId(firstWorkspaceId(demo))
-        }
+        setActiveWorkspaceId(resolveWorkspaceId(demo, preferredWorkspaceId))
         return
       }
 
       const nextState = await fetchBusinessWorkbenchState()
       setState(nextState)
       setConnectionStatus('live')
-      if (!preserveSelection) {
-        setActiveWorkspaceId(firstWorkspaceId(nextState))
-      }
+      setActiveWorkspaceId(resolveWorkspaceId(nextState, preferredWorkspaceId))
     } catch {
       if (nextMode === 'live') {
         setConnectionStatus('error')
@@ -221,9 +230,7 @@ export function App() {
       const demo = createDemoState()
       setState(demo)
       setConnectionStatus('demo')
-      if (!preserveSelection) {
-        setActiveWorkspaceId(firstWorkspaceId(demo))
-      }
+      setActiveWorkspaceId(resolveWorkspaceId(demo, preferredWorkspaceId))
     } finally {
       setLoadingState(false)
     }
@@ -468,7 +475,7 @@ export function App() {
    * Output: refreshes state without forcing the user off the current workspace.
    */
   async function handleRefresh() {
-    await loadWorkbenchState(dataMode, true)
+    await loadWorkbenchState(dataMode)
   }
 
   /**
@@ -619,6 +626,7 @@ export function App() {
             messages={currentMessages}
             streamingMessages={currentStreamingMessages}
             workflowEvents={workflowEvents}
+            loading={loadingState}
             sending={sending}
             activeConversationId={activeConversationId}
             onRegenerate={() => void handleRegenerate()}
