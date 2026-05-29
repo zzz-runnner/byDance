@@ -83,10 +83,12 @@ const CAPABILITY_PATTERN = /^(你能做什么|你可以做什么|你会什么|�
 const DISCUSSION_ONLY_PATTERN =
   /不要改代码|别改代码|不要动代码|别动代码|不要改动任何代码|先别改|先不改|只分析|只讨论|只读|先聊聊|先讨论|我们聊聊|先确认|不执行|别执行|不要执行/i
 const PLANNING_PATTERN = /方案|计划|规划|设计一下|怎么改|怎么做|架构|实现思路|实施计划|plan|approach|architecture/i
+const SCOPE_REFINEMENT_PATTERN =
+  /只保留|只做|先做一个简单版|简化一点|跟之前一样|同用之前的技术栈|不用响应式|不需要响应式|去掉|去掉.*模块|keep only|just keep|same stack|no responsive|non-responsive|simplify the scope|simple demo/i
 const EXECUTION_APPROVAL_PATTERN =
   /开始实现|开始开发|开始执行|按.*(方案|计划|范围).*做|按.*实现|可以执行|可以开始|确认.*(执行|实现|开发)|直接实现|直接开发|不用再问|进入开发|go ahead|start implementation|start coding/i
 const EXECUTION_PATTERN =
-  /\/run|修改|修复|删除|提交|推送|部署|安装|运行|执行|重构|fix|delete|commit|push|deploy|install|run|execute|refactor|build/i
+  /\/run|修改|修复|删除|提交|推送|部署|安装|运行|执行|重构|fix|delete|commit|push|deploy|install|run|execute|refactor/i
 const HIGH_RISK_PATTERN = /删除|清空|覆盖|提交|推送|部署|安装|rm\s+-rf|git\s+push|git\s+reset|deploy|delete|remove|overwrite|commit|push|install/i
 
 /**
@@ -345,6 +347,25 @@ export function routeTurnLocally(input: LocalRouteInput): TurnRoute | undefined 
       confidence: 0.98,
       constraints,
       localResponse: onlyConstraint ? '可以，我们先保持讨论模式，不改代码、不执行命令。' : undefined,
+    })
+  }
+
+  if (SCOPE_REFINEMENT_PATTERN.test(content)) {
+    return route({
+      interactionMode: 'planning',
+      toolPolicy: 'read_only',
+      source: 'local_rule',
+      reason: 'User is refining scope or simplifying the plan before approving implementation.',
+      size: content.length > 180 ? 'medium' : 'small',
+      risk: 'low',
+      needsModel: true,
+      needsCodebaseContext: false,
+      contextProfile: 'short',
+      modelProfile: 'router',
+      taskStage: 'planning',
+      executionReadiness: 'plan_ready',
+      needsUserConfirmation: true,
+      confidence: 0.92,
     })
   }
 
