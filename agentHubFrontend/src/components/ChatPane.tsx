@@ -494,31 +494,64 @@ type ProcessEntryCardProps = {
  */
 function ProcessEntryCard({ entry, agentName }: ProcessEntryCardProps) {
   const Icon = processEntryIcon(entry)
-
-  return (
-    <article className={`process-card process-card--${entry.kind} process-card--${entry.tone}`}>
-      <div className="process-card__top">
-        <span className="process-card__icon">
-          <Icon size={14} />
-        </span>
-        <div className="process-card__content">
-          <div className="process-card__headline">
-            <strong>{entry.title}</strong>
-            <time>{formatTime(entry.time)}</time>
-          </div>
-          <div className="process-card__meta">
-            {entry.badge ? <span className={`process-card__badge process-card__badge--${entry.kind}`}>{entry.badge}</span> : null}
-            {agentName ? <span className="process-card__agent">{agentName}</span> : null}
-            {entry.meta ? <span className="process-card__meta-text">{entry.meta}</span> : null}
-          </div>
+  const [expanded, setExpanded] = useState(false)
+  const hasExpandableBody = Boolean(entry.summary || entry.detail || entry.logExcerpt)
+  const topContent = (
+    <>
+      <span className="process-card__icon">
+        <Icon size={14} />
+      </span>
+      <div className="process-card__content">
+        <div className="process-card__headline">
+          <strong>{entry.title}</strong>
+          <time>{formatTime(entry.time)}</time>
+        </div>
+        <div className="process-card__meta">
+          {entry.badge ? <span className={`process-card__badge process-card__badge--${entry.kind}`}>{entry.badge}</span> : null}
+          {agentName ? <span className="process-card__agent">{agentName}</span> : null}
+          {entry.meta ? <span className="process-card__meta-text">{entry.meta}</span> : null}
         </div>
       </div>
-      {entry.summary ? (
-        <MarkdownRenderer content={entry.summary} mode="process" className="markdown-content--process-body" />
+      {hasExpandableBody ? (
+        <span className="process-card__chevron" aria-hidden="true">
+          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </span>
       ) : null}
-      {entry.logExcerpt ? <ProcessLogBlock entry={entry} /> : null}
-      {entry.detail ? (
-        <MarkdownRenderer content={entry.detail} mode="process" className="markdown-content--process-detail" />
+    </>
+  )
+
+  return (
+    <article
+      className={[
+        'process-card',
+        `process-card--${entry.kind}`,
+        `process-card--${entry.tone}`,
+        hasExpandableBody ? 'process-card--collapsible' : '',
+        expanded ? 'is-expanded' : 'is-collapsed',
+      ].filter(Boolean).join(' ')}
+    >
+      {hasExpandableBody ? (
+        <button
+          className="process-card__top process-card__top--toggle"
+          type="button"
+          onClick={() => setExpanded(previous => !previous)}
+          aria-expanded={expanded}
+        >
+          {topContent}
+        </button>
+      ) : (
+        <div className="process-card__top">{topContent}</div>
+      )}
+      {expanded ? (
+        <div className="process-card__body">
+          {entry.summary ? (
+            <MarkdownRenderer content={entry.summary} mode="process" className="markdown-content--process-body" />
+          ) : null}
+          {entry.logExcerpt ? <ProcessLogBlock entry={entry} /> : null}
+          {entry.detail ? (
+            <MarkdownRenderer content={entry.detail} mode="process" className="markdown-content--process-detail" />
+          ) : null}
+        </div>
       ) : null}
     </article>
   )

@@ -46,6 +46,7 @@ The current local path is focused on one workspace equals one chat window.
 - Preview, diff, review, zip, and text artifacts are rendered inside the chat stream instead of depending on the right-side status dock.
 - AI-authored reply bubbles, process summaries, and artifact text now use one controlled Markdown renderer with GFM support, safe-link handling, code-block copy actions, and a lightweight normalization layer for noisy separators, empty headings, empty bullets, and incomplete code fences.
 - `本轮过程` now renders structured execution cards for routing, dispatch, progress, logs, validation, synthesis, and reply output, with readable log excerpts instead of generic status rows.
+- Each process card stays collapsed by default so the chat result remains compact, and users can expand only the execution details they want to inspect.
 - Frontend startup is now `live-only`: first load shows a blocking loading state, backend failure shows a blocking retry state, and the page no longer falls back to mock/demo workspaces.
 - Preview dialogs now show `loading / slow / error` states before iframe content is ready.
 - When the page is viewed through a remote desktop or remote-control session, decorative blur layers and React dev-mode re-renders can look like visible flicker. Treat this as an environment observation first, not as a confirmed frontend callback loop.

@@ -1190,9 +1190,28 @@ a {
 
 .process-card__top {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px;
   align-items: start;
+}
+
+.process-card__top--toggle {
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.process-card--collapsible .process-card__top--toggle:hover .process-card__headline strong,
+.process-card--collapsible .process-card__top--toggle:focus-visible .process-card__headline strong {
+  color: #1d4ed8;
+}
+
+.process-card--collapsible .process-card__top--toggle:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.2);
+  outline-offset: 4px;
+  border-radius: 12px;
 }
 
 .process-card__icon {
@@ -1282,6 +1301,20 @@ a {
   padding: 0;
   color: #6b7280;
   font-weight: 700;
+}
+
+.process-card__chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 2px;
+  color: #6b7280;
+}
+
+.process-card__body {
+  display: grid;
+  gap: 8px;
 }
 
 .markdown-content--process-body,
