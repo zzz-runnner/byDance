@@ -31,6 +31,31 @@ async function applyBuiltInAgentRuntimeDefaults(store: StateStore, seed: AppStat
 }
 
 /**
+ * Backfills missing built-in routing metadata after schema upgrades.
+ * Input: state store and seed state. Output: promise resolved after defaults are applied.
+ */
+async function applyBuiltInAgentRoutingProfiles(store: StateStore, seed: AppState): Promise<void> {
+  const defaults = new Map(
+    seed.agents
+      .filter(agent => agent.routingProfile)
+      .map(agent => [agent.id, agent.routingProfile]),
+  )
+  await store.update(state => {
+    let changed = false
+    for (const agent of state.agents) {
+      const defaultProfile = defaults.get(agent.id)
+      if (agent.source !== 'built-in' || !defaultProfile || agent.routingProfile) {
+        continue
+      }
+      agent.routingProfile = defaultProfile
+      agent.updatedAt = isoNow()
+      changed = true
+    }
+    return changed
+  })
+}
+
+/**
  * Creates the configured application state store.
  * Input: validated server environment. Output: ready state store.
  */
@@ -46,6 +71,7 @@ export async function createStateStore(env: ServerEnv): Promise<StateStore> {
     store = new MemoryStateStore(seed)
   }
   await applyBuiltInAgentRuntimeDefaults(store, seed)
+  await applyBuiltInAgentRoutingProfiles(store, seed)
   await recoverStaleAgentRuns(store)
   return store
 }

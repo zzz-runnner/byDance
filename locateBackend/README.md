@@ -24,6 +24,8 @@ The local adapter now supports:
 - Proxying preview assets
 - Proxying workspace zip downloads
 
+The current local adapter intentionally does not rewrite speaker identity. It forwards upstream SSE events and leaves the final visible speaker decision to `agentHub`, so the frontend can reflect `speakerAgentId` from the runtime chain directly.
+
 The current local implementation intentionally does not support:
 
 - `build-preview` product flow

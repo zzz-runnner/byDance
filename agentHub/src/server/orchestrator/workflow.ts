@@ -31,6 +31,7 @@ import {
   sliceChangedFiles,
 } from './artifacts'
 import { decideRoutingWithPlanner, type PlannedRoutingDecision } from './planner'
+import { selectDynamicVisibleSpeaker } from './dynamic-speaker-selection'
 import { synthesizeLocally, synthesizeWithMainBrain, type PlannedSynthesis } from './synthesis'
 import { runAutomaticRepairIfNeeded, type TaskBriefRunResult } from './repair'
 import {
@@ -1814,6 +1815,53 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       workspace,
       conversation,
       groupDirectedAgentId,
+      input.content,
+    )
+  }
+
+  const dynamicVisibleSpeaker = selectDynamicVisibleSpeaker({
+    content: input.content,
+    conversation,
+    agents: state.agents,
+    taskStage: mainRoute.route.taskStage,
+  })
+  if (
+    dynamicVisibleSpeaker &&
+    !input.agentId &&
+    !routeAllowsExecution(mainRoute.route)
+  ) {
+    logDiagnostic(workflowServices, {
+      level: 'info',
+      category: 'routing',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      message: 'Selected one visible child agent for a group-chat turn.',
+      data: dynamicVisibleSpeaker,
+    })
+    emitWorkflowEvent(workflowServices, {
+      type: 'routing_finished',
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      source: 'explicit_rule',
+      provider: mainRoute.provider,
+      model: mainRoute.model,
+      error: mainRoute.error,
+      taskStage: mainRoute.route.taskStage,
+      executionReadiness: mainRoute.route.executionReadiness,
+      needsUserConfirmation: mainRoute.route.needsUserConfirmation,
+      speakerAgentId: dynamicVisibleSpeaker.agentId,
+      finalizationMode: 'speaker_direct',
+      mode: 'single_agent',
+      brainKind: 'dispatch_agents',
+      execution: 'serial',
+      targetAgents: [dynamicVisibleSpeaker.agentId],
+    })
+    return await runDirectedAgentConversationTurn(
+      workflowServices,
+      state,
+      workspace,
+      conversation,
+      dynamicVisibleSpeaker.agentId,
       input.content,
     )
   }

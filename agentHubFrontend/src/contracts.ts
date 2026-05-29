@@ -24,6 +24,8 @@ export type DeliveryIssueSeverity = 'info' | 'warning' | 'blocking'
 export type ReviewVerdict = 'pass' | 'partial' | 'fail' | 'unknown'
 export type MainBrainSynthesisKind = 'final_answer' | 'continue_dispatch' | 'ask_clarification' | 'report_failure'
 export type MainBrainVerdict = 'success' | 'partial' | 'failed'
+export type MainBrainTurnKind = 'direct_answer' | 'dispatch_agents' | 'ask_clarification'
+export type TurnFinalizationMode = 'speaker_direct' | 'main_synthesis' | 'local_summary' | 'none'
 
 export type ChangedFile = {
   path: string
@@ -100,6 +102,18 @@ export type RuntimePolicy = {
   maxRunSeconds: number
 }
 
+export type AgentSpeakerMode = 'direct_speaker' | 'worker_only' | 'either'
+
+export type AgentRoutingProfile = {
+  routingSummary: string
+  responsibilities: string[]
+  goodAt: string[]
+  notFor: string[]
+  preferredStages: WorkflowTaskStage[]
+  exampleRequests: string[]
+  speakerMode: AgentSpeakerMode
+}
+
 export type AgentDefinition = {
   id: string
   name: string
@@ -125,6 +139,7 @@ export type AgentDefinition = {
   outputSchema: string
   isolation: Isolation
   skills: string[]
+  routingProfile?: AgentRoutingProfile
   source: 'built-in' | 'workspace' | 'custom'
   createdAt: string
   updatedAt: string
@@ -237,7 +252,22 @@ export type WorkflowEvent =
   | (WorkflowEventBase & { type: 'turn_started'; content: string; activeAgentId?: string })
   | (WorkflowEventBase & { type: 'workflow_received'; content: string })
   | (WorkflowEventBase & { type: 'routing_started'; content: string })
-  | (WorkflowEventBase & { type: 'routing_finished'; source: string; mode: string; execution: string; targetAgents: string[] })
+  | (WorkflowEventBase & {
+      type: 'routing_finished'
+      source: string
+      provider?: string
+      model?: string
+      error?: string
+      speakerAgentId?: string
+      finalizationMode?: TurnFinalizationMode
+      taskStage?: WorkflowTaskStage
+      executionReadiness?: ExecutionReadiness
+      needsUserConfirmation?: boolean
+      mode: string
+      brainKind?: MainBrainTurnKind
+      execution: string
+      targetAgents: string[]
+    })
   | (WorkflowEventBase & {
       type: 'task_stage_updated'
       taskStage: WorkflowTaskStage

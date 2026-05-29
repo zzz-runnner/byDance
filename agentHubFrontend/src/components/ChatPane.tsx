@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { ArrowUp, Braces, Copy, ExternalLink, FileArchive, Globe2, MessageSquareReply, RefreshCcw } from 'lucide-react'
+import { ArrowDown, ArrowUp, Braces, Copy, ExternalLink, FileArchive, Globe2, MessageSquareReply, RefreshCcw } from 'lucide-react'
 import { buildAgentMap, formatTime, workspaceRoomKindLabel, type WorkspaceRoom } from '../appModel'
 import type { AgentDefinition, AppState, Artifact, Message } from '../types'
 import { AgentAvatar } from './AgentAvatar'
@@ -14,6 +14,7 @@ type ChatPaneProps = {
   messages: Message[]
   streamingMessages: Message[]
   sending: boolean
+  activeConversationId: string
   onRegenerate: () => void
   onReplyToMessage: (content: string) => void
   onCopyMessage: (content: string) => void
@@ -92,6 +93,7 @@ export function ChatPane({
   messages,
   streamingMessages,
   sending,
+  activeConversationId,
   onRegenerate,
   onReplyToMessage,
   onCopyMessage,
@@ -101,6 +103,48 @@ export function ChatPane({
   const activeAgent = room?.targetAgentId ? agentMap.get(room.targetAgentId) : undefined
   const mentionOptions = groupMentionOptions(room, agentMap)
   const allMessages = [...messages, ...streamingMessages]
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [isNearBottom, setIsNearBottom] = useState(true)
+
+  /**
+   * Scrolls the chat list to the latest message.
+   * Input: desired browser scroll behavior. Output: none.
+   */
+  function scrollToBottom(behavior: ScrollBehavior = 'auto') {
+    const container = scrollRef.current
+    if (!container) {
+      return
+    }
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior,
+    })
+  }
+
+  useEffect(() => {
+    scrollToBottom('auto')
+    setIsNearBottom(true)
+  }, [activeConversationId])
+
+  useEffect(() => {
+    if (!allMessages.length || !isNearBottom) {
+      return
+    }
+    scrollToBottom(messages.length > 0 ? 'smooth' : 'auto')
+  }, [allMessages.length, isNearBottom, messages.length])
+
+  /**
+   * Tracks whether the user is still close enough to the latest message.
+   * Input: scroll event from the chat container. Output: updates follow-scroll state.
+   */
+  function handleScroll() {
+    const container = scrollRef.current
+    if (!container) {
+      return
+    }
+    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+    setIsNearBottom(distanceToBottom <= 96)
+  }
 
   return (
     <GlassPanel className="chat-pane">
@@ -130,7 +174,7 @@ export function ChatPane({
         </div>
       </header>
 
-      <div className="chat-scroll">
+      <div className="chat-scroll" ref={scrollRef} onScroll={handleScroll}>
         {allMessages.length > 0 ? (
           allMessages.map(message => (
             <MessageBubble
@@ -145,6 +189,12 @@ export function ChatPane({
           <EmptyChatState room={room} />
         )}
       </div>
+      {!isNearBottom && allMessages.length > 0 ? (
+        <button className="chat-jump-button" type="button" onClick={() => scrollToBottom('smooth')}>
+          <ArrowDown size={14} />
+          回到底部
+        </button>
+      ) : null}
 
       <ChatComposer
         room={room}
@@ -170,6 +220,7 @@ type MessageBubbleProps = {
  */
 function MessageBubble({ message, senderName, onReply, onCopy }: MessageBubbleProps) {
   const isUser = message.senderType === 'user'
+  const isStreamingPlaceholder = !isUser && /\.\.\.|…/.test(message.content)
   const senderLabel = isUser ? '你' : senderName ?? message.senderId
 
   return (
@@ -182,6 +233,13 @@ function MessageBubble({ message, senderName, onReply, onCopy }: MessageBubblePr
         </div>
         <div className={`message-bubble ${isUser ? 'message-bubble--user' : 'message-bubble--agent'}`}>
           <p>{message.content || '正在生成回复...'}</p>
+          {isStreamingPlaceholder ? (
+            <div className="message-typing-dots" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+          ) : null}
           {message.artifacts.length > 0 ? (
             <div className="artifact-grid">
               {message.artifacts.map(artifact => (

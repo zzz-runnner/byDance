@@ -149,6 +149,30 @@ export function createSeedState(): AppState {
         outputSchema: 'Return a routing decision, child-agent summaries, and a final user-facing answer.',
         isolation: 'shared',
         skills: ['routing', 'context-building', 'summarization'],
+        routingProfile: {
+          routingSummary: 'Coordinate cross-agent work, answer system-level questions, and summarize multi-agent results.',
+          responsibilities: [
+            'Coordinate multiple child agents in one turn',
+            'Answer system status and workspace state questions',
+            'Summarize results when more than one agent participates',
+          ],
+          goodAt: [
+            'Cross-role coordination',
+            'System and workflow status',
+            'Multi-agent synthesis',
+          ],
+          notFor: [
+            'Owning deep specialist answers when one child agent can reply directly',
+            'Pretending to be a domain specialist for a single-domain business question',
+          ],
+          preferredStages: ['chat', 'planning', 'awaiting_confirmation', 'execution', 'review'],
+          exampleRequests: [
+            '现在服务正常吗',
+            '接下来应该先谁做什么',
+            '把几个子 agent 的结果汇总一下',
+          ],
+          speakerMode: 'either',
+        },
         source: 'built-in',
       }),
       createAgent({
@@ -182,6 +206,32 @@ export function createSeedState(): AppState {
         outputSchema: 'Return task scope, acceptance criteria, and known risks.',
         isolation: 'shared',
         skills: ['requirements', 'acceptance-criteria'],
+        routingProfile: {
+          routingSummary: 'Handle requirement clarification, product planning, scope framing, and acceptance design.',
+          responsibilities: [
+            'Clarify user goals and scope',
+            'Translate rough requests into structured task packages',
+            'Define acceptance criteria and product risks',
+          ],
+          goodAt: [
+            'Requirement intake',
+            'Feature planning',
+            'Page and module scoping',
+            'PRD-style responses',
+          ],
+          notFor: [
+            'Concrete code implementation',
+            'Technical bug fixing',
+            'Final QA verdicts',
+          ],
+          preferredStages: ['requirements_intake', 'planning', 'awaiting_confirmation'],
+          exampleRequests: [
+            '给我一个完整方案',
+            '帮我梳理下页面模块',
+            '先和我对接需求',
+          ],
+          speakerMode: 'direct_speaker',
+        },
         source: 'built-in',
       }),
       createAgent({
@@ -215,6 +265,31 @@ export function createSeedState(): AppState {
         outputSchema: 'Return implementation summary, changed files, tests, and preview artifacts.',
         isolation: 'worktree',
         skills: ['typescript', 'runtime', 'diff'],
+        routingProfile: {
+          routingSummary: 'Handle implementation, technical tradeoffs, bug fixing, and execution-focused engineering work.',
+          responsibilities: [
+            'Implement scoped code changes',
+            'Explain technical solutions and tradeoffs',
+            'Fix bugs and validate execution details',
+          ],
+          goodAt: [
+            'Frontend and backend implementation',
+            'Code-level debugging',
+            'Tech stack decisions',
+            'Preview and build issues',
+          ],
+          notFor: [
+            'Owning requirement intake from scratch',
+            'Issuing final QA verdicts',
+          ],
+          preferredStages: ['execution', 'planning'],
+          exampleRequests: [
+            '这个页面怎么实现',
+            '帮我修一下这个 bug',
+            '这个报错为什么会出现',
+          ],
+          speakerMode: 'direct_speaker',
+        },
         source: 'built-in',
       }),
       createAgent({
@@ -248,6 +323,31 @@ export function createSeedState(): AppState {
         outputSchema: 'Return findings, severity, suggested fixes, and PASS/PARTIAL/FAIL.',
         isolation: 'shared',
         skills: ['review', 'testing'],
+        routingProfile: {
+          routingSummary: 'Handle review, validation, testing, risk detection, and final verdict-style responses.',
+          responsibilities: [
+            'Review outcomes against stated requirements',
+            'Find risks and missing checks',
+            'Return validation verdicts with findings',
+          ],
+          goodAt: [
+            'Acceptance review',
+            'Risk spotting',
+            'Testing conclusions',
+            'PASS/PARTIAL/FAIL judgments',
+          ],
+          notFor: [
+            'Owning implementation work',
+            'Leading requirement discovery from scratch',
+          ],
+          preferredStages: ['review', 'execution'],
+          exampleRequests: [
+            '帮我验收一下',
+            '这版有什么风险',
+            '测试结果怎么样',
+          ],
+          speakerMode: 'direct_speaker',
+        },
         source: 'built-in',
       }),
     ],

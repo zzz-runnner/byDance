@@ -150,6 +150,9 @@ function toAgent(row: Record<string, unknown>): AgentDefinition {
     outputSchema: String(row.output_schema),
     isolation: row.isolation as AgentDefinition['isolation'],
     skills: asStringArray(row.skills),
+    routingProfile: row.routing_profile === null || row.routing_profile === undefined
+      ? undefined
+      : asObject<NonNullable<AgentDefinition['routingProfile']>>(row.routing_profile),
     source: row.source as AgentDefinition['source'],
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -393,6 +396,7 @@ async function createSchema(pool: Pool): Promise<void> {
       output_schema text not null,
       isolation text not null,
       skills jsonb not null,
+      routing_profile jsonb,
       source text not null,
       created_at text not null,
       updated_at text not null
@@ -520,6 +524,7 @@ async function createSchema(pool: Pool): Promise<void> {
 
   await pool.query(`alter table ${TABLES.agentRuns} add column if not exists session_id text`)
   await pool.query(`alter table ${TABLES.agentRuns} add column if not exists handoff_id text`)
+  await pool.query(`alter table ${TABLES.agents} add column if not exists routing_profile jsonb`)
 }
 
 /**
@@ -665,10 +670,10 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
           insert into ${TABLES.agents} (
             id, name, role, description, when_to_use, system_prompt, model_provider, model,
             context_policy, tools, permissions, disallowed_tools, permission_mode, runtime_policy,
-            output_schema, isolation, skills, source, created_at, updated_at
+            output_schema, isolation, skills, routing_profile, source, created_at, updated_at
           ) values (
             $1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14::jsonb,
-            $15,$16,$17::jsonb,$18,$19,$20
+            $15,$16,$17::jsonb,$18::jsonb,$19,$20,$21
           )
         `,
         [
@@ -689,6 +694,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
           agent.outputSchema,
           agent.isolation,
           toJsonParam(agent.skills),
+          toJsonParam(agent.routingProfile),
           agent.source,
           agent.createdAt,
           agent.updatedAt,

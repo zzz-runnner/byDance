@@ -25,6 +25,7 @@ import { createDemoState } from './fixtures/demoState'
 import type { AppState, ConnectionStatus, LiveWorkflowEvent, Message, WorkflowEvent, Workspace } from './types'
 
 type DataMode = 'auto' | 'live' | 'mock'
+const ACTIVE_WORKSPACE_STORAGE_KEY = 'agenthub.activeWorkspaceId'
 
 const INITIAL_DEMO_STATE = createDemoState()
 
@@ -141,7 +142,12 @@ export function App() {
   const [state, setState] = useState<AppState>(INITIAL_DEMO_STATE)
   const [dataMode, setDataMode] = useState<DataMode>('auto')
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting')
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState(() => firstWorkspaceId(INITIAL_DEMO_STATE))
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(() => {
+    if (typeof window === 'undefined') {
+      return firstWorkspaceId(INITIAL_DEMO_STATE)
+    }
+    return window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY) ?? firstWorkspaceId(INITIAL_DEMO_STATE)
+  })
   const [liveWorkflowEvents, setLiveWorkflowEvents] = useState<LiveWorkflowEvent[]>([])
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([])
   const [streamingMessages, setStreamingMessages] = useState<Record<string, Message>>({})
@@ -239,6 +245,13 @@ export function App() {
     }
   }, [activeRoom, filteredRooms, rooms])
 
+  useEffect(() => {
+    if (!activeWorkspaceId || typeof window === 'undefined') {
+      return
+    }
+    window.localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, activeWorkspaceId)
+  }, [activeWorkspaceId])
+
   /**
    * Switches the active workspace room.
    * Input: workspace id.
@@ -310,17 +323,46 @@ export function App() {
     const receivedAt = new Date().toISOString()
     setLiveWorkflowEvents(previous => [...previous, { ...event, receivedAt }])
 
-    if (event.type === 'assistant_message_started') {
+    if (event.type === 'workflow_received') {
       setStreamingMessages(previous => ({
         ...previous,
-        [event.messageId]: createTemporaryMessage(
+        [`routing-${event.conversationId}`]: createTemporaryMessage(
+          event.workspaceId,
+          event.conversationId,
+          'agent',
+          'orchestrator',
+          '主脑正在判断由谁回复...',
+        ),
+      }))
+    }
+
+    if (event.type === 'routing_finished') {
+      const speakerId = event.speakerAgentId ?? (event.targetAgents.length === 1 ? event.targetAgents[0] : 'orchestrator')
+      setStreamingMessages(previous => ({
+        ...previous,
+        [`routing-${event.conversationId}`]: createTemporaryMessage(
+          event.workspaceId,
+          event.conversationId,
+          'agent',
+          speakerId,
+          speakerId === 'orchestrator' ? '主脑正在整理回复...' : '正在整理回复...',
+        ),
+      }))
+    }
+
+    if (event.type === 'assistant_message_started') {
+      setStreamingMessages(previous => {
+        const next = { ...previous }
+        delete next[`routing-${event.conversationId}`]
+        next[event.messageId] = createTemporaryMessage(
           event.workspaceId,
           event.conversationId,
           'agent',
           event.senderId,
           '',
-        ),
-      }))
+        )
+        return next
+      })
     }
 
     if (event.type === 'assistant_delta') {
@@ -336,6 +378,22 @@ export function App() {
             content: `${current.content}${event.delta}`,
           },
         }
+      })
+    }
+
+    if (event.type === 'assistant_message_finished' || event.type === 'assistant_message_error') {
+      setStreamingMessages(previous => {
+        const next = { ...previous }
+        delete next[event.messageId]
+        return next
+      })
+    }
+
+    if (event.type === 'workflow_finished') {
+      setStreamingMessages(previous => {
+        const next = { ...previous }
+        delete next[`routing-${event.conversationId}`]
+        return next
       })
     }
   }
@@ -562,6 +620,7 @@ export function App() {
             messages={currentMessages}
             streamingMessages={currentStreamingMessages}
             sending={sending}
+            activeConversationId={activeConversationId}
             onRegenerate={() => void handleRegenerate()}
             onReplyToMessage={handleReplyToMessage}
             onCopyMessage={content => void handleCopyMessage(content)}

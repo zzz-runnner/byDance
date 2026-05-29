@@ -32,6 +32,17 @@ It supports both:
 - Group chat composer supports a WeChat-style `@` picker for child agents, while direct rooms keep a fixed target and do not show the picker
 - `locateBackend` now forwards one explicit group-chat `@agent` mention as a real upstream target agent instead of leaving that turn to Orchestrator inference
 
+## 2026-05-29 Local Status
+
+The current local path is focused on one workspace equals one chat window.
+
+- Group chat now supports two child-agent reply paths in local live mode:
+- One explicit `@agent` mention is forwarded by `locateBackend` as a real upstream target agent.
+- One non-mention specialist question can be routed by `agentHub` to a single visible child agent based on runtime agent metadata, task stage, and message content.
+- The visible speaker identity now flows through `routing_finished.speakerAgentId`, so the frontend can show the actual replying agent instead of always showing Orchestrator.
+- Frontend chat now restores the last active workspace after refresh, auto-scrolls to the bottom on room switch, keeps follow-scroll near the bottom during streaming, shows a jump-to-bottom button when the user scrolls up, and renders temporary waiting bubbles during routing and reply generation.
+- `agentHubBackend/` is still outside the local live path and remains untouched.
+
 ## Dependency Management
 
 Each workspace owns its own dependency manifest and lockfile. The repository root is not an npm workspace and does not contain a shared `package.json`.

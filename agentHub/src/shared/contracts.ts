@@ -242,6 +242,20 @@ export const RuntimePolicySchema = z.object({
 })
 export type RuntimePolicy = z.infer<typeof RuntimePolicySchema>
 
+export const AgentSpeakerModeSchema = z.enum(['direct_speaker', 'worker_only', 'either'])
+export type AgentSpeakerMode = z.infer<typeof AgentSpeakerModeSchema>
+
+export const AgentRoutingProfileSchema = z.object({
+  routingSummary: z.string(),
+  responsibilities: z.array(z.string()),
+  goodAt: z.array(z.string()),
+  notFor: z.array(z.string()),
+  preferredStages: z.array(WorkflowTaskStageSchema),
+  exampleRequests: z.array(z.string()),
+  speakerMode: AgentSpeakerModeSchema,
+})
+export type AgentRoutingProfile = z.infer<typeof AgentRoutingProfileSchema>
+
 export const AgentDefinitionSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -267,6 +281,7 @@ export const AgentDefinitionSchema = z.object({
   outputSchema: z.string(),
   isolation: IsolationSchema,
   skills: z.array(z.string()),
+  routingProfile: AgentRoutingProfileSchema.optional(),
   source: z.enum(['built-in', 'workspace', 'custom']),
   createdAt: z.string(),
   updatedAt: z.string(),

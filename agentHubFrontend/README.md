@@ -30,6 +30,9 @@ If the business backend API is unavailable, the frontend falls back to local dem
 - Direct workspaces keep a fixed target agent and do not open the `@` picker.
 - Composer shortcut chips still exist as a fallback, and all insertions now respect the current caret position.
 - In local live mode, one explicit group-chat `@agent` mention now routes to that child agent for the visible reply instead of always falling back to Orchestrator.
+- The active workspace id is restored from `localStorage` after page refresh.
+- Chat switches now open at the latest message, keep follow-scroll during nearby streaming, and show a jump-to-bottom button when the user scrolls away from the bottom.
+- The chat list now renders temporary routing and reply placeholders so the user sees waiting bubbles before the final streamed message arrives.
 
 ## Boundary
 

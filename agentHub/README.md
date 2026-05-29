@@ -1,5 +1,13 @@
 # AgentHub Local
 
+## 2026-05-29 Local Routing and Chat UX
+
+- Group chat can now choose one visible child agent without an explicit `@mention` when the current turn clearly belongs to a single specialist role.
+- This local routing is metadata-driven through `routingProfile`, so built-in agents and future custom agents can participate without a hardcoded role table.
+- Requirement questions prefer `product-manager`, implementation questions prefer `engineer`, and review or testing questions prefer `reviewer` when the turn does not need multi-agent execution.
+- `routing_finished` now carries `speakerAgentId` and `finalizationMode`, and the final persisted conversation message keeps the real child-agent `senderId` when one child agent is the visible speaker.
+- Review-stage specialist questions are also allowed to use the same single-speaker routing path instead of forcing an Orchestrator reply.
+
 ## 2026-05-25 业务后端存储方案决策
 
 - `E:\byDance\docs\开发具体方案及技术栈.md` 已调整为本地磁盘存储方案：源码 zip、构建产物和部署产物保存在业务后端服务器本地，不使用阿里云 OSS 或其他对象存储。
