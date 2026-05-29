@@ -47,7 +47,7 @@ const GROUP_WORKSPACE_TYPES: Array<{
 ]
 
 /**
- * Renders the create-workspace dialog used by both mock mode and backend mode.
+ * Renders the create-workspace dialog for the live backend flow.
  * Input: dialog state, available agents, submit state, and callbacks.
  * Output: a modal form for creating one workspace.
  */

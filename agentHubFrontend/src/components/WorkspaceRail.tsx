@@ -12,6 +12,7 @@ type WorkspaceRailProps = {
   events: LiveWorkflowEvent[]
   query: string
   loading: boolean
+  createDisabled: boolean
   onSelectWorkspace: (workspaceId: string) => void
   onQueryChange: (value: string) => void
   onCreateWorkspace: () => void
@@ -29,10 +30,13 @@ export function WorkspaceRail({
   events,
   query,
   loading,
+  createDisabled,
   onSelectWorkspace,
   onQueryChange,
   onCreateWorkspace,
 }: WorkspaceRailProps) {
+  const isEmptyWorkspaceList = state.workspaces.length === 0 && query.trim().length === 0
+
   return (
     <GlassPanel className="workspace-rail">
       <div className="rail-heading">
@@ -40,7 +44,13 @@ export function WorkspaceRail({
           <p className="eyebrow">Workspaces</p>
           <h2>多工作区</h2>
         </div>
-        <button className="icon-button" type="button" onClick={onCreateWorkspace} title="新建工作区">
+        <button
+          className="icon-button"
+          type="button"
+          onClick={onCreateWorkspace}
+          title="新建工作区"
+          disabled={createDisabled}
+        >
           <Plus size={17} />
         </button>
       </div>
@@ -69,8 +79,14 @@ export function WorkspaceRail({
           ))
         ) : (
           <div className="workspace-empty-state">
-            <strong>{loading ? '正在刷新工作区...' : '没有匹配的工作区'}</strong>
-            <span>{loading ? '稍后会自动更新列表。' : '调整搜索关键词，或直接创建一个新工作区。'}</span>
+            <strong>{loading ? '正在加载工作区...' : isEmptyWorkspaceList ? '还没有工作区' : '没有匹配的工作区'}</strong>
+            <span>
+              {loading
+                ? '列表会在后端连接成功后自动更新。'
+                : isEmptyWorkspaceList
+                  ? '可以直接点击右上角创建一个真实工作区。'
+                  : '调整搜索关键词，或直接创建一个新工作区。'}
+            </span>
           </div>
         )}
       </div>
@@ -120,7 +136,7 @@ function WorkspaceButton({ state, room, events, active, onSelectWorkspace }: Wor
           ))}
         </span>
         <span className="workspace-meta">
-          <StatusPill status="demo" label={workspaceRoomKindLabel(room.kind)} />
+          <StatusPill status="muted" label={workspaceRoomKindLabel(room.kind)} />
           <StatusPill status={status} label={signal.runningAgents > 0 ? `${signal.runningAgents} running` : 'ready'} />
           <span>
             {signal.artifactCount} 产物 / {signal.messageCount} 消息

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { LayoutDashboard, PlugZap, RefreshCcw, ServerCrash, Wifi, WifiOff } from 'lucide-react'
+import { LayoutDashboard, LoaderCircle, PlugZap, RefreshCcw, ServerCrash, Wifi } from 'lucide-react'
 import {
   createBusinessWorkspace,
   createEmptyWorkbenchState,
@@ -21,10 +21,8 @@ import { GlassPanel } from './components/GlassPanel'
 import { OrbMark } from './components/OrbMark'
 import { StatusPill } from './components/StatusPill'
 import { WorkspaceRail } from './components/WorkspaceRail'
-import { createDemoState } from './fixtures/demoState'
-import type { AppState, ConnectionStatus, LiveWorkflowEvent, Message, WorkflowEvent, Workspace } from './types'
+import type { AppState, ConnectionStatus, LiveWorkflowEvent, Message, WorkflowEvent } from './types'
 
-type DataMode = 'auto' | 'live' | 'mock'
 const ACTIVE_WORKSPACE_STORAGE_KEY = 'agenthub.activeWorkspaceId'
 
 /**
@@ -52,77 +50,6 @@ function createTemporaryMessage(
 }
 
 /**
- * Creates a local demo workspace when the backend is not available.
- * Input: workspace name and goal.
- * Output: a Workspace object for the in-memory demo state.
- */
-function createLocalWorkspace(name: string, goal: string, workspaceType: Workspace['workspaceType']): Workspace {
-  const now = new Date().toISOString()
-  const id = `ws-local-${Date.now()}`
-
-  return {
-    id,
-    projectId: id,
-    name,
-    goal,
-    workspaceType,
-    rootPath: `data/workspaces/${id}/repo`,
-    runtimeType: 'local',
-    runtimeStatus: 'ready',
-    projectBrief: goal,
-    pinnedMessageIds: [],
-    createdAt: now,
-    updatedAt: now,
-  }
-}
-
-/**
- * Creates simulated workflow events for the offline demo path.
- * Input: workspace id and conversation id.
- * Output: live workflow events that mirror the backend workflow event shape.
- */
-function createDemoWorkflowEvents(workspaceId: string, conversationId: string): LiveWorkflowEvent[] {
-  const receivedAt = new Date().toISOString()
-  const events: WorkflowEvent[] = [
-    {
-      type: 'task_stage_updated',
-      workspaceId,
-      conversationId,
-      taskStage: 'execution',
-      executionReadiness: 'execution_in_progress',
-      needsUserConfirmation: false,
-      reason: 'Mock 模式下模拟 Orchestrator 进入执行阶段。',
-    },
-    {
-      type: 'agent_task_dispatched',
-      workspaceId,
-      conversationId,
-      agentId: 'engineer',
-      agentName: '工程师 Agent',
-      handoffId: `handoff-web-${Date.now()}`,
-      sessionId: `session-web-${Date.now()}`,
-      source: 'main',
-      task: '根据当前聊天上下文生成可预览页面，并输出实现摘要。',
-      expectedOutput: '页面代码、预览卡、测试结论',
-      requiredContext: ['比赛要求', '当前工作区目标', 'UI 玻璃风约束'],
-    },
-    {
-      type: 'assistant_message_finished',
-      workspaceId,
-      conversationId,
-      scope: 'main_brain',
-      messageId: `message-web-${Date.now()}`,
-      contentLength: 120,
-    },
-  ]
-
-  return events.map(event => ({
-    ...event,
-    receivedAt,
-  }))
-}
-
-/**
  * Returns the first usable workspace room id from state.
  * Input: AppState.
  * Output: workspace id or an empty string.
@@ -145,14 +72,71 @@ function resolveWorkspaceId(state: AppState, preferredWorkspaceId: string): stri
 }
 
 /**
+ * Normalizes unknown runtime errors into one readable message.
+ * Input: thrown error value.
+ * Output: frontend-safe error message text.
+ */
+function errorMessageOf(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unknown backend error.'
+}
+
+type BlockingWorkbenchStateProps = {
+  kind: 'loading' | 'error'
+  message: string
+  onRetry?: () => void
+}
+
+/**
+ * Renders the blocking first-load state before any real workspace exists.
+ * Input: state kind, message, and optional retry callback.
+ * Output: a full-width loading or error panel.
+ */
+function BlockingWorkbenchState({ kind, message, onRetry }: BlockingWorkbenchStateProps) {
+  return (
+    <GlassPanel className="state-screen">
+      {kind === 'loading' ? (
+        <>
+          <OrbMark size="lg" pulse />
+          <div className="state-screen__copy">
+            <p className="eyebrow">Connecting</p>
+            <h2>正在连接本地后端</h2>
+            <p>{message}</p>
+          </div>
+          <div className="state-screen__status">
+            <LoaderCircle className="icon-spin" size={18} />
+            正在加载工作区和会话数据
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="state-screen__badge state-screen__badge--error">
+            <ServerCrash size={28} />
+          </div>
+          <div className="state-screen__copy">
+            <p className="eyebrow">Backend Error</p>
+            <h2>无法连接本地后端</h2>
+            <p>{message}</p>
+          </div>
+          <div className="state-screen__actions">
+            <button className="primary-button" type="button" onClick={onRetry}>
+              重试连接
+            </button>
+          </div>
+        </>
+      )}
+    </GlassPanel>
+  )
+}
+
+/**
  * Renders the AgentHub web workbench.
  * Input: none.
  * Output: the complete business-backed multi-workspace AI conversation UI.
  */
 export function App() {
   const [state, setState] = useState<AppState>(() => createEmptyWorkbenchState())
-  const [dataMode, setDataMode] = useState<DataMode>('auto')
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting')
+  const [connectionErrorMessage, setConnectionErrorMessage] = useState('')
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(() => {
     if (typeof window === 'undefined') {
       return ''
@@ -197,48 +181,45 @@ export function App() {
   const currentStreamingMessages = Object.values(streamingMessages).filter(
     message => message.conversationId === activeConversationId,
   )
+  const showBlockingState = !rooms.length && (loadingState || connectionStatus === 'error')
+  const canCreateWorkspace = connectionStatus === 'live' && !loadingState && !creatingWorkspace
+  const composerDisabledReason =
+    connectionStatus === 'error'
+      ? '后端连接失败，请先点击刷新重试。'
+      : loadingState
+        ? '正在连接后端，请稍候。'
+        : ''
 
   /**
-   * Loads real business backend state or falls back to the demo state.
-   * Input: selected data mode.
+   * Loads the live workbench state from the business backend.
+   * Input: none.
    * Output: updates connection state, snapshot, and workspace selection.
    */
-  async function loadWorkbenchState(nextMode: DataMode) {
+  async function loadWorkbenchState() {
     setLoadingState(true)
     setCreateWorkspaceError('')
+    setLiveWorkflowEvents([])
+    setStreamingMessages({})
     const preferredWorkspaceId = activeWorkspaceId
 
     try {
-      if (nextMode === 'mock') {
-        const demo = createDemoState()
-        setState(demo)
-        setConnectionStatus('demo')
-        setActiveWorkspaceId(resolveWorkspaceId(demo, preferredWorkspaceId))
-        return
-      }
-
       const nextState = await fetchBusinessWorkbenchState()
       setState(nextState)
       setConnectionStatus('live')
+      setConnectionErrorMessage('')
+      setOptimisticMessages([])
       setActiveWorkspaceId(resolveWorkspaceId(nextState, preferredWorkspaceId))
-    } catch {
-      if (nextMode === 'live') {
-        setConnectionStatus('error')
-        return
-      }
-
-      const demo = createDemoState()
-      setState(demo)
-      setConnectionStatus('demo')
-      setActiveWorkspaceId(resolveWorkspaceId(demo, preferredWorkspaceId))
+    } catch (error) {
+      setConnectionStatus('error')
+      setConnectionErrorMessage(errorMessageOf(error))
     } finally {
       setLoadingState(false)
     }
   }
 
   useEffect(() => {
-    void loadWorkbenchState(dataMode)
-  }, [dataMode])
+    void loadWorkbenchState()
+  }, [])
 
   useEffect(() => {
     if (activeRoom) {
@@ -268,7 +249,7 @@ export function App() {
   }
 
   /**
-   * Creates a workspace through the backend or local demo state.
+   * Creates a workspace through the business backend.
    * Input: workspace form payload.
    * Output: updates the workbench state and selects the new workspace.
    */
@@ -280,41 +261,20 @@ export function App() {
     const targetAgentId = input.targetAgentId
 
     try {
-      if (connectionStatus === 'live' && dataMode !== 'mock') {
-        const nextState = await createBusinessWorkspace(
-          input.name,
-          input.goal,
-          createDirectRoom ? 'chat' : input.workspaceType,
-          targetAgentId,
-        )
-        setState(nextState)
-        setActiveWorkspaceId(firstWorkspaceId(nextState))
-        setCreateDialogOpen(false)
-        return
-      }
-
-      const workspace = createLocalWorkspace(input.name, input.goal, createDirectRoom ? 'chat' : input.workspaceType)
-      const conversation = {
-        id: `${workspace.id}-${createDirectRoom ? targetAgentId : 'group'}`,
-        workspaceId: workspace.id,
-        type: createDirectRoom ? 'direct' : 'group',
-        title: createDirectRoom ? `${targetAgentId ?? 'engineer'} 单聊工作区` : '项目主群聊',
-        participants: createDirectRoom
-          ? ['user', targetAgentId ?? 'engineer']
-          : ['user', 'orchestrator', 'product-manager', 'engineer', 'reviewer'],
-        createdAt: workspace.createdAt,
-        updatedAt: workspace.updatedAt,
-      } as const
-
-      setState(previous => ({
-        ...previous,
-        workspaces: [workspace, ...previous.workspaces],
-        conversations: [conversation, ...previous.conversations],
-      }))
-      setActiveWorkspaceId(workspace.id)
+      const nextState = await createBusinessWorkspace(
+        input.name,
+        input.goal,
+        createDirectRoom ? 'chat' : input.workspaceType,
+        targetAgentId,
+      )
+      setState(nextState)
+      setConnectionStatus('live')
+      setConnectionErrorMessage('')
+      setActiveWorkspaceId(firstWorkspaceId(nextState))
       setCreateDialogOpen(false)
     } catch (error) {
-      setCreateWorkspaceError(error instanceof Error ? error.message : '创建工作区失败。')
+      const message = errorMessageOf(error)
+      setCreateWorkspaceError(message)
     } finally {
       setCreatingWorkspace(false)
     }
@@ -407,10 +367,10 @@ export function App() {
   /**
    * Sends a chat message to the active direct or group workspace room through the business backend.
    * Input: message content.
-   * Output: streams backend events or simulates a demo response.
+   * Output: streams backend events and refreshes the current workbench snapshot.
    */
   async function handleSend(content: string) {
-    if (!activeRoom) {
+    if (!activeRoom || connectionStatus !== 'live') {
       return
     }
 
@@ -422,22 +382,6 @@ export function App() {
     setSending(true)
 
     try {
-      if (connectionStatus !== 'live' || dataMode === 'mock') {
-        const demoEvents = createDemoWorkflowEvents(activeWorkspace.id, activeConversation.id)
-        const reply = createTemporaryMessage(
-          activeWorkspace.id,
-          activeConversation.id,
-          'agent',
-          activeRoom.kind === 'direct' ? agentId ?? 'orchestrator' : 'orchestrator',
-          activeRoom.kind === 'direct'
-            ? '收到，这是单聊任务。我会基于当前 Agent 的长期上下文给出可执行建议。'
-            : '收到，Orchestrator 已拆解任务：先澄清范围，再派发工程师实现，最后让 Reviewer 验收。',
-        )
-        setLiveWorkflowEvents(previous => [...previous, ...demoEvents])
-        setOptimisticMessages(previous => [...previous, reply])
-        return
-      }
-
       await streamBusinessProjectMessage(
         {
           projectId: activeWorkspace.projectId ?? activeWorkspace.id,
@@ -451,11 +395,15 @@ export function App() {
 
       const nextState = await fetchBusinessWorkbenchState()
       setState(nextState)
+      setConnectionStatus('live')
+      setConnectionErrorMessage('')
       setOptimisticMessages([])
       setStreamingMessages({})
     } catch (error) {
+      const message = errorMessageOf(error)
       setConnectionStatus('error')
-      const message = error instanceof Error ? error.message : '未知错误'
+      setConnectionErrorMessage(message)
+      setStreamingMessages({})
       const errorMessage = createTemporaryMessage(
         activeWorkspace.id,
         activeConversation.id,
@@ -470,28 +418,12 @@ export function App() {
   }
 
   /**
-   * Reloads the current workbench state using the selected mode.
+   * Reloads the current live workbench state.
    * Input: none.
    * Output: refreshes state without forcing the user off the current workspace.
    */
   async function handleRefresh() {
-    await loadWorkbenchState(dataMode)
-  }
-
-  /**
-   * Updates the active data mode and clears transient chat state.
-   * Input: target data mode.
-   * Output: switches between auto, live-only, and mock-only sources.
-   */
-  function handleSwitchDataMode(nextMode: DataMode) {
-    if (nextMode === dataMode) {
-      return
-    }
-
-    setDataMode(nextMode)
-    setLiveWorkflowEvents([])
-    setOptimisticMessages([])
-    setStreamingMessages({})
+    await loadWorkbenchState()
   }
 
   /**
@@ -511,7 +443,7 @@ export function App() {
   async function handleRegenerate() {
     const lastUserMessage = [...currentMessages].reverse().find(message => message.senderType === 'user')
 
-    if (!lastUserMessage || sending) {
+    if (!lastUserMessage || sending || connectionStatus !== 'live') {
       return
     }
 
@@ -544,13 +476,12 @@ export function App() {
     handleInsertComposerText(`引用上一条消息：\n${content}\n\n`)
   }
 
-  const modeLabel = dataMode === 'mock' ? 'mock only' : dataMode === 'live' ? 'live only' : 'auto'
   const connectionPillStatus =
-    connectionStatus === 'live' ? 'success' : connectionStatus === 'connecting' ? 'running' : connectionStatus === 'error' ? 'failed' : 'demo'
+    connectionStatus === 'live' ? 'success' : loadingState || connectionStatus === 'connecting' ? 'running' : 'failed'
   const connectionPillLabel =
-    connectionStatus === 'live' ? 'backend live' : connectionStatus === 'connecting' ? 'connecting' : connectionStatus === 'error' ? 'backend error' : 'demo mode'
-  const sourceTargetLabel = dataMode === 'mock' ? '本地 Mock 数据' : dataMode === 'live' ? '业务后端 API' : '自动探测，失败回退 Mock'
-  const ConnectionIcon = connectionStatus === 'live' ? Wifi : connectionStatus === 'error' ? ServerCrash : WifiOff
+    connectionStatus === 'live' ? 'backend live' : loadingState || connectionStatus === 'connecting' ? 'connecting' : 'backend error'
+  const connectionTargetLabel = '业务后端 API · 127.0.0.1:8790'
+  const ConnectionIcon = connectionStatus === 'error' ? ServerCrash : Wifi
 
   return (
     <main className="app-shell" style={{ backgroundImage: `url(${backgroundImage})` }}>
@@ -566,32 +497,9 @@ export function App() {
             </div>
           </div>
           <div className="topbar-actions">
-            <GlassPanel compact className="mode-toggle">
-              <button
-                className={`mode-toggle__button ${dataMode === 'auto' ? 'is-active' : ''}`}
-                type="button"
-                onClick={() => handleSwitchDataMode('auto')}
-              >
-                Auto
-              </button>
-              <button
-                className={`mode-toggle__button ${dataMode === 'live' ? 'is-active' : ''}`}
-                type="button"
-                onClick={() => handleSwitchDataMode('live')}
-              >
-                Live
-              </button>
-              <button
-                className={`mode-toggle__button ${dataMode === 'mock' ? 'is-active' : ''}`}
-                type="button"
-                onClick={() => handleSwitchDataMode('mock')}
-              >
-                Mock
-              </button>
-            </GlassPanel>
             <GlassPanel compact className="metric-chip">
               <ConnectionIcon size={15} />
-              {modeLabel}
+              {connectionTargetLabel}
             </GlassPanel>
             <StatusPill status={connectionPillStatus} label={connectionPillLabel} />
             <GlassPanel compact className="metric-chip">
@@ -602,39 +510,65 @@ export function App() {
               <PlugZap size={15} />
               {state.agents.length} Agents
             </GlassPanel>
-            <button className="icon-button" type="button" onClick={() => void handleRefresh()} title="刷新工作台">
-              <RefreshCcw size={16} />
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => void handleRefresh()}
+              title="刷新工作台"
+              disabled={loadingState || creatingWorkspace || sending}
+            >
+              <RefreshCcw className={loadingState ? 'icon-spin' : ''} size={16} />
             </button>
           </div>
         </header>
 
-        <section className="workbench">
-          <WorkspaceRail
-            state={state}
-            rooms={filteredRooms}
-            activeWorkspaceId={activeWorkspaceId}
-            events={workflowEvents}
-            query={workspaceQuery}
-            loading={loadingState}
-            onSelectWorkspace={handleSelectWorkspace}
-            onQueryChange={setWorkspaceQuery}
-            onCreateWorkspace={() => setCreateDialogOpen(true)}
-          />
-          <ChatPane
-            state={state}
-            room={activeRoom}
-            messages={currentMessages}
-            streamingMessages={currentStreamingMessages}
-            workflowEvents={workflowEvents}
-            loading={loadingState}
-            sending={sending}
-            activeConversationId={activeConversationId}
-            onRegenerate={() => void handleRegenerate()}
-            onReplyToMessage={handleReplyToMessage}
-            onCopyMessage={content => void handleCopyMessage(content)}
-            onSend={handleSend}
-          />
-        </section>
+        {showBlockingState ? (
+          <section className="workbench workbench--single">
+            {loadingState ? (
+              <BlockingWorkbenchState
+                kind="loading"
+                message="正在获取真实工作区、会话和 Agent 配置。"
+              />
+            ) : (
+              <BlockingWorkbenchState
+                kind="error"
+                message={connectionErrorMessage || '本地后端暂时不可用，请确认 127.0.0.1:8790 已启动。'}
+                onRetry={() => void handleRefresh()}
+              />
+            )}
+          </section>
+        ) : (
+          <section className="workbench">
+            <WorkspaceRail
+              state={state}
+              rooms={filteredRooms}
+              activeWorkspaceId={activeWorkspaceId}
+              events={workflowEvents}
+              query={workspaceQuery}
+              loading={loadingState}
+              createDisabled={!canCreateWorkspace}
+              onSelectWorkspace={handleSelectWorkspace}
+              onQueryChange={setWorkspaceQuery}
+              onCreateWorkspace={() => setCreateDialogOpen(true)}
+            />
+            <ChatPane
+              state={state}
+              room={activeRoom}
+              messages={currentMessages}
+              streamingMessages={currentStreamingMessages}
+              workflowEvents={workflowEvents}
+              loading={loadingState}
+              connectionStatus={connectionStatus}
+              composerDisabledReason={composerDisabledReason}
+              sending={sending}
+              activeConversationId={activeConversationId}
+              onRegenerate={() => void handleRegenerate()}
+              onReplyToMessage={handleReplyToMessage}
+              onCopyMessage={content => void handleCopyMessage(content)}
+              onSend={handleSend}
+            />
+          </section>
+        )}
       </div>
 
       <CreateWorkspaceDialog
@@ -642,7 +576,7 @@ export function App() {
         agents={state.agents}
         submitting={creatingWorkspace}
         errorMessage={createWorkspaceError}
-        sourceTargetLabel={sourceTargetLabel}
+        sourceTargetLabel={connectionTargetLabel}
         onClose={() => {
           if (!creatingWorkspace) {
             setCreateDialogOpen(false)

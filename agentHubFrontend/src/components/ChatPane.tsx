@@ -33,7 +33,7 @@ import {
   type ChatTurnArtifact,
   type ChatTurnProcessEntry,
 } from '../chatTimeline'
-import type { AgentDefinition, AppState, Artifact, LiveWorkflowEvent, Message } from '../types'
+import type { AgentDefinition, AppState, Artifact, ConnectionStatus, LiveWorkflowEvent, Message } from '../types'
 import { AgentAvatar } from './AgentAvatar'
 import { AgentMentionPicker, type AgentMentionOption } from './AgentMentionPicker'
 import { GlassPanel } from './GlassPanel'
@@ -47,6 +47,8 @@ type ChatPaneProps = {
   streamingMessages: Message[]
   workflowEvents: LiveWorkflowEvent[]
   loading: boolean
+  connectionStatus: ConnectionStatus
+  composerDisabledReason: string
   sending: boolean
   activeConversationId: string
   onRegenerate: () => void
@@ -60,6 +62,8 @@ type MentionMatch = {
   end: number
   query: string
 }
+
+type PreviewFrameStatus = 'loading' | 'slow' | 'ready' | 'error'
 
 /**
  * Builds the available child-agent options for one group room.
@@ -155,6 +159,8 @@ export function ChatPane({
   streamingMessages,
   workflowEvents,
   loading,
+  connectionStatus,
+  composerDisabledReason,
   sending,
   activeConversationId,
   onRegenerate,
@@ -192,6 +198,19 @@ export function ChatPane({
   const [isNearBottom, setIsNearBottom] = useState(true)
   const [artifactDialog, setArtifactDialog] = useState<ChatTurnArtifact | null>(null)
   const [turnExpandOverrides, setTurnExpandOverrides] = useState<Record<string, boolean>>({})
+  const composerDisabled = connectionStatus !== 'live' || loading
+  const headerStatus =
+    sending ? 'running' : connectionStatus === 'error' ? 'failed' : loading ? 'running' : 'ready'
+  const headerStatusLabel =
+    sending
+      ? 'streaming'
+      : connectionStatus === 'error'
+        ? 'backend offline'
+        : loading
+          ? 'connecting'
+          : room?.kind === 'group'
+            ? 'orchestrated'
+            : 'direct'
 
   /**
    * Scrolls the chat list to the latest message.
@@ -295,10 +314,16 @@ export function ChatPane({
         </div>
         <div className="chat-header-actions">
           <StatusPill
-            status={sending ? 'running' : 'ready'}
-            label={sending ? 'streaming' : room?.kind === 'group' ? 'orchestrated' : 'direct'}
+            status={headerStatus}
+            label={headerStatusLabel}
           />
-          <button className="icon-button" type="button" title="重新生成上一条任务" onClick={onRegenerate} disabled={sending || !room}>
+          <button
+            className="icon-button"
+            type="button"
+            title="重新生成上一条任务"
+            onClick={onRegenerate}
+            disabled={sending || !room || composerDisabled}
+          >
             <RefreshCcw size={16} />
           </button>
         </div>
@@ -343,6 +368,7 @@ export function ChatPane({
         room={room}
         sending={sending}
         mentionOptions={mentionOptions}
+        disabledReason={composerDisabledReason}
         onSend={onSend}
       />
 
@@ -654,6 +680,12 @@ type ArtifactDialogProps = {
  * Output: modal dialog.
  */
 function ArtifactDialog({ artifact, onClose }: ArtifactDialogProps) {
+  const isPreview = artifact.kind === 'preview'
+  const [previewAttempt, setPreviewAttempt] = useState(0)
+  const [previewStatus, setPreviewStatus] = useState<PreviewFrameStatus>(
+    isPreview ? (artifact.url ? 'loading' : 'error') : 'ready',
+  )
+
   useEffect(() => {
     function handleEscape(event: globalThis.KeyboardEvent) {
       if (event.key === 'Escape') {
@@ -666,6 +698,54 @@ function ArtifactDialog({ artifact, onClose }: ArtifactDialogProps) {
       window.removeEventListener('keydown', handleEscape)
     }
   }, [onClose])
+
+  useEffect(() => {
+    if (!isPreview) {
+      setPreviewStatus('ready')
+      return
+    }
+
+    if (!artifact.url) {
+      setPreviewStatus('error')
+      return
+    }
+
+    setPreviewStatus('loading')
+    const slowTimer = window.setTimeout(() => {
+      setPreviewStatus(previous => (previous === 'loading' ? 'slow' : previous))
+    }, 2500)
+    const errorTimer = window.setTimeout(() => {
+      setPreviewStatus(previous => (previous === 'ready' ? previous : 'error'))
+    }, 10000)
+
+    return () => {
+      window.clearTimeout(slowTimer)
+      window.clearTimeout(errorTimer)
+    }
+  }, [artifact.id, artifact.url, isPreview, previewAttempt])
+
+  /**
+   * Restarts the preview iframe load sequence after a timeout or iframe error.
+   * Input: none.
+   * Output: remounts the iframe and resets the preview status.
+   */
+  function handleRetryPreview() {
+    setPreviewAttempt(previous => previous + 1)
+  }
+
+  const previewTitle =
+    previewStatus === 'error'
+      ? '预览加载失败'
+      : previewStatus === 'slow'
+        ? '预览生成较慢'
+        : '正在加载页面预览'
+  const previewDescription = !artifact.url
+    ? '当前预览地址不可用，请稍后重试。'
+    : previewStatus === 'error'
+      ? '可以重试预览，或直接在新窗口打开当前页面。'
+      : previewStatus === 'slow'
+        ? '页面构建或传输较慢，请再等一下。'
+        : '正在拉取当前工作区的页面预览资源。'
 
   return (
     <div className="artifact-dialog-backdrop" role="presentation" onClick={onClose}>
@@ -680,9 +760,46 @@ function ArtifactDialog({ artifact, onClose }: ArtifactDialogProps) {
           </button>
         </div>
 
-        <div className="artifact-dialog__body">
-          {artifact.kind === 'preview' && artifact.url ? (
-            <iframe className="artifact-preview-frame" src={artifact.url} title={artifact.title} />
+        <div className={`artifact-dialog__body ${isPreview ? 'artifact-dialog__body--preview' : ''}`}>
+          {isPreview ? (
+            <div className="artifact-preview-shell">
+              {artifact.url ? (
+                <iframe
+                  key={`${artifact.id}-${previewAttempt}`}
+                  className="artifact-preview-frame"
+                  src={artifact.url}
+                  title={artifact.title}
+                  onLoad={() => setPreviewStatus('ready')}
+                  onError={() => setPreviewStatus('error')}
+                />
+              ) : null}
+
+              {previewStatus !== 'ready' ? (
+                <div className="artifact-preview-overlay">
+                  <div className={`artifact-preview-status artifact-preview-status--${previewStatus}`}>
+                    {previewStatus === 'error' ? (
+                      <AlertTriangle size={18} />
+                    ) : (
+                      <LoaderCircle className="icon-spin" size={18} />
+                    )}
+                    <strong>{previewTitle}</strong>
+                    <p>{previewDescription}</p>
+                    {previewStatus === 'error' ? (
+                      <div className="artifact-preview-actions">
+                        <button className="primary-button" type="button" onClick={handleRetryPreview}>
+                          重试预览
+                        </button>
+                        {artifact.url ? (
+                          <a className="secondary-button" href={artifact.url} target="_blank" rel="noreferrer">
+                            新窗口打开
+                          </a>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
           ) : null}
 
           {artifact.kind === 'diff' ? (
@@ -729,7 +846,7 @@ function ArtifactDialog({ artifact, onClose }: ArtifactDialogProps) {
           ) : null}
         </div>
 
-        {artifact.url && artifact.kind !== 'preview' ? (
+        {artifact.url ? (
           <div className="artifact-dialog__footer">
             <a className="artifact-dialog__link" href={artifact.url} target="_blank" rel="noreferrer">
               在新窗口打开
@@ -796,6 +913,7 @@ type ChatComposerProps = {
   room: WorkspaceRoom | undefined
   sending: boolean
   mentionOptions: AgentMentionOption[]
+  disabledReason: string
   onSend: (content: string) => void
 }
 
@@ -804,7 +922,7 @@ type ChatComposerProps = {
  * Input: active workspace room, sending flag, mention options, and send callback.
  * Output: textarea composer with command chips and the group-chat @ picker.
  */
-function ChatComposer({ room, sending, mentionOptions, onSend }: ChatComposerProps) {
+function ChatComposer({ room, sending, mentionOptions, disabledReason, onSend }: ChatComposerProps) {
   const storageKey = room ? `agenthub:draft:${room.conversation.id}` : ''
   const [value, setValue] = useState('')
   const [mentionMatch, setMentionMatch] = useState<MentionMatch | null>(null)
@@ -812,11 +930,13 @@ function ChatComposer({ room, sending, mentionOptions, onSend }: ChatComposerPro
   const [isComposing, setIsComposing] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const selectionRef = useRef({ start: 0, end: 0 })
+  const composerLocked = sending || !room || disabledReason.length > 0
 
   const placeholder =
-    room?.kind === 'direct'
+    disabledReason ||
+    (room?.kind === 'direct'
       ? `发送给 ${room.targetAgentId ?? 'Agent'}，例如：/run 检查当前产物并给出结论`
-      : '给群聊工作区发送任务，例如：@engineer 实现页面，并让 @reviewer 验收'
+      : '给群聊工作区发送任务，例如：@engineer 实现页面，并让 @reviewer 验收')
   const filteredMentionOptions =
     room?.kind === 'group' && mentionMatch
       ? mentionOptions.filter(option => {
@@ -952,7 +1072,7 @@ function ChatComposer({ room, sending, mentionOptions, onSend }: ChatComposerPro
   function handleSubmit() {
     const content = value.trim()
 
-    if (!content || sending || !room) {
+    if (!content || composerLocked) {
       return
     }
 
@@ -1032,25 +1152,25 @@ function ChatComposer({ room, sending, mentionOptions, onSend }: ChatComposerPro
     >
       {room?.kind === 'group' ? (
         <div className="composer-chips">
-          <button type="button" onClick={() => insertChip('@product-manager ')}>
+          <button type="button" onClick={() => insertChip('@product-manager ')} disabled={composerLocked}>
             @product-manager
           </button>
-          <button type="button" onClick={() => insertChip('@engineer ')}>
+          <button type="button" onClick={() => insertChip('@engineer ')} disabled={composerLocked}>
             @engineer
           </button>
-          <button type="button" onClick={() => insertChip('@reviewer ')}>
+          <button type="button" onClick={() => insertChip('@reviewer ')} disabled={composerLocked}>
             @reviewer
           </button>
-          <button type="button" onClick={() => insertChip('/run ')}>
+          <button type="button" onClick={() => insertChip('/run ')} disabled={composerLocked}>
             /run
           </button>
         </div>
       ) : (
         <div className="composer-chips">
-          <button type="button" onClick={() => insertChip(`@${room?.targetAgentId ?? 'agent'} `)}>
+          <button type="button" onClick={() => insertChip(`@${room?.targetAgentId ?? 'agent'} `)} disabled={composerLocked}>
             @{room?.targetAgentId ?? 'agent'}
           </button>
-          <button type="button" onClick={() => insertChip('/run ')}>
+          <button type="button" onClick={() => insertChip('/run ')} disabled={composerLocked}>
             /run
           </button>
         </div>
@@ -1082,9 +1202,9 @@ function ChatComposer({ room, sending, mentionOptions, onSend }: ChatComposerPro
           }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          disabled={!room || sending}
+          disabled={composerLocked}
         />
-        <button className="send-button" type="submit" disabled={!room || sending} title="发送消息">
+        <button className="send-button" type="submit" disabled={composerLocked} title="发送消息">
           <ArrowUp size={18} />
         </button>
       </div>

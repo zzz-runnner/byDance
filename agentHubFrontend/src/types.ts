@@ -36,7 +36,7 @@ export type {
   Workspace,
 }
 
-export type ConnectionStatus = 'connecting' | 'live' | 'demo' | 'error'
+export type ConnectionStatus = 'connecting' | 'live' | 'error'
 
 export type WorkspaceSignal = {
   runningAgents: number
