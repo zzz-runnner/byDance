@@ -60,6 +60,7 @@ The frontend is now `live-only`. If the business backend API is unavailable, the
 - The frontend is managed under the repository root `E:\byDance`, but keeps its own dependency and build configuration.
 - The old page-level mock/demo fallback path has been removed from the local operator flow.
 - Raw HTML is still disabled in the Markdown renderer; the current scope is safe Markdown plus GFM features.
+- In remote desktop or remote-control environments, animated blur layers plus React dev-mode double render can appear as page flicker. Verify this outside the remote session before classifying it as a frontend callback or state-loop bug.
 
 ## Verification
 

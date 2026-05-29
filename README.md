@@ -47,6 +47,7 @@ The current local path is focused on one workspace equals one chat window.
 - AI reply bubbles now use a controlled Markdown renderer with GFM support and a lightweight normalization layer for noisy separators, empty headings, empty bullets, and incomplete code fences.
 - Frontend startup is now `live-only`: first load shows a blocking loading state, backend failure shows a blocking retry state, and the page no longer falls back to mock/demo workspaces.
 - Preview dialogs now show `loading / slow / error` states before iframe content is ready.
+- When the page is viewed through a remote desktop or remote-control session, decorative blur layers and React dev-mode re-renders can look like visible flicker. Treat this as an environment observation first, not as a confirmed frontend callback loop.
 - `agentHubBackend/` is still outside the local live path and remains untouched.
 
 ## Dependency Management
