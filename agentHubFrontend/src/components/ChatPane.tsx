@@ -37,6 +37,7 @@ import type { AgentDefinition, AppState, Artifact, ConnectionStatus, LiveWorkflo
 import { AgentAvatar } from './AgentAvatar'
 import { AgentMentionPicker, type AgentMentionOption } from './AgentMentionPicker'
 import { GlassPanel } from './GlassPanel'
+import { MarkdownRenderer } from './MarkdownRenderer'
 import { OrbMark } from './OrbMark'
 import { StatusPill } from './StatusPill'
 
@@ -545,7 +546,15 @@ function MessageBubble({
           <time>{formatTime(message.createdAt)}</time>
         </div>
         <div className={`message-bubble ${isUser ? 'message-bubble--user' : 'message-bubble--agent'}`}>
-          <p>{message.content || '正在生成回复...'}</p>
+          {message.content ? (
+            isUser ? (
+              <p>{message.content}</p>
+            ) : (
+              <MarkdownRenderer content={message.content} className="markdown-content--bubble" />
+            )
+          ) : (
+            <p>正在生成回复...</p>
+          )}
           {isStreamingPlaceholder ? (
             <div className="message-typing-dots" aria-hidden="true">
               <span />
@@ -804,7 +813,7 @@ function ArtifactDialog({ artifact, onClose }: ArtifactDialogProps) {
 
           {artifact.kind === 'diff' ? (
             <div className="artifact-detail-stack">
-              <p>{artifact.summary}</p>
+              <MarkdownRenderer content={artifact.summary} className="markdown-content--panel" />
               {artifact.files?.length ? (
                 <div className="diff-file-list">
                   {artifact.files.map(file => (
@@ -825,7 +834,7 @@ function ArtifactDialog({ artifact, onClose }: ArtifactDialogProps) {
           {artifact.kind === 'review' ? (
             <div className="artifact-detail-stack">
               {artifact.verdict ? <StatusPill status={artifactVerdictPillStatus(artifact.verdict)} label={artifact.verdict} /> : null}
-              <p>{artifact.summary}</p>
+              <MarkdownRenderer content={artifact.summary} className="markdown-content--panel" />
               {artifact.issues?.length ? (
                 <ul className="artifact-issue-list">
                   {artifact.issues.map((issue, index) => (
@@ -840,8 +849,10 @@ function ArtifactDialog({ artifact, onClose }: ArtifactDialogProps) {
 
           {(artifact.kind === 'text' || artifact.kind === 'artifact') ? (
             <div className="artifact-detail-stack">
-              <p>{artifact.summary}</p>
-              {artifact.detailText ? <pre className="artifact-code-block artifact-code-block--plain">{artifact.detailText}</pre> : null}
+              <MarkdownRenderer content={artifact.summary} className="markdown-content--panel" />
+              {artifact.detailText ? (
+                <MarkdownRenderer content={artifact.detailText} className="markdown-content--document markdown-content--panel" />
+              ) : null}
             </div>
           ) : null}
         </div>

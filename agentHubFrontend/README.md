@@ -31,6 +31,7 @@ The frontend is now `live-only`. If the business backend API is unavailable, the
 ## Current UI Status
 
 - One workspace maps to one chat window in the web workbench.
+- AI replies now render through a controlled Markdown pipeline based on `react-markdown + remark-gfm`.
 - Group workspaces support a WeChat-style `@` mention picker for child agents inside the composer.
 - Direct workspaces keep a fixed target agent and do not open the `@` picker.
 - Composer shortcut chips still exist as a fallback, and all insertions respect the current caret position.
@@ -44,6 +45,7 @@ The frontend is now `live-only`. If the business backend API is unavailable, the
 - Preview, diff, review, zip, and text artifacts live inside the main chat stream.
 - Preview dialogs now show `loading / slow / error` states before the iframe becomes ready.
 - The first page load now shows a blocking loading screen, and backend disconnection shows a blocking error screen with retry.
+- AI Markdown output is lightly normalized before rendering, so noisy separators, empty bullets, empty headings, and incomplete fences do not break the chat bubble layout.
 
 ## Boundary
 
@@ -57,6 +59,7 @@ The frontend is now `live-only`. If the business backend API is unavailable, the
 - The current workbench background image is `src/asset/background/newBG.png`.
 - The frontend is managed under the repository root `E:\byDance`, but keeps its own dependency and build configuration.
 - The old page-level mock/demo fallback path has been removed from the local operator flow.
+- Raw HTML is still disabled in the Markdown renderer; the current scope is safe Markdown plus GFM features.
 
 ## Verification
 

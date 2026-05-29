@@ -44,6 +44,7 @@ The current local path is focused on one workspace equals one chat window.
 - The main chat surface groups each user turn into one visible block: user message, `本轮过程`, inline artifact cards, and the final agent result.
 - `本轮过程` stays expanded while a turn is still running, auto-collapses after the turn completes, and remains expanded for failed or partial turns.
 - Preview, diff, review, zip, and text artifacts are rendered inside the chat stream instead of depending on the right-side status dock.
+- AI reply bubbles now use a controlled Markdown renderer with GFM support and a lightweight normalization layer for noisy separators, empty headings, empty bullets, and incomplete code fences.
 - Frontend startup is now `live-only`: first load shows a blocking loading state, backend failure shows a blocking retry state, and the page no longer falls back to mock/demo workspaces.
 - Preview dialogs now show `loading / slow / error` states before iframe content is ready.
 - `agentHubBackend/` is still outside the local live path and remains untouched.
