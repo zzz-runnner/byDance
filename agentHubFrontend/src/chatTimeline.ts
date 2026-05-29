@@ -10,14 +10,33 @@ import type {
 export type ChatProcessTone = 'neutral' | 'running' | 'success' | 'warning' | 'danger'
 export type ChatTurnStatus = 'running' | 'completed' | 'partial' | 'failed'
 export type ChatTurnArtifactKind = 'preview' | 'diff' | 'review' | 'zip' | 'text' | 'artifact'
+export type ChatProcessKind =
+  | 'route'
+  | 'stage'
+  | 'context'
+  | 'dispatch'
+  | 'progress'
+  | 'log'
+  | 'artifact'
+  | 'validation'
+  | 'review'
+  | 'synthesis'
+  | 'reply'
+  | 'status'
 
 export type ChatTurnProcessEntry = {
   id: string
-  label: string
+  kind: ChatProcessKind
+  title: string
+  summary?: string
   detail?: string
   time: string
   tone: ChatProcessTone
   agentId?: string
+  badge?: string
+  meta?: string
+  logStream?: 'stdout' | 'stderr'
+  logExcerpt?: string
 }
 
 export type ChatTurnArtifact = {
@@ -225,7 +244,7 @@ export function buildChatTimeline(input: BuildChatTimelineInput): ChatTimelineIt
       targetTurn.status = 'failed'
     }
 
-    const processEntry = eventToProcessEntry(event, agentNames)
+    const processEntry = eventToProcessCard(event, agentNames)
     if (processEntry) {
       upsertProcessEntry(targetTurn.processEntries, processEntry)
     }
@@ -463,11 +482,19 @@ function upsertProcessEntry(entries: ChatTurnProcessEntry[], candidate: ChatTurn
     return
   }
 
-  existing.label = candidate.label
+  existing.kind = candidate.kind
+  existing.title = candidate.title
+  existing.summary = candidate.summary
   existing.detail = candidate.detail
   existing.time = candidate.time
   existing.tone = candidate.tone
   existing.agentId = candidate.agentId
+  existing.badge = candidate.badge
+  existing.meta = candidate.meta
+  existing.logStream = candidate.logStream
+  existing.logExcerpt = candidate.kind === 'log'
+    ? mergeLogExcerpt(existing.logExcerpt, candidate.logExcerpt)
+    : candidate.logExcerpt
 }
 
 /**
@@ -648,7 +675,8 @@ function createProcessEntry(
 ): ChatTurnProcessEntry {
   return {
     id,
-    label,
+    kind: 'status',
+    title: label,
     detail,
     time: event.receivedAt,
     tone,
@@ -757,6 +785,512 @@ function deliveryTone(value: string): ChatProcessTone {
     return 'warning'
   }
   return 'success'
+}
+
+/**
+ * Converts one workflow event into a structured process card for the chat timeline.
+ * Input: room-scoped workflow event plus the current agent-name map.
+ * Output: display-ready process card data or undefined.
+ */
+function eventToProcessCard(event: LiveWorkflowEvent, agentNames: Map<string, string>): ChatTurnProcessEntry | undefined {
+  switch (event.type) {
+    case 'workflow_received':
+      return createProcessCard(event, {
+        id: 'workflow-received',
+        kind: 'status',
+        badge: '接收',
+        title: '已接收本轮消息',
+        tone: 'neutral',
+      })
+    case 'routing_started':
+      return createProcessCard(event, {
+        id: 'routing-decision',
+        kind: 'route',
+        badge: '路由',
+        title: '主脑正在判断由谁处理',
+        summary: compactText(event.content, 180),
+        tone: 'running',
+      })
+    case 'task_stage_updated':
+      return createProcessCard(event, {
+        id: `task-stage-${event.taskStage}`,
+        kind: 'stage',
+        badge: '阶段',
+        title: `当前阶段：${EVENT_STAGE_LABELS[event.taskStage] ?? event.taskStage}`,
+        summary: compactText(event.reason, 180),
+        meta: buildTaskStageMeta(event),
+        tone: 'neutral',
+      })
+    case 'routing_finished':
+      return createProcessCard(event, {
+        id: 'routing-decision',
+        kind: 'route',
+        badge: '路由',
+        title: describeRoutingFinished(event, agentNames),
+        summary: buildRoutingSummary(event),
+        detail: buildRoutingCardDetail(event),
+        tone: 'success',
+        agentId: event.speakerAgentId,
+      })
+    case 'context_started':
+      return createProcessCard(event, {
+        id: `context-${event.scope}-${event.agentId ?? 'main'}`,
+        kind: 'context',
+        badge: '上下文',
+        title: describeContextStarted(event),
+        detail: `范围：${event.scope}`,
+        tone: 'running',
+        agentId: event.agentId,
+      })
+    case 'context_finished':
+      return createProcessCard(event, {
+        id: `context-${event.scope}-main`,
+        kind: 'context',
+        badge: '上下文',
+        title: '上下文整理完成',
+        summary: compactText(event.summary ?? '', 180) || undefined,
+        detail: `范围：${event.scope} | 约 ${event.tokenEstimate} tokens`,
+        tone: 'success',
+      })
+    case 'model_call_started':
+      return createProcessCard(event, {
+        id: `model-call-${event.scope}-${event.agentId ?? event.provider}`,
+        kind: 'progress',
+        badge: '模型',
+        title: describeModelCallStarted(event),
+        detail: buildModelCallDetail(event.provider, event.model),
+        tone: 'running',
+        agentId: event.agentId,
+      })
+    case 'model_call_finished':
+      return createProcessCard(event, {
+        id: `model-call-${event.scope}-${event.provider}`,
+        kind: 'progress',
+        badge: '模型',
+        title: `模型调用完成：${event.provider}`,
+        detail: [buildModelCallDetail(event.provider, event.model), `${Math.round(event.elapsedMs)}ms`]
+          .filter(Boolean)
+          .join(' | '),
+        tone: 'success',
+      })
+    case 'model_call_failed':
+      return createProcessCard(event, {
+        id: `model-call-${event.scope}-${event.provider ?? 'unknown'}`,
+        kind: 'progress',
+        badge: '模型',
+        title: `模型调用失败：${event.provider ?? 'unknown'}`,
+        summary: compactText(event.error, 200),
+        detail: buildModelCallDetail(event.provider, event.model),
+        tone: 'danger',
+      })
+    case 'agent_task_dispatched':
+      return createProcessCard(event, {
+        id: `dispatch-${event.handoffId}`,
+        kind: 'dispatch',
+        badge: '派发',
+        title: `已派发给 ${event.agentName}`,
+        summary: compactText(event.task, 220),
+        detail: buildDispatchDetail(event.expectedOutput, event.requiredContext),
+        tone: 'running',
+        agentId: event.agentId,
+      })
+    case 'agent_started':
+      return createProcessCard(event, {
+        id: `agent-run-${event.runId}`,
+        kind: 'progress',
+        badge: '执行',
+        title: `${event.agentName} 已开始执行`,
+        summary: compactText(event.task, 220),
+        detail: `上下文：${event.contextTokens} tokens`,
+        tone: 'running',
+        agentId: event.agentId,
+      })
+    case 'agent_progress':
+      return createProcessCard(event, {
+        id: `agent-progress-${event.runId}-${compactKey(event.message)}`,
+        kind: 'progress',
+        badge: '进展',
+        title: `${event.agentName} 执行进展`,
+        summary: event.message,
+        tone: 'running',
+        agentId: event.agentId,
+      })
+    case 'agent_stdout_delta':
+    case 'agent_stderr_delta':
+      return createProcessCard(event, {
+        id: `agent-log-${event.runId}-${event.type === 'agent_stderr_delta' ? 'stderr' : 'stdout'}`,
+        kind: 'log',
+        badge: event.type === 'agent_stderr_delta' ? 'stderr' : 'stdout',
+        title: `${event.agentName} 执行输出`,
+        logStream: event.type === 'agent_stderr_delta' ? 'stderr' : 'stdout',
+        logExcerpt: summarizeLogDelta(event.delta),
+        detail: `最近输出 | ${event.byteLength} bytes`,
+        tone: event.type === 'agent_stderr_delta' ? 'warning' : 'running',
+        agentId: event.agentId,
+      })
+    case 'agent_output_finished':
+      return createProcessCard(event, {
+        id: `agent-log-${event.runId}-${event.stream}`,
+        kind: 'log',
+        badge: event.stream,
+        title: `${event.agentName} 输出结束`,
+        detail: describeOutputFinished(event),
+        logStream: event.stream,
+        tone: event.exitCode === 0 || event.exitCode === null ? 'success' : 'warning',
+        agentId: event.agentId,
+      })
+    case 'agent_finished':
+      return createProcessCard(event, {
+        id: `agent-run-${event.runId}`,
+        kind: 'status',
+        badge: '执行',
+        title: `${event.agentName}${describeAgentFinishedStatus(event.status)}`,
+        summary: compactText(event.summary, 220),
+        detail: `baseCommit: ${event.baseCommit}`,
+        tone: event.status === 'failed' ? 'danger' : event.status === 'partial' ? 'warning' : 'success',
+        agentId: event.agentId,
+      })
+    case 'delivery_validation_finished':
+      return createProcessCard(event, {
+        id: `delivery-${event.runId}`,
+        kind: 'validation',
+        badge: '校验',
+        title: `交付校验：${event.status.toUpperCase()}`,
+        summary: compactText(event.summary, 220),
+        detail: buildValidationDetail(event.issues),
+        tone: deliveryTone(event.status),
+        agentId: event.agentId,
+      })
+    case 'review_verdict':
+      return createProcessCard(event, {
+        id: `review-${event.runId}`,
+        kind: 'review',
+        badge: '审查',
+        title: `审查结论：${event.verdict.toUpperCase()}`,
+        summary: compactText(event.summary, 220),
+        detail: buildIssueMarkdown(event.issues),
+        tone: deliveryTone(event.verdict),
+        agentId: event.agentId,
+      })
+    case 'artifact_created':
+      return createProcessCard(event, {
+        id: `artifact-${event.artifactId}`,
+        kind: 'artifact',
+        badge: '产物',
+        title: `已生成产物：${event.title}`,
+        detail: describeArtifactDetail(event.artifactType, event.url),
+        tone: 'success',
+        agentId: event.agentId,
+      })
+    case 'change_set_created':
+      return createProcessCard(event, {
+        id: `changes-${event.changeSetId}`,
+        kind: 'artifact',
+        badge: 'Diff',
+        title: '已生成代码 Diff',
+        summary: compactText(event.summary, 220),
+        detail: buildChangedFilesDetail(event.files),
+        tone: 'success',
+      })
+    case 'preview_ready':
+      return createProcessCard(event, {
+        id: `preview-${event.artifactId}`,
+        kind: 'artifact',
+        badge: 'Preview',
+        title: '已生成本地预览',
+        detail: compactText(event.previewUrl, 180),
+        tone: 'success',
+        agentId: event.agentId,
+      })
+    case 'zip_ready':
+      return createProcessCard(event, {
+        id: `zip-${event.artifactId}`,
+        kind: 'artifact',
+        badge: 'Zip',
+        title: '已打包源码',
+        detail: `${event.fileCount} files | ${formatByteLength(event.byteLength)}`,
+        tone: 'success',
+      })
+    case 'assistant_message_started':
+      return createProcessCard(event, {
+        id: `reply-${event.messageId}`,
+        kind: 'reply',
+        badge: '回复',
+        title: `${event.senderName ?? event.senderId} 正在输出结果`,
+        tone: 'running',
+        agentId: event.senderId,
+      })
+    case 'assistant_message_finished':
+      return createProcessCard(event, {
+        id: `reply-${event.messageId}`,
+        kind: 'reply',
+        badge: '回复',
+        title: '结果输出完成',
+        detail: `内容长度：${event.contentLength} chars`,
+        tone: 'success',
+      })
+    case 'assistant_message_error':
+      return createProcessCard(event, {
+        id: `reply-${event.messageId}`,
+        kind: 'reply',
+        badge: '回复',
+        title: '结果输出失败',
+        summary: compactText(event.error, 200),
+        tone: 'danger',
+      })
+    case 'synthesis_started':
+      return createProcessCard(event, {
+        id: 'synthesis-state',
+        kind: 'synthesis',
+        badge: '汇总',
+        title: '主脑正在汇总多 Agent 结果',
+        detail: `${event.runCount} 个执行结果`,
+        tone: 'running',
+      })
+    case 'synthesis_finished':
+      return createProcessCard(event, {
+        id: 'synthesis-state',
+        kind: 'synthesis',
+        badge: '汇总',
+        title: '主脑已完成结果汇总',
+        summary: buildSynthesisSummary(event),
+        detail: buildSynthesisDetail(event.followUpAgents),
+        tone: event.verdict === 'failed' ? 'danger' : event.verdict === 'partial' ? 'warning' : 'success',
+      })
+    case 'workflow_finished':
+      return createProcessCard(event, {
+        id: 'workflow-finished',
+        kind: 'status',
+        badge: '完成',
+        title: '本轮已完成',
+        summary: compactText(event.summary, 220),
+        tone: 'success',
+      })
+    default:
+      return undefined
+  }
+}
+
+/**
+ * Creates one structured process card entry.
+ * Input: workflow event plus the process-card payload without time.
+ * Output: normalized process card entry.
+ */
+function createProcessCard(
+  event: LiveWorkflowEvent,
+  input: Omit<ChatTurnProcessEntry, 'time'>,
+): ChatTurnProcessEntry {
+  return {
+    ...input,
+    time: event.receivedAt,
+  }
+}
+
+/**
+ * Builds one compact metadata line for a stage update.
+ * Input: task-stage-updated event. Output: compact metadata text.
+ */
+function buildTaskStageMeta(event: Extract<WorkflowEvent, { type: 'task_stage_updated' }>): string {
+  return [
+    `readiness: ${event.executionReadiness}`,
+    event.needsUserConfirmation ? '需要确认' : '无需确认',
+  ].join(' · ')
+}
+
+/**
+ * Builds one readable summary body for the routing decision card.
+ * Input: routing-finished event. Output: short Markdown-friendly text.
+ */
+function buildRoutingSummary(event: Extract<WorkflowEvent, { type: 'routing_finished' }>): string | undefined {
+  const lines = [
+    event.execution ? `执行判断：${event.execution}` : undefined,
+    event.brainKind ? `主脑动作：${describeBrainKind(event.brainKind)}` : undefined,
+    event.needsUserConfirmation ? '当前仍需用户确认后再继续执行。' : undefined,
+  ].filter(Boolean)
+
+  return lines.length ? lines.join('\n') : undefined
+}
+
+/**
+ * Builds one compact detail line for the routing decision card.
+ * Input: routing-finished event. Output: compact detail text.
+ */
+function buildRoutingCardDetail(event: Extract<WorkflowEvent, { type: 'routing_finished' }>): string | undefined {
+  const details = [
+    event.taskStage ? `阶段：${EVENT_STAGE_LABELS[event.taskStage] ?? event.taskStage}` : undefined,
+    event.finalizationMode ? `输出：${event.finalizationMode}` : undefined,
+    event.source ? `来源：${event.source}` : undefined,
+  ].filter(Boolean)
+
+  return details.length ? details.join(' | ') : undefined
+}
+
+/**
+ * Builds one compact detail line for a handoff dispatch card.
+ * Input: expected output and required context refs. Output: compact text.
+ */
+function buildDispatchDetail(expectedOutput: string, requiredContext: string[]): string {
+  const parts = [
+    expectedOutput ? `期望输出：${compactText(expectedOutput, 140)}` : undefined,
+    requiredContext.length ? `上下文引用：${requiredContext.length}` : undefined,
+  ].filter(Boolean)
+
+  return parts.join(' | ')
+}
+
+/**
+ * Builds one compact provider-model label for model-call cards.
+ * Input: provider and optional model values. Output: compact text or undefined.
+ */
+function buildModelCallDetail(provider: string | undefined, model: string | undefined): string | undefined {
+  const parts = [provider, model].filter(Boolean)
+  return parts.length ? parts.join(' / ') : undefined
+}
+
+/**
+ * Describes a started model call in plain language.
+ * Input: model-call-started event. Output: process-card title text.
+ */
+function describeModelCallStarted(event: Extract<WorkflowEvent, { type: 'model_call_started' }>): string {
+  if (event.agentName) {
+    return `${event.agentName} 正在调用 ${event.provider}`
+  }
+
+  return `正在调用 ${event.provider}`
+}
+
+/**
+ * Converts validation issues into a Markdown bullet list.
+ * Input: validation issue array. Output: Markdown bullets or undefined.
+ */
+function buildValidationDetail(
+  issues: Array<{ severity: string; message: string; path?: string }>,
+): string | undefined {
+  if (!issues.length) {
+    return undefined
+  }
+
+  return issues
+    .map(issue => `- [${issue.severity}] ${issue.path ? `${issue.path}: ` : ''}${issue.message}`)
+    .join('\n')
+}
+
+/**
+ * Converts plain issue strings into a Markdown bullet list.
+ * Input: issue strings. Output: Markdown bullets or undefined.
+ */
+function buildIssueMarkdown(issues: string[]): string | undefined {
+  if (!issues.length) {
+    return undefined
+  }
+
+  return issues.map(issue => `- ${issue}`).join('\n')
+}
+
+/**
+ * Builds a compact changed-file bullet list for a diff card.
+ * Input: changed files. Output: Markdown bullets or undefined.
+ */
+function buildChangedFilesDetail(files: ChangedFile[]): string | undefined {
+  if (!files.length) {
+    return undefined
+  }
+
+  return files
+    .slice(0, 4)
+    .map(file => `- \`${file.path}\` (+${file.additions} / -${file.deletions})`)
+    .join('\n')
+}
+
+/**
+ * Describes an artifact card in one compact line.
+ * Input: artifact type and optional URL. Output: compact detail text.
+ */
+function describeArtifactDetail(type: Artifact['type'], url: string | undefined): string | undefined {
+  const typeLabel = type === 'web-preview'
+    ? '本地预览'
+    : type === 'zip'
+      ? '源码压缩包'
+      : type === 'text'
+        ? '文本产物'
+        : type
+
+  const parts = [typeLabel, url ? compactText(url, 140) : undefined].filter(Boolean)
+  return parts.length ? parts.join(' | ') : undefined
+}
+
+/**
+ * Describes one synthesis result in compact form.
+ * Input: synthesis-finished event. Output: compact summary text.
+ */
+function buildSynthesisSummary(event: Extract<WorkflowEvent, { type: 'synthesis_finished' }>): string {
+  return [
+    `结果类型：${event.synthesisKind}`,
+    `结论：${event.verdict}`,
+  ].join(' · ')
+}
+
+/**
+ * Builds a follow-up line for synthesis output.
+ * Input: follow-up agents. Output: compact text or undefined.
+ */
+function buildSynthesisDetail(followUpAgents: string[]): string | undefined {
+  if (!followUpAgents.length) {
+    return undefined
+  }
+
+  return `后续参与：${followUpAgents.join(', ')}`
+}
+
+/**
+ * Merges incremental log excerpts and keeps the latest visible lines.
+ * Input: current excerpt and a new excerpt chunk. Output: merged excerpt.
+ */
+function mergeLogExcerpt(current: string | undefined, candidate: string | undefined): string | undefined {
+  if (!candidate) {
+    return current
+  }
+
+  const lines = [current, candidate]
+    .filter(Boolean)
+    .flatMap(value => value!.split('\n'))
+    .map(line => line.trimEnd())
+    .filter(Boolean)
+
+  return lines.slice(-8).join('\n')
+}
+
+/**
+ * Formats byte length into a compact human-readable label.
+ * Input: raw byte count. Output: bytes / KB / MB label.
+ */
+function formatByteLength(byteLength: number): string {
+  if (byteLength < 1024) {
+    return `${byteLength} B`
+  }
+
+  if (byteLength < 1024 * 1024) {
+    return `${(byteLength / 1024).toFixed(1)} KB`
+  }
+
+  return `${(byteLength / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/**
+ * Describes the main-brain turn kind in plain Chinese.
+ * Input: brain kind. Output: localized text.
+ */
+function describeBrainKind(kind: string): string {
+  if (kind === 'direct_answer') {
+    return '直接回答'
+  }
+  if (kind === 'dispatch_agents') {
+    return '派发子 Agent'
+  }
+  if (kind === 'ask_clarification') {
+    return '要求补充信息'
+  }
+  return kind
 }
 
 /**

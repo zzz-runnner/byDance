@@ -3,10 +3,19 @@ const EMPTY_BULLET_PATTERN = /^\s*(?:[-*+]|(?:\d+\.))\s*$/
 const EMPTY_HEADING_PATTERN = /^\s*#{1,6}\s*$/
 const THEMATIC_BREAK_PATTERN = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/
 const FENCE_PATTERN = /^(\s*)(`{3,}|~{3,})(.*)$/
+const TABLE_SEPARATOR_PATTERN = /^\s*\|?(?:\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?\s*$/
+const MARKDOWN_BLOCK_PATTERN =
+  /^\s{0,3}(?:#{1,6}\s|>\s?|[-*+]\s|\d+\.\s|```|~~~|\|.+\||-{3,}|\*{3,}|_{3,})/
 
 type FenceState = {
   char: '`' | '~'
   length: number
+}
+
+export type NormalizeAiMarkdownMode = 'bubble' | 'compact' | 'panel' | 'process' | 'document'
+
+type NormalizeAiMarkdownOptions = {
+  mode?: NormalizeAiMarkdownMode
 }
 
 /**
@@ -14,7 +23,7 @@ type FenceState = {
  * Input: raw AI response text that may contain malformed spacing or separators.
  * Output: Markdown text with lightweight cleanup while preserving valid syntax.
  */
-export function normalizeAiMarkdown(content: string): string {
+export function normalizeAiMarkdown(content: string, options: NormalizeAiMarkdownOptions = {}): string {
   if (!content.trim()) {
     return ''
   }
@@ -90,5 +99,79 @@ export function normalizeAiMarkdown(content: string): string {
     cleanedLines.push(openFenceState.char.repeat(openFenceState.length))
   }
 
-  return cleanedLines.join('\n')
+  const normalizedText = cleanedLines.join('\n')
+
+  if (!shouldPreserveSoftBreaks(options.mode)) {
+    return normalizedText
+  }
+
+  return preserveSoftBreaks(normalizedText)
+}
+
+/**
+ * Returns whether plain-text line breaks should remain visible in the target UI mode.
+ * Input: Markdown renderer mode.
+ * Output: true when chat-like surfaces should preserve single-line wrapping.
+ */
+function shouldPreserveSoftBreaks(mode: NormalizeAiMarkdownMode | undefined): boolean {
+  return mode === 'bubble' || mode === 'process' || mode === 'document'
+}
+
+/**
+ * Converts plain single-line paragraph breaks into Markdown hard breaks for chat readability.
+ * Input: normalized Markdown text.
+ * Output: Markdown text that keeps conversational line wraps outside block syntax.
+ */
+function preserveSoftBreaks(content: string): string {
+  const lines = content.split('\n')
+  const nextLines = lines.slice()
+  let openFence: FenceState | null = null
+
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const currentLine = nextLines[index]
+    const nextLine = nextLines[index + 1]
+
+    const fenceMatch = currentLine.match(FENCE_PATTERN)
+    if (fenceMatch) {
+      const marker = fenceMatch[2]
+      const markerChar = marker[0] as FenceState['char']
+      if (openFence && openFence.char === markerChar && marker.length >= openFence.length) {
+        openFence = null
+      } else {
+        openFence = { char: markerChar, length: marker.length }
+      }
+      continue
+    }
+
+    if (openFence) {
+      continue
+    }
+
+    if (!isPlainMarkdownLine(currentLine) || !isPlainMarkdownLine(nextLine)) {
+      continue
+    }
+
+    nextLines[index] = `${currentLine}  `
+  }
+
+  return nextLines.join('\n')
+}
+
+/**
+ * Returns whether one line looks like plain paragraph text rather than Markdown block syntax.
+ * Input: one normalized Markdown line.
+ * Output: true when the line can safely preserve a visible soft break.
+ */
+function isPlainMarkdownLine(line: string): boolean {
+  const trimmed = line.trim()
+
+  if (!trimmed) {
+    return false
+  }
+
+  if (MARKDOWN_BLOCK_PATTERN.test(line) || TABLE_SEPARATOR_PATTERN.test(line)) {
+    return false
+  }
+
+  return true
 }

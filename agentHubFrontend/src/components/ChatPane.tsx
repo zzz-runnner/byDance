@@ -436,7 +436,7 @@ function TurnBlock({
             <div className="turn-process__body">
               {turn.processEntries.length > 0 ? (
                 turn.processEntries.map(entry => (
-                  <ProcessEntryRow
+                  <ProcessEntryCard
                     key={entry.id}
                     entry={entry}
                     agentName={entry.agentId ? agentMap.get(entry.agentId)?.name : undefined}
@@ -482,31 +482,79 @@ function TurnBlock({
   )
 }
 
-type ProcessEntryRowProps = {
+type ProcessEntryCardProps = {
   entry: ChatTurnProcessEntry
   agentName?: string
 }
 
 /**
- * Renders one readable process row inside the turn process panel.
+ * Renders one structured process card inside the turn process panel.
  * Input: process entry and optional agent display name.
- * Output: one process row.
+ * Output: one process card.
  */
-function ProcessEntryRow({ entry, agentName }: ProcessEntryRowProps) {
-  const Icon = toneIcon(entry.tone, entry.label)
+function ProcessEntryCard({ entry, agentName }: ProcessEntryCardProps) {
+  const Icon = processEntryIcon(entry)
 
   return (
-    <div className={`process-entry process-entry--${entry.tone}`}>
-      <span className="process-entry__icon">
-        <Icon size={14} />
-      </span>
-      <div className="process-entry__content">
-        <div className="process-entry__headline">
-          <strong>{agentName ? entry.label.replace(entry.agentId ?? '', agentName) : entry.label}</strong>
-          <time>{formatTime(entry.time)}</time>
+    <article className={`process-card process-card--${entry.kind} process-card--${entry.tone}`}>
+      <div className="process-card__top">
+        <span className="process-card__icon">
+          <Icon size={14} />
+        </span>
+        <div className="process-card__content">
+          <div className="process-card__headline">
+            <strong>{entry.title}</strong>
+            <time>{formatTime(entry.time)}</time>
+          </div>
+          <div className="process-card__meta">
+            {entry.badge ? <span className={`process-card__badge process-card__badge--${entry.kind}`}>{entry.badge}</span> : null}
+            {agentName ? <span className="process-card__agent">{agentName}</span> : null}
+            {entry.meta ? <span className="process-card__meta-text">{entry.meta}</span> : null}
+          </div>
         </div>
-        {entry.detail ? <p>{entry.detail}</p> : null}
       </div>
+      {entry.summary ? (
+        <MarkdownRenderer content={entry.summary} mode="process" className="markdown-content--process-body" />
+      ) : null}
+      {entry.logExcerpt ? <ProcessLogBlock entry={entry} /> : null}
+      {entry.detail ? (
+        <MarkdownRenderer content={entry.detail} mode="process" className="markdown-content--process-detail" />
+      ) : null}
+    </article>
+  )
+}
+
+type ProcessLogBlockProps = {
+  entry: ChatTurnProcessEntry
+}
+
+/**
+ * Renders one expandable execution log excerpt inside a process card.
+ * Input: process entry with aggregated log text.
+ * Output: one log block with collapse and expand behavior.
+ */
+function ProcessLogBlock({ entry }: ProcessLogBlockProps) {
+  const [expanded, setExpanded] = useState(false)
+  const logText = entry.logExcerpt ?? ''
+  const logLines = logText.split('\n').filter(Boolean)
+  const canExpand = logLines.length > 6 || logText.length > 360
+  const visibleText = canExpand && !expanded ? logLines.slice(-6).join('\n') : logText
+
+  return (
+    <div className={`process-log process-log--${entry.logStream ?? 'stdout'}`}>
+      <div className="process-log__header">
+        <span>{entry.logStream ?? 'log'}</span>
+        {canExpand ? (
+          <button
+            className="process-log__toggle"
+            type="button"
+            onClick={() => setExpanded(previous => !previous)}
+          >
+            {expanded ? '收起日志' : '展开日志'}
+          </button>
+        ) : null}
+      </div>
+      <pre className="process-log__body">{visibleText}</pre>
     </div>
   )
 }
@@ -550,7 +598,7 @@ function MessageBubble({
             isUser ? (
               <p>{message.content}</p>
             ) : (
-              <MarkdownRenderer content={message.content} className="markdown-content--bubble" />
+              <MarkdownRenderer content={message.content} mode="bubble" className="markdown-content--bubble" />
             )
           ) : (
             <p>正在生成回复...</p>
@@ -603,10 +651,12 @@ function InlineArtifactCard({ artifact }: InlineArtifactCardProps) {
       <span className="artifact-icon">
         <Icon size={18} />
       </span>
-      <span>
+      <div className="artifact-card__copy">
         <strong>{artifact.title}</strong>
-        <small>{artifact.content}</small>
-      </span>
+        <div className="artifact-card__summary">
+          <MarkdownRenderer content={artifact.content} mode="compact" className="markdown-content--compact" />
+        </div>
+      </div>
       <em>
         {actionLabel}
         <ExternalLink size={13} />
@@ -650,12 +700,14 @@ function TurnArtifactCard({ artifact, agentName, onOpenArtifact }: TurnArtifactC
       <span className={`artifact-icon artifact-icon--${artifact.kind}`}>
         <Icon size={18} />
       </span>
-      <span>
+      <div className="artifact-card__copy">
         <strong>{artifact.title}</strong>
-        <small>{artifact.summary}</small>
+        <div className="artifact-card__summary">
+          <MarkdownRenderer content={artifact.summary} mode="compact" className="markdown-content--compact" />
+        </div>
         {artifact.verdict ? <b className={`artifact-verdict artifact-verdict--${artifactVerdictTone(artifact.verdict)}`}>{artifact.verdict}</b> : null}
         {agentName ? <i>{agentName}</i> : null}
-      </span>
+      </div>
       <em>
         {actionLabel}
         {isExternalOnly ? <Download size={13} /> : <ExternalLink size={13} />}
@@ -813,7 +865,7 @@ function ArtifactDialog({ artifact, onClose }: ArtifactDialogProps) {
 
           {artifact.kind === 'diff' ? (
             <div className="artifact-detail-stack">
-              <MarkdownRenderer content={artifact.summary} className="markdown-content--panel" />
+              <MarkdownRenderer content={artifact.summary} mode="panel" className="markdown-content--panel" />
               {artifact.files?.length ? (
                 <div className="diff-file-list">
                   {artifact.files.map(file => (
@@ -834,7 +886,7 @@ function ArtifactDialog({ artifact, onClose }: ArtifactDialogProps) {
           {artifact.kind === 'review' ? (
             <div className="artifact-detail-stack">
               {artifact.verdict ? <StatusPill status={artifactVerdictPillStatus(artifact.verdict)} label={artifact.verdict} /> : null}
-              <MarkdownRenderer content={artifact.summary} className="markdown-content--panel" />
+              <MarkdownRenderer content={artifact.summary} mode="panel" className="markdown-content--panel" />
               {artifact.issues?.length ? (
                 <ul className="artifact-issue-list">
                   {artifact.issues.map((issue, index) => (
@@ -849,9 +901,9 @@ function ArtifactDialog({ artifact, onClose }: ArtifactDialogProps) {
 
           {(artifact.kind === 'text' || artifact.kind === 'artifact') ? (
             <div className="artifact-detail-stack">
-              <MarkdownRenderer content={artifact.summary} className="markdown-content--panel" />
+              <MarkdownRenderer content={artifact.summary} mode="panel" className="markdown-content--panel" />
               {artifact.detailText ? (
-                <MarkdownRenderer content={artifact.detailText} className="markdown-content--document markdown-content--panel" />
+                <MarkdownRenderer content={artifact.detailText} mode="document" className="markdown-content--document markdown-content--panel" />
               ) : null}
             </div>
           ) : null}
@@ -1260,11 +1312,43 @@ function turnStatusPillStatus(turn: ChatTurn): 'running' | 'success' | 'failed' 
 }
 
 /**
+ * Picks one icon based on process-card kind and tone.
+ * Input: process entry.
+ * Output: icon component.
+ */
+function processEntryIcon(entry: ChatTurnProcessEntry) {
+  if (entry.kind === 'review' || entry.kind === 'validation') {
+    return ShieldCheck
+  }
+  if (entry.kind === 'artifact' && /preview/i.test(entry.badge ?? '')) {
+    return Globe2
+  }
+  if (entry.kind === 'artifact' && /diff/i.test(entry.badge ?? '')) {
+    return Braces
+  }
+  if (entry.kind === 'log' || entry.kind === 'dispatch' || entry.kind === 'progress') {
+    return TerminalSquare
+  }
+  if (entry.kind === 'reply') {
+    return MessageSquareReply
+  }
+  if (entry.tone === 'danger') {
+    return AlertTriangle
+  }
+  if (entry.tone === 'success') {
+    return CheckCircle2
+  }
+  return LoaderCircle
+}
+
+/**
  * Picks one icon based on process tone and row label.
  * Input: tone and label text.
  * Output: icon component.
  */
-function toneIcon(tone: ChatProcessTone, label: string) {
+function toneIcon(entry: ChatTurnProcessEntry) {
+  const label = entry.title
+  const tone = entry.tone
   if (/审查|校验|结论/i.test(label)) {
     return ShieldCheck
   }

@@ -493,6 +493,7 @@ a {
 
 .workspace-copy,
 .artifact-card span:not(.artifact-icon),
+.artifact-card__copy,
 .artifact-mini span {
   min-width: 0;
 }
@@ -879,11 +880,11 @@ a {
 }
 
 .markdown-content__code-block {
-  margin: 0 0 12px;
+  margin: 0;
   padding: 14px;
   overflow-x: auto;
-  border: 1px solid rgba(255, 255, 255, 0.56);
-  border-radius: 16px;
+  border: 0;
+  border-radius: 0 0 16px 16px;
   background: rgba(248, 250, 252, 0.88);
   color: #1f2937;
   font-size: 12px;
@@ -895,6 +896,45 @@ a {
   color: inherit;
   font-family: "Consolas", "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
   white-space: pre;
+}
+
+.markdown-content__code-shell {
+  margin: 0 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.56);
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgba(248, 250, 252, 0.72);
+}
+
+.markdown-content__code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  background: rgba(226, 232, 240, 0.42);
+  color: #526071;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: lowercase;
+}
+
+.markdown-content__code-copy {
+  min-height: 24px;
+  padding: 0 9px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.75);
+  color: #334155;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.markdown-content__code-copy:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
 }
 
 .markdown-content__table-scroll {
@@ -945,6 +985,50 @@ a {
 
 .markdown-content--panel {
   color: #334155;
+}
+
+.markdown-content--compact {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.markdown-content--compact p,
+.markdown-content--compact ul,
+.markdown-content--compact ol,
+.markdown-content--compact blockquote,
+.markdown-content--compact pre,
+.markdown-content--compact table,
+.markdown-content--compact hr,
+.markdown-content--compact h1,
+.markdown-content--compact h2,
+.markdown-content--compact h3,
+.markdown-content--compact h4,
+.markdown-content--compact h5,
+.markdown-content--compact h6 {
+  margin: 0;
+}
+
+.markdown-content--process {
+  color: #42526a;
+  font-size: 12px;
+  line-height: 1.56;
+}
+
+.markdown-content--process p,
+.markdown-content--process ul,
+.markdown-content--process ol,
+.markdown-content--process blockquote,
+.markdown-content--process pre,
+.markdown-content--process table,
+.markdown-content--process hr,
+.markdown-content--process h1,
+.markdown-content--process h2,
+.markdown-content--process h3,
+.markdown-content--process h4,
+.markdown-content--process h5,
+.markdown-content--process h6 {
+  margin-bottom: 8px;
 }
 
 .markdown-content--document {
@@ -1095,6 +1179,166 @@ a {
   font-size: 12px;
 }
 
+.process-card {
+  display: grid;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.34);
+}
+
+.process-card__top {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.process-card__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.5);
+  color: #607087;
+}
+
+.process-card--running .process-card__icon {
+  color: var(--blue);
+}
+
+.process-card--success .process-card__icon {
+  color: var(--green);
+}
+
+.process-card--warning .process-card__icon {
+  color: var(--amber);
+}
+
+.process-card--danger .process-card__icon {
+  color: var(--danger);
+}
+
+.process-card__content {
+  min-width: 0;
+}
+
+.process-card__headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.process-card__headline strong {
+  min-width: 0;
+  color: #2d3747;
+  font-size: 12.5px;
+  font-weight: 800;
+}
+
+.process-card__headline time {
+  flex: 0 0 auto;
+  color: #7a8596;
+  font-size: 11px;
+}
+
+.process-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 5px;
+}
+
+.process-card__badge,
+.process-card__agent,
+.process-card__meta-text {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.process-card__badge {
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  background: rgba(59, 130, 246, 0.08);
+  color: #2563eb;
+}
+
+.process-card__agent {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.54);
+  color: #475569;
+}
+
+.process-card__meta-text {
+  padding: 0;
+  color: #6b7280;
+  font-weight: 700;
+}
+
+.markdown-content--process-body,
+.markdown-content--process-detail {
+  margin: 0;
+}
+
+.markdown-content--process-detail {
+  padding-top: 2px;
+}
+
+.process-log {
+  overflow: hidden;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.process-log--stderr {
+  border-color: rgba(217, 119, 6, 0.18);
+  background: rgba(255, 251, 235, 0.92);
+}
+
+.process-log__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 11px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.82);
+  color: #526071;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.process-log__toggle {
+  padding: 0;
+  background: transparent;
+  color: #2563eb;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.process-log__body {
+  margin: 0;
+  padding: 10px 11px 12px;
+  overflow-x: auto;
+  color: #1f2937;
+  font-size: 11.5px;
+  line-height: 1.55;
+  font-family: "Consolas", "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .process-entry {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -1226,6 +1470,11 @@ a {
   -webkit-line-clamp: 2;
 }
 
+.artifact-card__summary {
+  min-width: 0;
+  margin-top: 2px;
+}
+
 .artifact-card em {
   display: inline-flex;
   gap: 3px;
@@ -1237,13 +1486,13 @@ a {
   white-space: nowrap;
 }
 
-.artifact-card span b,
-.artifact-card span i {
+.artifact-card__copy b,
+.artifact-card__copy i {
   display: inline-flex;
   margin-top: 4px;
 }
 
-.artifact-card span i {
+.artifact-card__copy i {
   color: #64748b;
   font-size: 10.5px;
   font-style: normal;

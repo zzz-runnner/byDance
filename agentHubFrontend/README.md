@@ -31,7 +31,7 @@ The frontend is now `live-only`. If the business backend API is unavailable, the
 ## Current UI Status
 
 - One workspace maps to one chat window in the web workbench.
-- AI replies now render through a controlled Markdown pipeline based on `react-markdown + remark-gfm`.
+- AI-authored replies, process summaries, and artifact text now render through one controlled Markdown pipeline based on `react-markdown + remark-gfm`.
 - Group workspaces support a WeChat-style `@` mention picker for child agents inside the composer.
 - Direct workspaces keep a fixed target agent and do not open the `@` picker.
 - Composer shortcut chips still exist as a fallback, and all insertions respect the current caret position.
@@ -42,10 +42,12 @@ The frontend is now `live-only`. If the business backend API is unavailable, the
 - The chat list renders temporary routing and reply placeholders so the user sees waiting bubbles before the final streamed message arrives.
 - Each user turn renders as one chat block with the user message, a `本轮过程` section, inline artifact cards, and the final agent result.
 - `本轮过程` stays expanded while a turn is active, auto-collapses after completion, and stays open for failed or partial turns.
+- `本轮过程` now shows structured execution cards for routing, dispatch, progress, logs, validation, synthesis, and reply output, with readable log excerpts inside the chat stream.
 - Preview, diff, review, zip, and text artifacts live inside the main chat stream.
 - Preview dialogs now show `loading / slow / error` states before the iframe becomes ready.
 - The first page load now shows a blocking loading screen, and backend disconnection shows a blocking error screen with retry.
-- AI Markdown output is lightly normalized before rendering, so noisy separators, empty bullets, empty headings, and incomplete fences do not break the chat bubble layout.
+- AI Markdown output is lightly normalized before rendering, so noisy separators, empty bullets, empty headings, incomplete fences, and conversational soft line breaks do not break the chat layout.
+- Fenced code blocks render inside a shared code shell with language labels and copy actions, while raw HTML remains disabled.
 
 ## Boundary
 

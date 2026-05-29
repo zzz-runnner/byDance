@@ -44,7 +44,8 @@ The current local path is focused on one workspace equals one chat window.
 - The main chat surface groups each user turn into one visible block: user message, `本轮过程`, inline artifact cards, and the final agent result.
 - `本轮过程` stays expanded while a turn is still running, auto-collapses after the turn completes, and remains expanded for failed or partial turns.
 - Preview, diff, review, zip, and text artifacts are rendered inside the chat stream instead of depending on the right-side status dock.
-- AI reply bubbles now use a controlled Markdown renderer with GFM support and a lightweight normalization layer for noisy separators, empty headings, empty bullets, and incomplete code fences.
+- AI-authored reply bubbles, process summaries, and artifact text now use one controlled Markdown renderer with GFM support, safe-link handling, code-block copy actions, and a lightweight normalization layer for noisy separators, empty headings, empty bullets, and incomplete code fences.
+- `本轮过程` now renders structured execution cards for routing, dispatch, progress, logs, validation, synthesis, and reply output, with readable log excerpts instead of generic status rows.
 - Frontend startup is now `live-only`: first load shows a blocking loading state, backend failure shows a blocking retry state, and the page no longer falls back to mock/demo workspaces.
 - Preview dialogs now show `loading / slow / error` states before iframe content is ready.
 - When the page is viewed through a remote desktop or remote-control session, decorative blur layers and React dev-mode re-renders can look like visible flicker. Treat this as an environment observation first, not as a confirmed frontend callback loop.
