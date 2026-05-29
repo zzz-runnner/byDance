@@ -376,6 +376,7 @@ npm run chat -- --once "@main 我主要想做一个候选人投票的小程序�
 
 - 前端只暴露“工作区”，不再展示独立会话列表；一个群聊工作区和一个单聊工作区都表现为一个可切换工作区。
 - 群聊工作区：默认由 Orchestrator 判断、拆解和调度；用户在群聊中 `@engineer`、`@reviewer` 等子 Agent 时，目标 Agent 在群聊上下文中定向回复。
+- 群聊工作区里如果用户明确 `@单个 Agent` 且当前回合不需要进入执行链路，该子 Agent 会直接成为可见回复者；只有多 Agent 调度或综合总结时才由 Orchestrator 出声。
 - 单聊工作区：固定发送给一个目标 Agent，适合明确任务、复查或一对一上下文沉淀。
 - 后端和数据库仍保留 `workspace + conversation`，前端通过 `WorkspaceRoom` 自动选择每个 workspace 的 primary internal conversation，并隐藏这层实现细节。
 

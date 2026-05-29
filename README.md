@@ -30,6 +30,7 @@ It supports both:
 - Group workspaces backed by the main orchestrated conversation
 - Direct workspaces backed by a runtime direct conversation for one target agent
 - Group chat composer supports a WeChat-style `@` picker for child agents, while direct rooms keep a fixed target and do not show the picker
+- `locateBackend` now forwards one explicit group-chat `@agent` mention as a real upstream target agent instead of leaving that turn to Orchestrator inference
 
 ## Dependency Management
 

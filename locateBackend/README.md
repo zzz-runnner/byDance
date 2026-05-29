@@ -19,6 +19,7 @@ The local adapter now supports:
 - Loading runtime agent definitions from `agentHub`
 - Creating group workspaces
 - Creating direct workspaces backed by a real runtime direct conversation
+- Forwarding a unique group-chat `@agent` mention as an explicit target agent for upstream message routing
 - Streaming SSE workflow events from `agentHub`
 - Proxying preview assets
 - Proxying workspace zip downloads

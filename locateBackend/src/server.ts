@@ -161,11 +161,13 @@ export function createServer(config: AppConfig) {
       throw createHttpError(404, `Project not found: ${projectId}`)
     }
 
+    const state = await agentHub.fetchState()
+    const targetAgentId = resolveStreamTargetAgentId(project, input, state)
     const upstream = await agentHub.streamMessage({
       workspaceId: project.workspaceId,
       conversationId: input.conversationId ?? project.conversationId,
       content: input.content,
-      ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(targetAgentId ? { agentId: targetAgentId } : {}),
     })
 
     await sendSseUpstreamResponse(reply, upstream)
@@ -328,4 +330,67 @@ function selectLatestWorkspace(
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 
   return named[0] ?? [...workspaces].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+}
+
+/**
+ * Resolves the current conversation for one frontend message stream request.
+ * Input: runtime conversation list, stored project, and optional requested conversation id.
+ * Output: the matching runtime conversation when it exists.
+ */
+function resolveStreamConversation(
+  conversations: RuntimeAppState['conversations'],
+  project: StoredProjectRecord,
+  conversationId?: string,
+) {
+  const targetConversationId = conversationId ?? project.conversationId
+  return conversations.find(conversation => conversation.id === targetConversationId)
+}
+
+/**
+ * Detects one explicit child-agent mention from group-chat composer content.
+ * Input: raw composer content and candidate runtime agents.
+ * Output: one unique agent id when the user explicitly mentioned exactly one child agent.
+ */
+function resolveMentionTargetAgentId(content: string, agents: RuntimeAgent[]): string | undefined {
+  const normalized = content.toLowerCase()
+  const matches = [...new Set(
+    agents
+      .filter(agent => agent.id !== 'orchestrator')
+      .filter(agent => {
+        const agentId = agent.id.toLowerCase()
+        const agentName = agent.name?.toLowerCase()
+        return normalized.includes(`@${agentId}`) || Boolean(agentName && normalized.includes(`@${agentName}`))
+      })
+      .map(agent => agent.id),
+  )]
+
+  return matches.length === 1 ? matches[0] : undefined
+}
+
+/**
+ * Resolves the upstream target agent for one streamed frontend message.
+ * Input: stored project metadata, frontend stream input, and the latest runtime state.
+ * Output: direct target agent id or one explicit group-chat @ mention.
+ */
+function resolveStreamTargetAgentId(
+  project: StoredProjectRecord,
+  input: StreamProjectMessageInput,
+  state: RuntimeAppState,
+): string | undefined {
+  if (input.agentId?.trim()) {
+    return input.agentId.trim()
+  }
+
+  const conversation = resolveStreamConversation(state.conversations, project, input.conversationId)
+
+  if (!conversation) {
+    return project.targetAgentId
+  }
+
+  if (conversation.type === 'direct') {
+    return conversation.participants.find(participant => participant !== 'user') ?? project.targetAgentId
+  }
+
+  const candidateAgents = state.agents.filter(agent => conversation.participants.includes(agent.id))
+  return resolveMentionTargetAgentId(input.content, candidateAgents)
 }

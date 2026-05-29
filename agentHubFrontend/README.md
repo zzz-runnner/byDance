@@ -29,6 +29,7 @@ If the business backend API is unavailable, the frontend falls back to local dem
 - Group workspaces now support a WeChat-style `@` mention picker for child agents inside the composer.
 - Direct workspaces keep a fixed target agent and do not open the `@` picker.
 - Composer shortcut chips still exist as a fallback, and all insertions now respect the current caret position.
+- In local live mode, one explicit group-chat `@agent` mention now routes to that child agent for the visible reply instead of always falling back to Orchestrator.
 
 ## Boundary
 
