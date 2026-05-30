@@ -7,6 +7,7 @@ import { AgentHubClientService } from '../agent-hub/agent-hub.service'
 import { AgentHubState, AgentHubWorkspace } from '../agent-hub/agent-hub.types'
 import { isoNow } from '../common/time'
 import { LocalStorageService } from '../storage/local-storage.service'
+import { ProjectMetadataStore } from './project-metadata.store'
 import { CreateProjectDto, StreamProjectMessageDto, WriteWorkspaceFileDto } from './projects.dto'
 import { ProjectMetadata, ProjectWorkflowSummary } from './project.types'
 
@@ -19,6 +20,7 @@ interface SseParseResult {
 export class ProjectsService {
   constructor(
     private readonly storage: LocalStorageService,
+    private readonly projectStore: ProjectMetadataStore,
     private readonly agentHub: AgentHubClientService,
   ) {}
 
@@ -53,27 +55,15 @@ export class ProjectsService {
   }
 
   async listProjects(): Promise<ProjectMetadata[]> {
-    await fs.ensureDir(this.storage.projectsRoot)
-    const entries = await fs.readdir(this.storage.projectsRoot)
-    const projects = await Promise.all(entries.map(async entry => {
-      try {
-        return await this.getProject(entry)
-      } catch {
-        return undefined
-      }
-    }))
-
-    return projects
-      .filter((project): project is ProjectMetadata => Boolean(project))
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    return this.projectStore.listProjects()
   }
 
   async getProject(projectId: string): Promise<ProjectMetadata> {
-    const metadataPath = this.storage.projectMetadataPath(projectId)
-    if (!(await fs.pathExists(metadataPath))) {
+    const project = await this.projectStore.getProject(projectId)
+    if (!project) {
       throw new NotFoundException(`Project not found: ${projectId}`)
     }
-    return fs.readJson(metadataPath) as Promise<ProjectMetadata>
+    return project
   }
 
   async updateProject(
@@ -233,8 +223,7 @@ export class ProjectsService {
   }
 
   private async saveProject(project: ProjectMetadata): Promise<void> {
-    await fs.ensureDir(this.storage.projectDir(project.projectId))
-    await fs.writeJson(this.storage.projectMetadataPath(project.projectId), project, { spaces: 2 })
+    await this.projectStore.saveProject(project)
   }
 
   private parseSseFrames(input: string): SseParseResult {
