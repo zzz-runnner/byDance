@@ -34,6 +34,12 @@ const StreamProjectMessageInputSchema = z.object({
   content: z.string().min(1),
   conversationId: z.string().optional(),
   agentId: z.string().optional(),
+  replyTo: z.object({
+    messageId: z.string(),
+    senderId: z.string(),
+    senderName: z.string().optional(),
+    excerpt: z.string().min(1),
+  }).optional(),
 })
 
 type HttpError = Error & {
@@ -167,6 +173,7 @@ export function createServer(config: AppConfig) {
       workspaceId: project.workspaceId,
       conversationId: input.conversationId ?? project.conversationId,
       content: input.content,
+      replyTo: input.replyTo,
       ...(targetAgentId ? { agentId: targetAgentId } : {}),
     })
 

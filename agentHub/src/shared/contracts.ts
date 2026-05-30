@@ -211,6 +211,14 @@ export const ConversationSchema = z.object({
 })
 export type Conversation = z.infer<typeof ConversationSchema>
 
+export const ReplyReferenceSchema = z.object({
+  messageId: z.string(),
+  senderId: z.string(),
+  senderName: z.string().optional(),
+  excerpt: z.string(),
+})
+export type ReplyReference = z.infer<typeof ReplyReferenceSchema>
+
 export const MessageSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
@@ -218,6 +226,7 @@ export const MessageSchema = z.object({
   senderType: SenderTypeSchema,
   senderId: z.string(),
   content: z.string(),
+  replyTo: ReplyReferenceSchema.optional(),
   artifacts: z.array(ArtifactSchema),
   createdAt: z.string(),
 })
@@ -865,6 +874,7 @@ export const SendMessageInputSchema = z.object({
   conversationId: z.string(),
   content: z.string().min(1),
   agentId: z.string().optional(),
+  replyTo: ReplyReferenceSchema.optional(),
 })
 export type SendMessageInput = z.infer<typeof SendMessageInputSchema>
 

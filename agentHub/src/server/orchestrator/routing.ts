@@ -1,10 +1,12 @@
-import type { AgentDefinition, Conversation, MainBrainTurn, RoutingTaskBrief } from '@shared/contracts'
+import type { AgentDefinition, Conversation, MainBrainTurn, ReplyReference, RoutingTaskBrief } from '@shared/contracts'
+import { resolveReplyTargetAgentId } from './reply-context'
 
 export type RoutingInput = {
   content: string
   conversation: Conversation
   agents: AgentDefinition[]
   targetAgentId?: string
+  replyTo?: ReplyReference
 }
 
 /**
@@ -51,7 +53,10 @@ function taskBrief(agentId: string, task: string, expectedOutput: string): Routi
  * Input: user message, conversation, agents, and optional explicit target. Output: main-brain turn.
  */
 export function decideRouting(input: RoutingInput): MainBrainTurn {
-  const mentionedAgentId = input.targetAgentId ?? findMentionedAgent(input.content, input.agents)
+  const mentionedAgentId =
+    input.targetAgentId ??
+    findMentionedAgent(input.content, input.agents) ??
+    resolveReplyTargetAgentId(input.replyTo, input.agents)
   if (mentionedAgentId) {
     return {
       kind: 'dispatch_agents',

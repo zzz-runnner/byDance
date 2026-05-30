@@ -68,6 +68,16 @@ function selectConversationEvents(state: AppState, conversationId: string): Work
 }
 
 /**
+ * Selects one conversation message list in chronological order.
+ * Input: application state and conversation id. Output: sorted conversation messages.
+ */
+function selectConversationMessages(state: AppState, conversationId: string) {
+  return state.messages
+    .filter(message => message.conversationId === conversationId)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+}
+
+/**
  * Returns whether one event type appears in a workflow event list.
  * Input: workflow events and an event type. Output: true when present.
  */
@@ -234,4 +244,62 @@ describe.skipIf(!realTestsEnabled())('real main agent chain probe', () => {
     assertProbe(hasEvent(report.recentEvents, 'preview_ready'), 'Expected preview_ready event after engineer file output.', report)
     assertProbe(hasEvent(report.recentEvents, 'synthesis_finished'), 'Expected synthesis_finished event after child-agent runs.', report)
   }, 720_000)
+
+  it('keeps quoted engineer follow-ups with engineer in a real group room', async () => {
+    testApp = await createRealTestApp('agenthub-chain-')
+    const initialState = (await testApp.app.inject({ method: 'GET', url: '/api/state' })).json() as AppState
+    const { workspace, conversation } = selectPrimaryGroup(initialState)
+
+    const firstTurn = await testApp.app.inject({
+      method: 'POST',
+      url: '/api/messages',
+      payload: {
+        workspaceId: workspace.id,
+        conversationId: conversation.id,
+        agentId: 'engineer',
+        content: '@engineer Only explain the technical approach for transport, persistence, and UI state. Do not change code.',
+      },
+    })
+    const firstState = firstTurn.json() as AppState
+    const firstMessages = selectConversationMessages(firstState, conversation.id)
+    const quotedEngineerMessage = [...firstMessages].reverse().find(message => message.senderType === 'agent')
+    if (!quotedEngineerMessage) {
+      throw new Error('Expected the first real engineer reply to exist.')
+    }
+
+    const secondTurn = await testApp.app.inject({
+      method: 'POST',
+      url: '/api/messages',
+      payload: {
+        workspaceId: workspace.id,
+        conversationId: conversation.id,
+        content: 'Keep it minimal. Focus on transport and UI state.',
+        replyTo: {
+          messageId: quotedEngineerMessage.id,
+          senderId: quotedEngineerMessage.senderId,
+          senderName: quotedEngineerMessage.senderId,
+          excerpt: quotedEngineerMessage.content.slice(0, 120),
+        },
+      },
+    })
+    const secondState = secondTurn.json() as AppState
+    const secondMessages = selectConversationMessages(secondState, conversation.id)
+    const latestUserMessage = [...secondMessages].reverse().find(message => message.senderType === 'user')
+    const latestAgentMessage = [...secondMessages].reverse().find(message => message.senderType === 'agent')
+    const latestRoutingEvent = selectConversationEvents(secondState, conversation.id)
+      .filter(record => record.event.type === 'routing_finished')
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .at(-1)
+
+    expect(firstTurn.statusCode).toBe(200)
+    expect(secondTurn.statusCode).toBe(200)
+    expect(quotedEngineerMessage.senderId).toBe('engineer')
+    expect(latestUserMessage?.replyTo?.senderId).toBe('engineer')
+    expect(latestAgentMessage?.senderId).toBe('engineer')
+    expect(latestRoutingEvent?.event).toMatchObject({
+      type: 'routing_finished',
+      speakerAgentId: 'engineer',
+      finalizationMode: 'speaker_direct',
+    })
+  }, 360_000)
 })

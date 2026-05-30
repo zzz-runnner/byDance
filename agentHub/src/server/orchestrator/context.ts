@@ -4,10 +4,12 @@ import type {
   Conversation,
   ContextSnapshot,
   MainBrainTurn,
+  ReplyReference,
   RoutingTaskBrief,
   Workspace,
 } from '@shared/contracts'
 import type { DeliveryValidationResult, ReviewVerdictResult } from './delivery/types'
+import { buildReplyContextPayload } from './reply-context'
 
 /**
  * Describes a compacted context payload plus its storage summary.
@@ -24,6 +26,7 @@ type MessageSlice = {
   senderType: string
   senderId: string
   content: string
+  replyTo?: ReplyReference
   createdAt: string
 }
 
@@ -110,6 +113,7 @@ type PlannerContextInput = {
   workspace: Workspace
   conversation: Conversation
   userMessage: string
+  replyTo?: ReplyReference
   agents: AgentDefinition[]
 }
 
@@ -237,6 +241,7 @@ function selectMessages(
       senderType: message.senderType,
       senderId: message.senderId,
       content: compactText(message.content, 360),
+      replyTo: message.replyTo,
       createdAt: message.createdAt,
     }))
 
@@ -262,6 +267,7 @@ function selectMessages(
       senderType: message.senderType,
       senderId: message.senderId,
       content: compactText(message.content, 280),
+      replyTo: message.replyTo,
       createdAt: message.createdAt,
     }))
 
@@ -284,6 +290,7 @@ function selectPinnedMessages(state: AppState, workspace: Workspace): MessageSli
       senderType: message.senderType,
       senderId: message.senderId,
       content: compactText(message.content, 280),
+      replyTo: message.replyTo,
       createdAt: message.createdAt,
     }))
 }
@@ -599,6 +606,7 @@ export function buildPlannerContextPackage(input: PlannerContextInput): string {
   return JSON.stringify(
     {
       userMessage: input.userMessage,
+      replyContext: buildReplyContextPayload(input.replyTo, input.agents),
       workspace: {
         id: input.workspace.id,
         name: input.workspace.name,

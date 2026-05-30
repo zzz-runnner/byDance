@@ -120,6 +120,10 @@ function toMessage(row: Record<string, unknown>): Message {
     senderType: row.sender_type as Message['senderType'],
     senderId: String(row.sender_id),
     content: String(row.content),
+    replyTo:
+      row.reply_to === null || row.reply_to === undefined
+        ? undefined
+        : asObject<NonNullable<Message['replyTo']>>(row.reply_to),
     artifacts: (Array.isArray(row.artifacts) ? row.artifacts : []) as Artifact[],
     createdAt: String(row.created_at),
   }
@@ -374,6 +378,7 @@ async function createSchema(pool: Pool): Promise<void> {
       sender_type text not null,
       sender_id text not null,
       content text not null,
+      reply_to jsonb,
       artifacts jsonb not null,
       created_at text not null
     );
@@ -522,6 +527,11 @@ async function createSchema(pool: Pool): Promise<void> {
     );
   `)
 
+  await pool.query(`
+    alter table ${TABLES.messages}
+    add column if not exists reply_to jsonb;
+  `)
+
   await pool.query(`alter table ${TABLES.agentRuns} add column if not exists session_id text`)
   await pool.query(`alter table ${TABLES.agentRuns} add column if not exists handoff_id text`)
   await pool.query(`alter table ${TABLES.agents} add column if not exists routing_profile jsonb`)
@@ -648,8 +658,8 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     await client.query(
         `
           insert into ${TABLES.messages} (
-            id, workspace_id, conversation_id, sender_type, sender_id, content, artifacts, created_at
-          ) values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)
+            id, workspace_id, conversation_id, sender_type, sender_id, content, reply_to, artifacts, created_at
+          ) values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9)
         `,
         [
           message.id,
@@ -658,6 +668,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
           message.senderType,
           message.senderId,
           message.content,
+          toJsonParam(message.replyTo),
           toJsonParam(message.artifacts),
           message.createdAt,
         ],

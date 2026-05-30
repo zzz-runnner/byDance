@@ -20,6 +20,16 @@ function selectPrimaryConversation(state: AppState): { workspaceId: string; conv
   }
 }
 
+/**
+ * Returns one conversation-scoped message list in chronological order.
+ * Input: application state and conversation id. Output: sorted conversation messages.
+ */
+function selectConversationMessages(state: AppState, conversationId: string) {
+  return state.messages
+    .filter(message => message.conversationId === conversationId)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+}
+
 afterEach(async () => {
   await cleanupTestApp(testApp)
   testApp = undefined
@@ -67,6 +77,65 @@ describe('mock workflow integration', () => {
     expect(state.agentRuns.map(run => run.agentId)).not.toContain('engineer')
     expect(state.taskHandoffs.map(handoff => handoff.agentId)).not.toContain('engineer')
     expect(state.taskHandoffs.map(handoff => handoff.agentId)).toContain('product-manager')
+  })
+
+  it('keeps the quoted child agent as the visible speaker in a group follow-up turn', async () => {
+    testApp = await createMockTestApp('agenthub-workflow-')
+    const initialState = (await testApp.app.inject({ method: 'GET', url: '/api/state' })).json() as AppState
+    const target = selectPrimaryConversation(initialState)
+
+    const firstTurn = await testApp.app.inject({
+      method: 'POST',
+      url: '/api/messages',
+      payload: {
+        ...target,
+        agentId: 'engineer',
+        content: '@engineer Only explain the technical approach for transport, persistence, and UI state. Do not change code.',
+      },
+    })
+
+    const firstState = firstTurn.json() as AppState
+    const firstMessages = selectConversationMessages(firstState, target.conversationId)
+    const quotedEngineerMessage = [...firstMessages].reverse().find(message => message.senderType === 'agent')
+    if (!quotedEngineerMessage) {
+      throw new Error('Expected the first directed engineer reply to exist.')
+    }
+
+    const firstProductHandoffCount = firstState.taskHandoffs.filter(handoff => handoff.agentId === 'product-manager').length
+
+    const secondTurn = await testApp.app.inject({
+      method: 'POST',
+      url: '/api/messages',
+      payload: {
+        ...target,
+        content: 'Keep it minimal. Focus on transport and UI state.',
+        replyTo: {
+          messageId: quotedEngineerMessage.id,
+          senderId: quotedEngineerMessage.senderId,
+          senderName: quotedEngineerMessage.senderId,
+          excerpt: quotedEngineerMessage.content.slice(0, 120),
+        },
+      },
+    })
+
+    const secondState = secondTurn.json() as AppState
+    const secondMessages = selectConversationMessages(secondState, target.conversationId)
+    const latestAgentMessage = [...secondMessages].reverse().find(message => message.senderType === 'agent')
+    const latestRoutingEvent = [...secondState.workflowEvents]
+      .filter(record => record.conversationId === target.conversationId && record.event.type === 'routing_finished')
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .at(-1)
+
+    expect(secondTurn.statusCode).toBe(200)
+    expect(quotedEngineerMessage.senderId).toBe('engineer')
+    expect(secondMessages.at(-2)?.replyTo?.senderId).toBe('engineer')
+    expect(latestAgentMessage?.senderId).toBe('engineer')
+    expect(latestRoutingEvent?.event).toMatchObject({
+      type: 'routing_finished',
+      speakerAgentId: 'engineer',
+      finalizationMode: 'speaker_direct',
+    })
+    expect(secondState.taskHandoffs.filter(handoff => handoff.agentId === 'product-manager')).toHaveLength(firstProductHandoffCount)
   })
 
   it('creates handoff and run records for explicit direct-agent run tasks', async () => {

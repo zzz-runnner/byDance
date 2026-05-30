@@ -1,13 +1,16 @@
-import type { AgentDefinition, Conversation, MainBrainSynthesis, Workspace } from '@shared/contracts'
+import type { AgentDefinition, Conversation, MainBrainSynthesis, ReplyReference, Workspace } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import type { ModelGatewayRequest } from '../model-gateway'
 import { selectModelForRoute, type TurnRoute } from './turn-router'
+import { buildReplyContextPayload } from './reply-context'
 
 type MainBrainReplyInput = {
   env: ServerEnv
   workspace: Workspace
   conversation: Conversation
   userMessage: string
+  replyTo?: ReplyReference
+  agents?: AgentDefinition[]
   route?: TurnRoute
   fallbackText?: string
 }
@@ -18,6 +21,7 @@ type AgentSessionReplyInput = {
   conversation: Conversation
   agent: AgentDefinition
   userMessage: string
+  replyTo?: ReplyReference
   sessionContext: string
   route?: TurnRoute
   fallbackText?: string
@@ -57,6 +61,7 @@ export function buildMainBrainReplyRequest(input: MainBrainReplyInput): ModelGat
     ].join('\n'),
     userPrompt: jsonBlock({
       userMessage: input.userMessage,
+      replyContext: buildReplyContextPayload(input.replyTo, input.agents ?? []),
       workspace: {
         id: input.workspace.id,
         name: input.workspace.name,
@@ -111,6 +116,7 @@ export function buildAgentSessionReplyRequest(input: AgentSessionReplyInput): Mo
     ].join('\n'),
     userPrompt: jsonBlock({
       userMessage: input.userMessage,
+      replyContext: buildReplyContextPayload(input.replyTo, [input.agent]),
       workspace: {
         id: input.workspace.id,
         name: input.workspace.name,

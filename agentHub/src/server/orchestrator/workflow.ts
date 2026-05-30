@@ -32,6 +32,7 @@ import {
 } from './artifacts'
 import { decideRoutingWithPlanner, type PlannedRoutingDecision } from './planner'
 import { selectDynamicVisibleSpeaker } from './dynamic-speaker-selection'
+import { resolveReplyContinuationAgentId } from './reply-context'
 import { synthesizeLocally, synthesizeWithMainBrain, type PlannedSynthesis } from './synthesis'
 import { runAutomaticRepairIfNeeded, type TaskBriefRunResult } from './repair'
 import {
@@ -1084,6 +1085,7 @@ async function runDirectedAgentConversationTurn(
   conversation: Conversation,
   agentId: string,
   rawContent: string,
+  replyTo?: SendMessageInput['replyTo'],
 ): Promise<AppState> {
   const agent = requiredById(state.agents, agentId, 'Agent')
   const normalizedContent = stripLeadingAgentMention(rawContent, agent) || rawContent.trim()
@@ -1093,6 +1095,7 @@ async function runDirectedAgentConversationTurn(
     workspace,
     conversation,
     agent,
+    replyTo,
   })
   const previewWillStreamFinalText =
     localRoutePreview && !routeAllowsExecution(localRoutePreview) && localRoutePreview.modelProfile === 'router'
@@ -1148,6 +1151,7 @@ async function runDirectedAgentConversationTurn(
     agent,
     session,
     content: normalizedContent,
+    replyTo,
   })
   logDiagnostic(workflowServices, {
     level: plannedTurn.routeError ? 'warn' : 'info',
@@ -1585,6 +1589,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     senderType: 'user',
     senderId: 'user',
     content: input.content,
+    replyTo: input.replyTo,
     artifacts: [],
   })
 
@@ -1626,6 +1631,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       conversation,
       directAgentId,
       input.content,
+      input.replyTo,
     )
     /*
     const agent = requiredById(state.agents, directAgentId, 'Agent')
@@ -1826,6 +1832,28 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     */
   }
 
+  const replyContinuationAgentId =
+    !input.agentId && conversation.type === 'group'
+      ? resolveReplyContinuationAgentId(input.replyTo, conversation, state.agents)
+      : undefined
+  const directedGroupAgentId = conversation.type === 'group'
+    ? input.agentId ?? replyContinuationAgentId
+    : undefined
+
+  if (replyContinuationAgentId) {
+    logDiagnostic(workflowServices, {
+      level: 'info',
+      category: 'routing',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      agentId: replyContinuationAgentId,
+      message: 'Preserved quoted child-agent continuity for the current group turn.',
+      data: {
+        replyTo: input.replyTo,
+      },
+    })
+  }
+
   emitWorkflowEvent(workflowServices, {
     type: 'workflow_received',
     workspaceId: input.workspaceId,
@@ -1838,6 +1866,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     content: input.content,
     workspace,
     conversation,
+    replyTo: input.replyTo,
   })
   logDiagnostic(workflowServices, {
     level: mainRoute.error ? 'warn' : 'info',
@@ -1855,8 +1884,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
   })
   emitTaskStageUpdated(workflowServices, workspace, conversation, mainRoute.route)
 
-  const groupDirectedAgentId = input.agentId && conversation.type === 'group' ? input.agentId : undefined
-  if (groupDirectedAgentId && !routeAllowsExecution(mainRoute.route)) {
+  if (directedGroupAgentId && !routeAllowsExecution(mainRoute.route)) {
     emitWorkflowEvent(workflowServices, {
       type: 'routing_finished',
       workspaceId: input.workspaceId,
@@ -1868,20 +1896,21 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       taskStage: mainRoute.route.taskStage,
       executionReadiness: mainRoute.route.executionReadiness,
       needsUserConfirmation: mainRoute.route.needsUserConfirmation,
-      speakerAgentId: groupDirectedAgentId,
+      speakerAgentId: directedGroupAgentId,
       finalizationMode: 'speaker_direct',
       mode: 'single_agent',
       brainKind: 'dispatch_agents',
       execution: 'serial',
-      targetAgents: [groupDirectedAgentId],
+      targetAgents: [directedGroupAgentId],
     })
     return await runDirectedAgentConversationTurn(
       workflowServices,
       state,
       workspace,
       conversation,
-      groupDirectedAgentId,
+      directedGroupAgentId,
       input.content,
+      input.replyTo,
     )
   }
 
@@ -1890,6 +1919,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     conversation,
     agents: state.agents,
     taskStage: mainRoute.route.taskStage,
+    replyTo: input.replyTo,
   })
   if (
     dynamicVisibleSpeaker &&
@@ -1930,6 +1960,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       conversation,
       dynamicVisibleSpeaker.agentId,
       input.content,
+      input.replyTo,
     )
   }
 
@@ -1957,6 +1988,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       workspace,
       conversation,
       input.content,
+      input.replyTo,
       mainRoute.route,
       mainRoute.route.localResponse,
     )
@@ -2054,7 +2086,8 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
         content: input.content,
         conversation,
         agents: state.agents,
-        targetAgentId: input.agentId,
+        targetAgentId: directedGroupAgentId,
+        replyTo: input.replyTo,
         env: workflowServices.env,
         state,
         workspace,

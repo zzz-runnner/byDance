@@ -92,6 +92,12 @@ export class AgentHubClient {
     conversationId: string
     content: string
     agentId?: string
+    replyTo?: {
+      messageId: string
+      senderId: string
+      senderName?: string
+      excerpt: string
+    }
   }): Promise<Response> {
     return fetch(this.url('/api/messages/stream'), {
       method: 'POST',

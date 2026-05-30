@@ -280,15 +280,19 @@ export async function streamAndPersistMainBrainReply(
   workspace: Workspace,
   conversation: Conversation,
   userMessage: string,
+  replyTo?: Message['replyTo'],
   route?: TurnRoute,
   fallbackText?: string,
 ): Promise<string> {
   const safeFallback = fallbackText?.trim() || '已收到。'
+  const latestState = await services.store.read()
   const request = buildMainBrainReplyRequest({
     env: services.env,
     workspace,
     conversation,
     userMessage,
+    replyTo,
+    agents: latestState.agents,
     route,
     fallbackText: safeFallback,
   })
@@ -371,12 +375,13 @@ export async function streamAndPersistAgentReply(
   const sessionContext = buildAgentSessionContextPackage({
     state: latestState,
     workspace: input.workspace,
-    conversation: input.conversation,
-    agent: input.agent,
-    session: input.session,
-    userMessage: input.userContent,
-    contextProfile: input.route?.contextProfile,
-  })
+      conversation: input.conversation,
+      agent: input.agent,
+      session: input.session,
+      userMessage: input.userContent,
+      replyTo: input.replyTo,
+      contextProfile: input.route?.contextProfile,
+    })
   const request = input.turn.finalResponse?.trim()
     ? undefined
     : buildAgentSessionReplyRequest({
@@ -385,6 +390,7 @@ export async function streamAndPersistAgentReply(
         conversation: input.conversation,
         agent: input.agent,
         userMessage: input.userContent,
+        replyTo: input.replyTo,
         sessionContext,
         route: input.route,
         fallbackText: safeFallback,
