@@ -121,12 +121,14 @@ cd E:\byDance\agentHub
 $env:AGENTHUB_RUN_REAL_TESTS='true'
 npx vitest run tests/real/agent-chain-probe.test.ts -t "keeps an unapproved planning request out of the engineer path" --reporter=verbose
 npx vitest run tests/real/agent-chain-probe.test.ts -t "probes the approved main chain through engineer, reviewer, and synthesis" --reporter=verbose
+npx vitest run tests/real/agent-chain-probe.test.ts -t "keeps quoted engineer follow-ups with engineer in a real group room" --reporter=verbose
 ```
 
 Additional live smoke tests were executed against `http://127.0.0.1:8790` and the frontend dev proxy on `http://127.0.0.1:5173` to confirm:
 
 - Group workspaces can stream real SSE workflow events
 - Direct workspaces create a real runtime direct conversation
+- Group quote follow-ups can keep the quoted child agent as the visible speaker in a real workspace
 - Preview and zip responses return non-empty bodies
 - Real engineer and reviewer runs finish successfully
 

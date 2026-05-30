@@ -30,6 +30,7 @@
 ```bash
 $env:AGENTHUB_RUN_REAL_TESTS='true'
 npm run test:real:chain
+npx vitest run tests/real/agent-chain-probe.test.ts -t "keeps quoted engineer follow-ups with engineer in a real group room" --reporter=verbose
 ```
 
 ## 2026-05-25 Bridge、交付校验与自动返工
