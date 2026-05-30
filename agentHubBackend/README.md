@@ -29,6 +29,21 @@ APP_STORAGE_ROOT=storage
 {AGENTHUB_RUNTIME_ROOT}/{workspaceId}/repo
 ```
 
+Project metadata is stored in local JSON files by default:
+
+```text
+APP_METADATA_STORE=local
+```
+
+To use PostgreSQL for project metadata, set:
+
+```text
+APP_METADATA_STORE=postgres
+DATABASE_URL=postgres://agenthub:agenthub@127.0.0.1:5432/agenthub_business
+```
+
+The backend creates the `business_projects` table automatically on startup. Source zips, build artifacts, deploy artifacts, and temporary build folders still stay on local disk under `APP_STORAGE_ROOT`.
+
 ## Commands
 
 ```bash

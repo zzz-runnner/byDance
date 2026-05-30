@@ -6,6 +6,8 @@ const EnvSchema = z.object({
   AGENTHUB_BASE_URL: z.string().url().default('http://127.0.0.1:8787'),
   AGENTHUB_RUNTIME_ROOT: z.string().min(1).default('../agentHub/data/workspaces'),
   APP_STORAGE_ROOT: z.string().min(1).default('storage'),
+  APP_METADATA_STORE: z.enum(['local', 'postgres']).default('local'),
+  DATABASE_URL: z.string().optional(),
   DOCKER_NODE_IMAGE: z.string().min(1).default('node:20-alpine'),
   BUILD_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
   BUILD_CPU_LIMIT: z.string().min(1).default('1'),
