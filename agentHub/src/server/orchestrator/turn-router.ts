@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { ExecutionReadinessSchema, WorkflowTaskStageSchema } from '@shared/contracts'
-import type { AgentDefinition, Conversation, ExecutionReadiness, ReplyReference, WorkflowTaskStage, Workspace } from '@shared/contracts'
+import type { AgentDefinition, CodeSelectionReference, Conversation, ExecutionReadiness, ReplyReference, WorkflowTaskStage, Workspace } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import { createModelGateway } from '../model-gateway'
 import { buildReplyContextPayload, resolveReplyTargetAgentId } from './reply-context'
@@ -70,6 +70,7 @@ type LocalRouteInput = {
   workspace?: Workspace
   agent?: AgentDefinition
   replyTo?: ReplyReference
+  codeSelection?: CodeSelectionReference
 }
 
 type ModelRouteInput = LocalRouteInput & {
@@ -538,6 +539,17 @@ function buildRouterUserPrompt(input: LocalRouteInput): string {
     {
       userMessage: input.content,
       replyContext: buildReplyContextPayload(input.replyTo, input.agent ? [input.agent] : []),
+      codeSelection: input.codeSelection
+        ? {
+            filePath: input.codeSelection.filePath,
+            language: input.codeSelection.language,
+            startLine: input.codeSelection.startLine,
+            startColumn: input.codeSelection.startColumn,
+            endLine: input.codeSelection.endLine,
+            endColumn: input.codeSelection.endColumn,
+            selectedText: input.codeSelection.selectedText.slice(0, 1_200),
+          }
+        : undefined,
       workspace: input.workspace
         ? {
             id: input.workspace.id,

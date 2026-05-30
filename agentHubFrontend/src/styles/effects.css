@@ -105,7 +105,6 @@
 .workspace-button,
 .watch-card,
 .message-actions button,
-.composer-chips button,
 .agent-avatar,
 .glass-panel--compact {
   transition:
@@ -141,7 +140,6 @@
 .watch-card:hover,
 .icon-button:hover,
 .send-button:hover,
-.composer-chips button:hover,
 .message-actions button:hover {
   transform: translateY(-1px);
 }

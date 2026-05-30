@@ -1,6 +1,7 @@
 import type {
   AgentDefinition,
   AppState,
+  CodeSelectionReference,
   Conversation,
   ContextSnapshot,
   MainBrainTurn,
@@ -62,6 +63,18 @@ type AgentRunSlice = {
   summary: string
 }
 
+type CodeSelectionSlice = {
+  filePath: string
+  language?: string
+  startLine: number
+  startColumn: number
+  endLine: number
+  endColumn: number
+  selectedText: string
+  beforeContext?: string
+  afterContext?: string
+}
+
 type CommonContextInput = {
   state: AppState
   workspace: Workspace
@@ -69,6 +82,7 @@ type CommonContextInput = {
   task: string
   requiredContext: string[]
   expectedOutput: string
+  codeSelection?: CodeSelectionReference
   agentSession?: {
     sessionId: string
     handoffId?: string
@@ -114,6 +128,7 @@ type PlannerContextInput = {
   conversation: Conversation
   userMessage: string
   replyTo?: ReplyReference
+  codeSelection?: CodeSelectionReference
   agents: AgentDefinition[]
 }
 
@@ -159,6 +174,28 @@ function compactText(text: string, maxLength = 280): string {
  */
 function estimateTokenCount(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4))
+}
+
+/**
+ * Compacts one browser-selected code reference for model-facing JSON payloads.
+ * Input: optional code selection. Output: compact code selection payload.
+ */
+function buildCodeSelectionPayload(selection: CodeSelectionReference | undefined): CodeSelectionSlice | undefined {
+  if (!selection) {
+    return undefined
+  }
+
+  return {
+    filePath: selection.filePath,
+    language: selection.language,
+    startLine: selection.startLine,
+    startColumn: selection.startColumn,
+    endLine: selection.endLine,
+    endColumn: selection.endColumn,
+    selectedText: compactText(selection.selectedText, 1_200),
+    beforeContext: selection.beforeContext ? compactText(selection.beforeContext, 600) : undefined,
+    afterContext: selection.afterContext ? compactText(selection.afterContext, 600) : undefined,
+  }
 }
 
 /**
@@ -478,6 +515,7 @@ export function buildAgentContextAssembly(input: CommonContextInput): ContextAss
     input.agentScope.includeSameConversationOnly,
   )
   const agentSession = selectAgentSessionMemory(input.state, input.workspace, input.agentSession)
+  const codeSelection = buildCodeSelectionPayload(input.codeSelection)
 
   const payload = {
     workspace: {
@@ -508,6 +546,7 @@ export function buildAgentContextAssembly(input: CommonContextInput): ContextAss
       brief: input.task,
       requiredContext: input.requiredContext,
       expectedOutput: input.expectedOutput,
+      codeSelection,
     },
     memory: {
       pinnedMessages,
@@ -532,6 +571,7 @@ export function buildAgentContextAssembly(input: CommonContextInput): ContextAss
     `snapshots: ${snapshots.length}`,
     `artifacts: ${artifacts.length}`,
     `changeSets: ${changeSets.length}`,
+    codeSelection ? `codeSelection: ${codeSelection.filePath}` : 'codeSelection: none',
   ].join('\n')
 
   return {
@@ -574,6 +614,7 @@ export function buildPlannerContextPackage(input: PlannerContextInput): string {
   const changeSets = selectChangeSets(input.state, input.workspace, searchTerms)
   const snapshots = selectSnapshots(input.state, input.workspace, input.conversation, searchTerms, false)
   const recentAgentRuns = selectRecentAgentRuns(input.state, input.workspace)
+  const codeSelection = buildCodeSelectionPayload(input.codeSelection)
 
   const agentRegistry = input.agents.map(agent => ({
     id: agent.id,
@@ -607,6 +648,7 @@ export function buildPlannerContextPackage(input: PlannerContextInput): string {
     {
       userMessage: input.userMessage,
       replyContext: buildReplyContextPayload(input.replyTo, input.agents),
+      codeSelection,
       workspace: {
         id: input.workspace.id,
         name: input.workspace.name,

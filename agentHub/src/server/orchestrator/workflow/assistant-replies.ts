@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentSessionMessage, Conversation, MainBrainSynthesis, Message, WorkflowEvent, WorkflowEventRecord, Workspace } from '@shared/contracts'
+import type { AgentSessionMessage, CodeSelectionReference, Conversation, MainBrainSynthesis, Message, WorkflowEvent, WorkflowEventRecord, Workspace } from '@shared/contracts'
 import { isoNow } from '@shared/contracts'
 import type { ServerEnv } from '../../env'
 import { createModelGateway, type ModelGatewayRequest } from '../../model-gateway'
@@ -281,6 +281,7 @@ export async function streamAndPersistMainBrainReply(
   conversation: Conversation,
   userMessage: string,
   replyTo?: Message['replyTo'],
+  codeSelection?: CodeSelectionReference,
   route?: TurnRoute,
   fallbackText?: string,
 ): Promise<string> {
@@ -292,6 +293,7 @@ export async function streamAndPersistMainBrainReply(
     conversation,
     userMessage,
     replyTo,
+    codeSelection,
     agents: latestState.agents,
     route,
     fallbackText: safeFallback,
@@ -375,13 +377,14 @@ export async function streamAndPersistAgentReply(
   const sessionContext = buildAgentSessionContextPackage({
     state: latestState,
     workspace: input.workspace,
-      conversation: input.conversation,
-      agent: input.agent,
-      session: input.session,
-      userMessage: input.userContent,
-      replyTo: input.replyTo,
-      contextProfile: input.route?.contextProfile,
-    })
+    conversation: input.conversation,
+    agent: input.agent,
+    session: input.session,
+    userMessage: input.userContent,
+    replyTo: input.replyTo,
+    codeSelection: input.codeSelection,
+    contextProfile: input.route?.contextProfile,
+  })
   const request = input.turn.finalResponse?.trim()
     ? undefined
     : buildAgentSessionReplyRequest({
@@ -391,6 +394,7 @@ export async function streamAndPersistAgentReply(
         agent: input.agent,
         userMessage: input.userContent,
         replyTo: input.replyTo,
+        codeSelection: input.codeSelection,
         sessionContext,
         route: input.route,
         fallbackText: safeFallback,

@@ -1,4 +1,4 @@
-import type { AgentDefinition, Conversation, MainBrainTurn, ReplyReference, RoutingTaskBrief } from '@shared/contracts'
+import type { AgentDefinition, CodeSelectionReference, Conversation, MainBrainTurn, ReplyReference, RoutingTaskBrief } from '@shared/contracts'
 import { resolveReplyTargetAgentId } from './reply-context'
 
 export type RoutingInput = {
@@ -7,6 +7,7 @@ export type RoutingInput = {
   agents: AgentDefinition[]
   targetAgentId?: string
   replyTo?: ReplyReference
+  codeSelection?: CodeSelectionReference
 }
 
 /**
@@ -70,6 +71,26 @@ export function decideRouting(input: RoutingInput): MainBrainTurn {
           input.content,
           'Return a concise result for the selected direct agent task.',
         ),
+      ],
+    }
+  }
+
+  if (input.codeSelection && input.agents.some(agent => agent.id === 'engineer')) {
+    return {
+      kind: 'dispatch_agents',
+      targetAgents: ['engineer'],
+      execution: 'serial',
+      speakerAgentId: 'engineer',
+      finalizationMode: 'speaker_direct',
+      dispatches: [
+        {
+          ...taskBrief(
+            'engineer',
+            input.content,
+            'Use the supplied code selection context and return the concrete implementation result.',
+          ),
+          codeSelection: input.codeSelection,
+        },
       ],
     }
   }

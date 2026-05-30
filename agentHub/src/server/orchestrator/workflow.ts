@@ -787,6 +787,7 @@ async function runTaskBrief(
     task: brief.task,
     requiredContext: brief.requiredContext,
     expectedOutput: brief.expectedOutput,
+    codeSelection: brief.codeSelection,
     agentScope: {
       id: agent.id,
       name: agent.name,
@@ -1086,6 +1087,7 @@ async function runDirectedAgentConversationTurn(
   agentId: string,
   rawContent: string,
   replyTo?: SendMessageInput['replyTo'],
+  codeSelection?: SendMessageInput['codeSelection'],
 ): Promise<AppState> {
   const agent = requiredById(state.agents, agentId, 'Agent')
   const normalizedContent = stripLeadingAgentMention(rawContent, agent) || rawContent.trim()
@@ -1096,6 +1098,7 @@ async function runDirectedAgentConversationTurn(
     conversation,
     agent,
     replyTo,
+    codeSelection,
   })
   const previewWillStreamFinalText =
     localRoutePreview && !routeAllowsExecution(localRoutePreview) && localRoutePreview.modelProfile === 'router'
@@ -1152,6 +1155,7 @@ async function runDirectedAgentConversationTurn(
     session,
     content: normalizedContent,
     replyTo,
+    codeSelection,
   })
   logDiagnostic(workflowServices, {
     level: plannedTurn.routeError ? 'warn' : 'info',
@@ -1632,6 +1636,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       directAgentId,
       input.content,
       input.replyTo,
+      input.codeSelection,
     )
     /*
     const agent = requiredById(state.agents, directAgentId, 'Agent')
@@ -1867,6 +1872,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     workspace,
     conversation,
     replyTo: input.replyTo,
+    codeSelection: input.codeSelection,
   })
   logDiagnostic(workflowServices, {
     level: mainRoute.error ? 'warn' : 'info',
@@ -1911,6 +1917,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       directedGroupAgentId,
       input.content,
       input.replyTo,
+      input.codeSelection,
     )
   }
 
@@ -1961,6 +1968,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       dynamicVisibleSpeaker.agentId,
       input.content,
       input.replyTo,
+      input.codeSelection,
     )
   }
 
@@ -1989,6 +1997,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       conversation,
       input.content,
       input.replyTo,
+      input.codeSelection,
       mainRoute.route,
       mainRoute.route.localResponse,
     )
@@ -2088,6 +2097,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
         agents: state.agents,
         targetAgentId: directedGroupAgentId,
         replyTo: input.replyTo,
+        codeSelection: input.codeSelection,
         env: workflowServices.env,
         state,
         workspace,

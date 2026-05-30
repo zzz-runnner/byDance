@@ -251,6 +251,7 @@ export async function decideRoutingWithPlanner(input: PlannerInput): Promise<Pla
       conversation: input.conversation,
       userMessage: input.content,
       replyTo: input.replyTo,
+      codeSelection: input.codeSelection,
       agents: input.agents,
     })
     contextTokenEstimate = estimateTokenCount(contextPackage)

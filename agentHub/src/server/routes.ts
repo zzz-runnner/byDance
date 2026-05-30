@@ -29,6 +29,10 @@ const CreateConversationInputSchema = z.object({
   participants: z.array(z.string().min(1)).min(1),
 })
 
+const WorkspaceFileContentQuerySchema = z.object({
+  path: z.string().min(1),
+})
+
 const CreateAgentInputSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
@@ -219,6 +223,54 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
   }))
 
   app.get('/api/state', async () => services.store.read())
+
+  app.get('/api/workspaces/:workspaceId/files', async (request, reply) => {
+    const params = request.params as { workspaceId: string }
+    const state = await services.store.read()
+    const workspace = state.workspaces.find(item => item.id === params.workspaceId)
+    if (!workspace) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+
+    await services.runtime.prepareWorkspace(workspace)
+    return {
+      entries: await services.runtime.listWorkspaceFiles(workspace.id),
+    }
+  })
+
+  app.get('/api/workspaces/:workspaceId/files/content', async (request, reply) => {
+    const params = request.params as { workspaceId: string }
+    const query = WorkspaceFileContentQuerySchema.parse(request.query)
+    const state = await services.store.read()
+    const workspace = state.workspaces.find(item => item.id === params.workspaceId)
+    if (!workspace) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+
+    try {
+      await services.runtime.prepareWorkspace(workspace)
+      return await services.runtime.readWorkspaceTextFile(workspace.id, query.path)
+    } catch (error) {
+      const safeError = error instanceof Error ? error.message : String(error)
+      reply.status(safeError.includes('ENOENT') ? 404 : 400)
+      return reply.send({ error: safeError })
+    }
+  })
+
+  app.get('/api/workspaces/:workspaceId/diff', async (request, reply) => {
+    const params = request.params as { workspaceId: string }
+    const state = await services.store.read()
+    const workspace = state.workspaces.find(item => item.id === params.workspaceId)
+    if (!workspace) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+
+    await services.runtime.prepareWorkspace(workspace)
+    return services.runtime.getWorkspaceDiff(workspace.id)
+  })
 
   app.post('/api/workspaces', async request => {
     const input = CreateWorkspaceInputSchema.parse(request.body)

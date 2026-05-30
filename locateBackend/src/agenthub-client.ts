@@ -1,5 +1,13 @@
 import { z } from 'zod'
-import type { ConversationType, RuntimeAppState, WorkspaceType } from './types.js'
+import type {
+  CodeSelectionReference,
+  ConversationType,
+  ProjectFileContent,
+  ProjectFileNode,
+  ProjectWorkspaceDiff,
+  RuntimeAppState,
+  WorkspaceType,
+} from './types.js'
 
 const RuntimeAppStateSchema = z.object({
   workspaces: z.array(z.record(z.string(), z.unknown())),
@@ -98,6 +106,7 @@ export class AgentHubClient {
       senderName?: string
       excerpt: string
     }
+    codeSelection?: CodeSelectionReference
   }): Promise<Response> {
     return fetch(this.url('/api/messages/stream'), {
       method: 'POST',
@@ -106,6 +115,33 @@ export class AgentHubClient {
       },
       body: JSON.stringify(input),
     })
+  }
+
+  /**
+   * Loads the visible workspace file tree from AgentHub.
+   * Input: workspace id. Output: nested file nodes for the browser panel.
+   */
+  async fetchWorkspaceFiles(workspaceId: string): Promise<{ entries: ProjectFileNode[] }> {
+    return this.fetchJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/files`) as Promise<{ entries: ProjectFileNode[] }>
+  }
+
+  /**
+   * Loads one UTF-8 workspace file from AgentHub.
+   * Input: workspace id and repo-relative path. Output: file content plus metadata.
+   */
+  async fetchWorkspaceFileContent(workspaceId: string, filePath: string): Promise<ProjectFileContent> {
+    const query = new URLSearchParams({ path: filePath })
+    return this.fetchJson(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/files/content?${query.toString()}`,
+    ) as Promise<ProjectFileContent>
+  }
+
+  /**
+   * Loads the current git diff snapshot for one workspace.
+   * Input: workspace id. Output: status summary and unified patch.
+   */
+  async fetchWorkspaceDiff(workspaceId: string): Promise<ProjectWorkspaceDiff> {
+    return this.fetchJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/diff`) as Promise<ProjectWorkspaceDiff>
   }
 
   /**

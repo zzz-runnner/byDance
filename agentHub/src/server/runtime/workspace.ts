@@ -23,6 +23,87 @@ type WorkspaceZipBuild = {
   byteLength: number
 }
 
+export type WorkspaceFileNode = {
+  path: string
+  name: string
+  kind: 'directory' | 'file'
+  byteLength?: number
+  language?: string
+  isText: boolean
+  children?: WorkspaceFileNode[]
+}
+
+export type WorkspaceFileContent = {
+  path: string
+  name: string
+  content: string
+  language: string
+  byteLength: number
+  updatedAt: string
+  lineCount: number
+}
+
+export type WorkspaceDiffSnapshot = {
+  baseCommit: string
+  status: string
+  patch: string
+}
+
+const MAX_TEXT_FILE_BYTES = 512 * 1024
+const FILE_BROWSER_HIDDEN_SEGMENTS = new Set([
+  '.git',
+  'node_modules',
+  'dist',
+  'build',
+  '.next',
+  'coverage',
+  '.turbo',
+  '.cache',
+])
+const TEXT_FILE_EXTENSIONS = new Set([
+  '.css',
+  '.csv',
+  '.env',
+  '.gitignore',
+  '.html',
+  '.htm',
+  '.js',
+  '.json',
+  '.jsx',
+  '.less',
+  '.md',
+  '.mjs',
+  '.scss',
+  '.sql',
+  '.svg',
+  '.ts',
+  '.tsx',
+  '.txt',
+  '.vue',
+  '.xml',
+  '.yaml',
+  '.yml',
+])
+const BINARY_FILE_EXTENSIONS = new Set([
+  '.avif',
+  '.bmp',
+  '.gif',
+  '.ico',
+  '.jpeg',
+  '.jpg',
+  '.mp3',
+  '.mp4',
+  '.pdf',
+  '.png',
+  '.ttf',
+  '.wav',
+  '.webm',
+  '.webp',
+  '.woff',
+  '.woff2',
+  '.zip',
+])
+
 /**
  * Compares two filesystem paths using platform-safe normalization.
  * Input: two path strings. Output: true when both resolve to the same folder.
@@ -99,6 +180,168 @@ function shouldExcludeFromZip(relativePath: string, isDirectory: boolean): boole
     return true
   }
   return false
+}
+
+/**
+ * Returns whether one repo-relative path should stay hidden in the code browser.
+ * Input: repo-relative path and directory flag. Output: true when the browser should skip it.
+ */
+function shouldHideFromFileBrowser(relativePath: string, isDirectory: boolean): boolean {
+  const normalized = relativePath.replace(/\\/g, '/')
+  const segments = normalized.split('/')
+  const fileName = segments[segments.length - 1] ?? ''
+  if (segments.some(segment => FILE_BROWSER_HIDDEN_SEGMENTS.has(segment))) {
+    return true
+  }
+  if (fileName === '.DS_Store' || fileName === 'Thumbs.db') {
+    return true
+  }
+  if (fileName.startsWith('.env')) {
+    return true
+  }
+  if (isDirectory && fileName.startsWith('.')) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Returns the editor language id inferred from one repo-relative file path.
+ * Input: repo-relative file path. Output: Monaco-friendly language id.
+ */
+function detectFileLanguage(relativePath: string): string {
+  const fileName = path.posix.basename(relativePath).toLowerCase()
+  const ext = path.posix.extname(fileName)
+  if (fileName === 'dockerfile') {
+    return 'dockerfile'
+  }
+  if (fileName === '.gitignore') {
+    return 'plaintext'
+  }
+  switch (ext) {
+    case '.css':
+    case '.less':
+    case '.scss':
+      return 'css'
+    case '.html':
+    case '.htm':
+      return 'html'
+    case '.js':
+    case '.mjs':
+    case '.cjs':
+      return 'javascript'
+    case '.json':
+      return 'json'
+    case '.jsx':
+      return 'javascript'
+    case '.md':
+      return 'markdown'
+    case '.sql':
+      return 'sql'
+    case '.svg':
+    case '.xml':
+      return 'xml'
+    case '.ts':
+      return 'typescript'
+    case '.tsx':
+      return 'typescript'
+    case '.vue':
+      return 'vue'
+    case '.yaml':
+    case '.yml':
+      return 'yaml'
+    default:
+      return 'plaintext'
+  }
+}
+
+/**
+ * Returns whether one repo-relative file path is likely text before reading content.
+ * Input: repo-relative file path. Output: true when the extension is text-like.
+ */
+function isTextLikePath(relativePath: string): boolean {
+  const ext = path.posix.extname(relativePath.toLowerCase())
+  if (TEXT_FILE_EXTENSIONS.has(ext)) {
+    return true
+  }
+  if (BINARY_FILE_EXTENSIONS.has(ext)) {
+    return false
+  }
+  return !path.posix.basename(relativePath).startsWith('.')
+}
+
+/**
+ * Detects whether a buffer likely contains binary bytes.
+ * Input: file bytes. Output: true when the file should not be opened as UTF-8 text.
+ */
+function looksBinary(buffer: Buffer): boolean {
+  if (buffer.includes(0)) {
+    return true
+  }
+  const sample = buffer.subarray(0, Math.min(buffer.byteLength, 1024))
+  let suspiciousBytes = 0
+  for (const byte of sample) {
+    const isTabOrNewLine = byte === 9 || byte === 10 || byte === 13
+    const isPrintableAscii = byte >= 32 && byte <= 126
+    if (!isTabOrNewLine && !isPrintableAscii && byte < 128) {
+      suspiciousBytes += 1
+    }
+  }
+  return sample.byteLength > 0 && suspiciousBytes / sample.byteLength > 0.2
+}
+
+/**
+ * Collects one nested workspace file tree while keeping heavy folders hidden.
+ * Input: repo path and optional relative folder. Output: nested file tree nodes.
+ */
+async function collectWorkspaceEntries(repoPath: string, relativeFolder = ''): Promise<WorkspaceFileNode[]> {
+  const currentPath = relativeFolder ? path.join(repoPath, relativeFolder) : repoPath
+  const entries = (await readdir(currentPath, { withFileTypes: true }))
+    .filter(entry => !entry.isSymbolicLink())
+    .sort((left, right) => {
+      if (left.isDirectory() !== right.isDirectory()) {
+        return left.isDirectory() ? -1 : 1
+      }
+      return left.name.localeCompare(right.name)
+    })
+  const nodes: WorkspaceFileNode[] = []
+
+  for (const entry of entries) {
+    const relativePath = relativeFolder
+      ? path.posix.join(relativeFolder.replace(/\\/g, '/'), entry.name)
+      : entry.name
+    if (shouldHideFromFileBrowser(relativePath, entry.isDirectory())) {
+      continue
+    }
+
+    if (entry.isDirectory()) {
+      nodes.push({
+        path: relativePath,
+        name: entry.name,
+        kind: 'directory',
+        isText: false,
+        children: await collectWorkspaceEntries(repoPath, relativePath),
+      })
+      continue
+    }
+
+    if (!entry.isFile()) {
+      continue
+    }
+
+    const filePath = path.join(currentPath, entry.name)
+    const fileStat = await stat(filePath)
+    nodes.push({
+      path: relativePath,
+      name: entry.name,
+      kind: 'file',
+      byteLength: fileStat.size,
+      language: detectFileLanguage(relativePath),
+      isText: isTextLikePath(relativePath),
+    })
+  }
+
+  return nodes
 }
 
 /**
@@ -218,6 +461,49 @@ export class WorkspaceRuntimeManager {
   }
 
   /**
+   * Reads the visible workspace file tree for the browser code panel.
+   * Input: workspace id. Output: nested file nodes rooted at the workspace repo.
+   */
+  async listWorkspaceFiles(workspaceId: string): Promise<WorkspaceFileNode[]> {
+    const repoPath = this.repoPathFor(workspaceId)
+    await mkdir(repoPath, { recursive: true })
+    return collectWorkspaceEntries(repoPath)
+  }
+
+  /**
+   * Reads one UTF-8 workspace file for the browser code panel.
+   * Input: workspace id and repo-relative path. Output: text file payload plus metadata.
+   */
+  async readWorkspaceTextFile(workspaceId: string, relativePath: string): Promise<WorkspaceFileContent> {
+    const repoPath = this.repoPathFor(workspaceId)
+    const resolvedPath = this.toolGateway.resolveWorkspacePath(repoPath, relativePath)
+    const fileStat = await stat(resolvedPath)
+
+    if (!fileStat.isFile()) {
+      throw new Error('Workspace file target is not a regular file.')
+    }
+    if (fileStat.size > MAX_TEXT_FILE_BYTES) {
+      throw new Error(`Workspace file is too large to open in the browser (${fileStat.size} bytes).`)
+    }
+
+    const buffer = await readFile(resolvedPath)
+    if (!isTextLikePath(relativePath) || looksBinary(buffer)) {
+      throw new Error('Workspace file is not a supported UTF-8 text file.')
+    }
+
+    const content = buffer.toString('utf8')
+    return {
+      path: relativePath.replace(/\\/g, '/'),
+      name: path.basename(resolvedPath),
+      content,
+      language: detectFileLanguage(relativePath),
+      byteLength: buffer.byteLength,
+      updatedAt: fileStat.mtime.toISOString(),
+      lineCount: content ? content.split(/\r?\n/).length : 0,
+    }
+  }
+
+  /**
    * Returns the current git HEAD for a runtime repo.
    * Input: repo path. Output: commit hash or the seed marker when git has no commit.
    */
@@ -239,6 +525,19 @@ export class WorkspaceRuntimeManager {
    */
   async getStatus(repoPath: string): Promise<string> {
     return this.toolGateway.getStatus(repoPath)
+  }
+
+  /**
+   * Reads the current diff snapshot for one workspace repository.
+   * Input: workspace id. Output: git base commit, status summary, and patch text.
+   */
+  async getWorkspaceDiff(workspaceId: string): Promise<WorkspaceDiffSnapshot> {
+    const repoPath = this.repoPathFor(workspaceId)
+    return {
+      baseCommit: await this.getBaseCommit(repoPath),
+      status: await this.getStatus(repoPath),
+      patch: await this.getPatch(repoPath),
+    }
   }
 
   /**
