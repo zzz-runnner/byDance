@@ -4,8 +4,10 @@ import { z } from 'zod'
 import type { AppConfig } from './config.js'
 import { AgentHubClient } from './agenthub-client.js'
 import { ProjectStore } from './project-store.js'
+import { SourceBrowser } from './source-browser.js'
 import { sendBufferedUpstreamResponse, sendSseUpstreamResponse } from './sse-proxy.js'
 import {
+  buildWorkbenchOverview,
   previewUrlFor,
   selectProjectConversation,
   selectProjectState,
@@ -40,6 +42,25 @@ const StreamProjectMessageInputSchema = z.object({
     senderName: z.string().optional(),
     excerpt: z.string().min(1),
   }).optional(),
+  codeSelection: z.object({
+    filePath: z.string().min(1),
+    selectedText: z.string().min(1),
+    startLine: z.number().int().positive(),
+    startColumn: z.number().int().positive(),
+    endLine: z.number().int().positive(),
+    endColumn: z.number().int().positive(),
+    language: z.string().optional(),
+    beforeContext: z.string().optional(),
+    afterContext: z.string().optional(),
+  }).optional(),
+})
+
+const FileContentQuerySchema = z.object({
+  path: z.string().min(1),
+})
+
+const ProjectStateQuerySchema = z.object({
+  messageLimit: z.coerce.number().int().positive().max(200).optional(),
 })
 
 type HttpError = Error & {
@@ -58,6 +79,7 @@ export function createServer(config: AppConfig) {
 
   const agentHub = new AgentHubClient(config.agentHubBaseUrl)
   const projectStore = new ProjectStore(config.projectsFilePath)
+  const sourceBrowser = new SourceBrowser(config.sourceRootPath)
 
   app.setErrorHandler((error, _request, reply) => {
     const statusCode = (error as HttpError).statusCode ?? 500
@@ -74,8 +96,18 @@ export function createServer(config: AppConfig) {
       service: 'locate-backend',
       agentHubBaseUrl: config.agentHubBaseUrl,
       dataFilePath: config.projectsFilePath,
+      sourceRootPath: config.sourceRootPath,
       agentHub: agentHubHealth,
     }
+  })
+
+  app.get('/api/workbench', async () => {
+    const [projects, state] = await Promise.all([
+      projectStore.listProjects(),
+      agentHub.fetchState(),
+    ])
+
+    return buildWorkbenchOverview(state, projects, sourceBrowser.getRootLabel())
   })
 
   app.get('/api/projects', async () => {
@@ -148,6 +180,7 @@ export function createServer(config: AppConfig) {
 
   app.get('/api/projects/:projectId/state', async request => {
     const { projectId } = request.params as { projectId: string }
+    const query = ProjectStateQuerySchema.parse(request.query)
     const project = await projectStore.getProject(projectId)
 
     if (!project) {
@@ -155,7 +188,46 @@ export function createServer(config: AppConfig) {
     }
 
     const state = await agentHub.fetchState()
-    return selectProjectState(state, project)
+    return selectProjectState(state, project, {
+      messageLimit: query.messageLimit,
+    })
+  })
+
+  app.get('/api/projects/:projectId/files', async request => {
+    const { projectId } = request.params as { projectId: string }
+    const project = await projectStore.getProject(projectId)
+
+    if (!project) {
+      throw createHttpError(404, `Project not found: ${projectId}`)
+    }
+
+    return {
+      rootLabel: sourceBrowser.getRootLabel(),
+      entries: await sourceBrowser.listFiles(),
+    }
+  })
+
+  app.get('/api/projects/:projectId/files/content', async request => {
+    const { projectId } = request.params as { projectId: string }
+    const query = FileContentQuerySchema.parse(request.query)
+    const project = await projectStore.getProject(projectId)
+
+    if (!project) {
+      throw createHttpError(404, `Project not found: ${projectId}`)
+    }
+
+    return sourceBrowser.readTextFile(query.path)
+  })
+
+  app.get('/api/projects/:projectId/diff', async request => {
+    const { projectId } = request.params as { projectId: string }
+    const project = await projectStore.getProject(projectId)
+
+    if (!project) {
+      throw createHttpError(404, `Project not found: ${projectId}`)
+    }
+
+    return agentHub.fetchWorkspaceDiff(project.workspaceId)
   })
 
   app.post('/api/projects/:projectId/messages/stream', async (request, reply) => {
@@ -174,6 +246,7 @@ export function createServer(config: AppConfig) {
       conversationId: input.conversationId ?? project.conversationId,
       content: input.content,
       replyTo: input.replyTo,
+      codeSelection: input.codeSelection,
       ...(targetAgentId ? { agentId: targetAgentId } : {}),
     })
 
@@ -211,6 +284,7 @@ export function createServer(config: AppConfig) {
     service: 'locate-backend',
     previewPathExample: previewUrlFor('workspace-id'),
     zipPathExample: zipUrlFor('workspace-id'),
+    sourceRootPath: config.sourceRootPath,
   }))
 
   return app
@@ -399,5 +473,12 @@ function resolveStreamTargetAgentId(
   }
 
   const candidateAgents = state.agents.filter(agent => conversation.participants.includes(agent.id))
-  return resolveMentionTargetAgentId(input.content, candidateAgents)
+  const mentionedAgentId = resolveMentionTargetAgentId(input.content, candidateAgents)
+  if (mentionedAgentId) {
+    return mentionedAgentId
+  }
+  if (input.codeSelection) {
+    return candidateAgents.some(agent => agent.id === 'engineer') ? 'engineer' : undefined
+  }
+  return undefined
 }

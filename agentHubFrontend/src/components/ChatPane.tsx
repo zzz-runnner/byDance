@@ -24,7 +24,6 @@ import {
   buildAgentMap,
   formatTime,
   workspaceRoomKindLabel,
-  type WorkspaceRoom,
 } from '../appModel'
 import {
   buildChatTimeline,
@@ -34,7 +33,17 @@ import {
   type ChatTurnArtifact,
   type ChatTurnProcessEntry,
 } from '../chatTimeline'
-import type { AgentDefinition, AppState, Artifact, ConnectionStatus, LiveWorkflowEvent, Message, ReplyReference } from '../types'
+import type {
+  AgentDefinition,
+  AppState,
+  Artifact,
+  CodeSelectionReference,
+  ConnectionStatus,
+  LiveWorkflowEvent,
+  Message,
+  ReplyReference,
+  WorkspaceRoom,
+} from '../types'
 import { AgentAvatar } from './AgentAvatar'
 import { AgentMentionPicker, type AgentMentionOption } from './AgentMentionPicker'
 import { GlassPanel } from './GlassPanel'
@@ -54,11 +63,16 @@ type ChatPaneProps = {
   sending: boolean
   activeConversationId: string
   replyTarget?: ReplyReference
+  codeSelectionTarget?: CodeSelectionReference
+  hasOlderMessages: boolean
+  loadingOlderMessages: boolean
   onRegenerate: () => void
+  onLoadOlderMessages: () => void
   onReplyToMessage: (replyTo: ReplyReference) => void
   onCancelReply: () => void
+  onCancelCodeSelection: () => void
   onCopyMessage: (content: string) => void
-  onSend: (content: string, replyTo?: ReplyReference) => void
+  onSend: (content: string, replyTo?: ReplyReference, codeSelection?: CodeSelectionReference) => void
 }
 
 type MentionMatch = {
@@ -121,6 +135,35 @@ function buildMessageReplyReference(message: Message, senderName?: string): Repl
  */
 function replySenderLabel(replyTo: ReplyReference): string {
   return replyTo.senderName?.trim() || replyTo.senderId
+}
+
+/**
+ * Builds one short file-and-range label for the quoted code bar.
+ * Input: structured code selection.
+ * Output: compact path and line range label.
+ */
+function codeSelectionLocationLabel(selection: CodeSelectionReference): string {
+  if (selection.startLine === selection.endLine) {
+    return `${selection.filePath}:${selection.startLine}`
+  }
+
+  return `${selection.filePath}:${selection.startLine}-${selection.endLine}`
+}
+
+/**
+ * Clips quoted code into a short single-line preview for the composer.
+ * Input: structured code selection and optional max length.
+ * Output: compact preview text.
+ */
+function clipCodeSelectionExcerpt(selection: CodeSelectionReference, maxLength = 140): string {
+  const normalized = selection.selectedText.replace(/\s+/g, ' ').trim()
+  if (!normalized) {
+    return 'Empty selection'
+  }
+  if (normalized.length <= maxLength) {
+    return normalized
+  }
+  return `${normalized.slice(0, maxLength)}...`
 }
 
 /**
@@ -222,9 +265,14 @@ export function ChatPane({
   sending,
   activeConversationId,
   replyTarget,
+  codeSelectionTarget,
+  hasOlderMessages,
+  loadingOlderMessages,
   onRegenerate,
+  onLoadOlderMessages,
   onReplyToMessage,
   onCancelReply,
+  onCancelCodeSelection,
   onCopyMessage,
   onSend,
 }: ChatPaneProps) {
@@ -255,6 +303,10 @@ export function ChatPane({
     [timelineItems],
   )
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const olderMessagesAnchorRef = useRef<{
+    scrollHeight: number
+    scrollTop: number
+  } | null>(null)
   const [isNearBottom, setIsNearBottom] = useState(true)
   const [artifactDialog, setArtifactDialog] = useState<ChatTurnArtifact | null>(null)
   const [turnExpandOverrides, setTurnExpandOverrides] = useState<Record<string, boolean>>({})
@@ -300,6 +352,17 @@ export function ChatPane({
   }, [isNearBottom, messages.length, scrollSignature, timelineItems.length])
 
   useEffect(() => {
+    const anchor = olderMessagesAnchorRef.current
+    const container = scrollRef.current
+    if (!anchor || loadingOlderMessages || !container) {
+      return
+    }
+
+    container.scrollTop = container.scrollHeight - anchor.scrollHeight + anchor.scrollTop
+    olderMessagesAnchorRef.current = null
+  }, [loadingOlderMessages, scrollSignature])
+
+  useEffect(() => {
     const activeTurnIds = new Set(
       timelineItems
         .filter((item): item is Extract<ChatTimelineItem, { kind: 'turn' }> => item.kind === 'turn')
@@ -323,6 +386,22 @@ export function ChatPane({
     }
     const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight
     setIsNearBottom(distanceToBottom <= 96)
+  }
+
+  /**
+   * Requests the next older message page while keeping the current viewport anchored.
+   * Input: none.
+   * Output: triggers the parent pagination callback.
+   */
+  function handleLoadOlderMessages() {
+    const container = scrollRef.current
+    if (container) {
+      olderMessagesAnchorRef.current = {
+        scrollHeight: container.scrollHeight,
+        scrollTop: container.scrollTop,
+      }
+    }
+    onLoadOlderMessages()
   }
 
   /**
@@ -390,6 +469,28 @@ export function ChatPane({
       </header>
 
       <div className="chat-scroll" ref={scrollRef} onScroll={handleScroll}>
+        {hasOlderMessages || loadingOlderMessages ? (
+          <div className="chat-history-load">
+            <button
+              className="secondary-button chat-history-load__button"
+              type="button"
+              onClick={handleLoadOlderMessages}
+              disabled={loadingOlderMessages}
+            >
+              {loadingOlderMessages ? (
+                <>
+                  <LoaderCircle className="icon-spin" size={14} />
+                  正在加载更早消息...
+                </>
+              ) : (
+                <>
+                  <ArrowUp size={14} />
+                  加载更早消息
+                </>
+              )}
+            </button>
+          </div>
+        ) : null}
         {timelineItems.length > 0 ? (
           timelineItems.map(item =>
             item.kind === 'message' ? (
@@ -429,8 +530,10 @@ export function ChatPane({
         sending={sending}
         mentionOptions={mentionOptions}
         replyTarget={replyTarget}
+        codeSelectionTarget={codeSelectionTarget}
         disabledReason={composerDisabledReason}
         onCancelReply={onCancelReply}
+        onCancelCodeSelection={onCancelCodeSelection}
         onSend={onSend}
       />
 
@@ -1177,17 +1280,29 @@ type ChatComposerProps = {
   sending: boolean
   mentionOptions: AgentMentionOption[]
   replyTarget?: ReplyReference
+  codeSelectionTarget?: CodeSelectionReference
   disabledReason: string
   onCancelReply: () => void
-  onSend: (content: string, replyTo?: ReplyReference) => void
+  onCancelCodeSelection: () => void
+  onSend: (content: string, replyTo?: ReplyReference, codeSelection?: CodeSelectionReference) => void
 }
 
 /**
  * Renders the message composer at the bottom of the chat pane.
  * Input: active workspace room, sending flag, mention options, and send callback.
- * Output: textarea composer with command chips and the group-chat @ picker.
+ * Output: textarea composer with the group-chat @ picker.
  */
-function ChatComposer({ room, sending, mentionOptions, replyTarget, disabledReason, onCancelReply, onSend }: ChatComposerProps) {
+function ChatComposer({
+  room,
+  sending,
+  mentionOptions,
+  replyTarget,
+  codeSelectionTarget,
+  disabledReason,
+  onCancelReply,
+  onCancelCodeSelection,
+  onSend,
+}: ChatComposerProps) {
   const storageKey = room ? `agenthub:draft:${room.conversation.id}` : ''
   const [value, setValue] = useState('')
   const [mentionMatch, setMentionMatch] = useState<MentionMatch | null>(null)
@@ -1328,12 +1443,13 @@ function ChatComposer({ room, sending, mentionOptions, replyTarget, disabledReas
       return
     }
 
-    onSend(content, replyTarget)
+    onSend(content, replyTarget, codeSelectionTarget)
     setValue('')
     setMentionMatch(null)
     selectionRef.current = { start: 0, end: 0 }
     window.localStorage.removeItem(storageKey)
     onCancelReply()
+    onCancelCodeSelection()
   }
 
   /**
@@ -1391,10 +1507,6 @@ function ChatComposer({ room, sending, mentionOptions, replyTarget, disabledReas
     syncMentionState(textarea.value, textarea.selectionStart, textarea.selectionEnd)
   }
 
-  function insertChip(valueToInsert: string) {
-    insertTextAtSelection(valueToInsert)
-  }
-
   return (
     <form
       className="composer"
@@ -1403,31 +1515,6 @@ function ChatComposer({ room, sending, mentionOptions, replyTarget, disabledReas
         handleSubmit()
       }}
     >
-      {room?.kind === 'group' ? (
-        <div className="composer-chips">
-          <button type="button" onClick={() => insertChip('@product-manager ')} disabled={composerLocked}>
-            @product-manager
-          </button>
-          <button type="button" onClick={() => insertChip('@engineer ')} disabled={composerLocked}>
-            @engineer
-          </button>
-          <button type="button" onClick={() => insertChip('@reviewer ')} disabled={composerLocked}>
-            @reviewer
-          </button>
-          <button type="button" onClick={() => insertChip('/run ')} disabled={composerLocked}>
-            /run
-          </button>
-        </div>
-      ) : (
-        <div className="composer-chips">
-          <button type="button" onClick={() => insertChip(`@${room?.targetAgentId ?? 'agent'} `)} disabled={composerLocked}>
-            @{room?.targetAgentId ?? 'agent'}
-          </button>
-          <button type="button" onClick={() => insertChip('/run ')} disabled={composerLocked}>
-            /run
-          </button>
-        </div>
-      )}
       <div className="composer-box">
         {replyTarget ? (
           <div className="composer-reply-bar">
@@ -1436,6 +1523,21 @@ function ChatComposer({ room, sending, mentionOptions, replyTarget, disabledReas
               <span>{replyTarget.excerpt}</span>
             </div>
             <button type="button" onClick={onCancelReply} disabled={composerLocked} title="取消引用">
+              <X size={14} />
+            </button>
+          </div>
+        ) : null}
+        {codeSelectionTarget ? (
+          <div className="composer-code-bar">
+            <div className="composer-code-bar__copy">
+              <strong>
+                <Braces size={13} />
+                引用代码
+              </strong>
+              <span>{codeSelectionLocationLabel(codeSelectionTarget)}</span>
+              <small>{clipCodeSelectionExcerpt(codeSelectionTarget)}</small>
+            </div>
+            <button type="button" onClick={onCancelCodeSelection} disabled={composerLocked} title="取消引用代码">
               <X size={14} />
             </button>
           </div>

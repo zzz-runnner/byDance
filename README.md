@@ -17,11 +17,15 @@ The current local live path is:
 
 `locateBackend` is the only backend used by the frontend in local mode. The current implementation covers:
 
+- `GET /api/workbench`
 - `GET /api/projects`
 - `GET /api/agents`
 - `GET /api/projects/:projectId/state`
 - `POST /api/projects`
 - `POST /api/projects/:projectId/messages/stream`
+- `GET /api/projects/:projectId/files`
+- `GET /api/projects/:projectId/files/content`
+- `GET /api/projects/:projectId/diff`
 - `GET /preview/*`
 - `GET /api/workspaces/:workspaceId/zip`
 
@@ -39,6 +43,9 @@ The current local path is focused on one workspace equals one chat window.
 - Group chat now supports two visible child-agent reply paths in local live mode:
   - One explicit `@agent` mention is forwarded by `locateBackend` as a real upstream target agent.
   - One non-mention specialist question can be routed by `agentHub` to a single visible child agent based on runtime agent metadata, task stage, and message content.
+- The composer now stays closer to a normal chat input:
+  - The old preset `@product-manager` / `@engineer` / `@reviewer` / `/run` chips have been removed.
+  - Group rooms rely on natural typing plus the upward `@` mention picker instead of fixed quick-action tags.
 - Chat messages now support a WeChat-style structured reply reference:
   - The frontend shows a quote bar in the composer and a quote header in persisted chat bubbles.
   - `locateBackend` and `agentHub` forward `replyTo` as structured data instead of injecting visible template text into the composer.
@@ -55,6 +62,21 @@ The current local path is focused on one workspace equals one chat window.
 - Artifact cards inside the chat stream now stay compact by default and only expose the key summary, while full preview, diff, review, and long-form text stay in the artifact dialog.
 - Frontend startup is now `live-only`: first load shows a blocking loading state, backend failure shows a blocking retry state, and the page no longer falls back to mock/demo workspaces.
 - Preview dialogs now show `loading / slow / error` states before iframe content is ready.
+- The workbench now loads in two layers instead of sweeping every project state on first paint:
+  - The left workspace rail is backed by one lightweight `/api/workbench` summary payload.
+  - The right chat pane only fetches the active workspace detail.
+  - Sending a message or refreshing one room no longer refetches every workspace state.
+- The current workspace history now uses one recent-message window:
+  - `/api/projects/:projectId/state` accepts `messageLimit`.
+  - The chat pane can load older messages incrementally instead of loading the full conversation history on startup.
+- The current workspace can now open one in-window code browser:
+  - The top bar `代码` button opens the configured real local source tree from `locateBackend` `sourceRootPath` instead of the AgentHub runtime seed repo.
+  - The default local source root is `E:\byDance`, so the browser can see `agentHubFrontend/`, `locateBackend/`, `agentHub/`, `docs/` and other real repo folders.
+  - Runtime workspaces, build output, `node_modules`, and agent log files are filtered out of the visible code tree.
+  - The panel uses a read-only Monaco editor, file search, local diff count, and binary-file shielding.
+  - One selected code range can be quoted back into the chat composer as structured `codeSelection` data.
+  - In group rooms, a message with `codeSelection` and no explicit `@agent` defaults to `engineer` routing in `locateBackend`.
+  - The Monaco viewer now measures the visible editor shell with `ResizeObserver` and triggers explicit `layout()` calls after open, resize, and file switches, so it no longer depends on fragile percentage-height inheritance.
 - When the page is viewed through a remote desktop or remote-control session, decorative blur layers and React dev-mode re-renders can look like visible flicker. Treat this as an environment observation first, not as a confirmed frontend callback loop.
 - `agentHubBackend/` is still outside the local live path and remains untouched.
 
@@ -139,10 +161,6 @@ cd E:\byDance\agentHubFrontend
 npm run check
 npm run build
 
-cd E:\byDance\agentHub
-npm run build
-npm run test
-
 cd E:\byDance\locateBackend
 npm run check
 npm run build
@@ -152,10 +170,13 @@ Result:
 
 - `agentHubFrontend` TypeScript check passed
 - `agentHubFrontend` production build passed
-- `agentHub` TypeScript build passed
-- `agentHub` unit and integration tests passed
 - `locateBackend` TypeScript check passed
 - `locateBackend` TypeScript build passed
+- Local smoke checks passed for:
+  - `GET /api/workbench`
+  - `GET /api/projects/:projectId/state?messageLimit=2` returning `hasMore=true`
+  - `GET /api/projects/:projectId/files`
+  - `GET /api/projects/:projectId/files/content?path=agentHubFrontend/src/App.tsx`
 
 ## Current Limits
 
@@ -165,6 +186,7 @@ The current local implementation intentionally does not cover:
 - Cloud deployment
 - Build-preview and deploy product flows
 - Version history and one-click apply-diff UX
+- In-browser manual file editing and save-back flow
 - Desktop and mobile clients
 
 `/build-preview/*` and `/deploy/*` currently return `404` placeholders from `locateBackend`.

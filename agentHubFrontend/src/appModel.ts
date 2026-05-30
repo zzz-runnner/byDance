@@ -4,24 +4,11 @@ import type {
   Conversation,
   LiveWorkflowEvent,
   Message,
-  Workspace,
   WorkspaceSignal,
+  WorkspaceRoom,
   WorkflowEvent,
   WorkflowEventRecord,
 } from './types'
-
-export type WorkspaceRoomKind = 'group' | 'direct'
-
-export type WorkspaceRoom = {
-  id: string
-  kind: WorkspaceRoomKind
-  title: string
-  subtitle: string
-  workspace: Workspace
-  conversation: Conversation
-  targetAgentId?: string
-  participantAgentIds: string[]
-}
 
 const STAGE_LABELS: Record<string, string> = {
   chat: '自由对话',
@@ -108,6 +95,13 @@ export function workspaceRooms(state: AppState): WorkspaceRoom[] {
         workspace,
         conversation,
         participantAgentIds,
+        signal: {
+          runningAgents: 0,
+          latestEventLabel: '暂无新事件',
+          artifactCount: 0,
+          messageCount: 0,
+        },
+        lastActivityAt: conversation.updatedAt,
         ...(targetAgentId ? { targetAgentId } : {}),
       } satisfies WorkspaceRoom
     })
@@ -129,7 +123,7 @@ export function firstWorkspaceRoomId(state: AppState): string {
  * Input: room kind.
  * Output: localized room kind label.
  */
-export function workspaceRoomKindLabel(kind: WorkspaceRoomKind): string {
+export function workspaceRoomKindLabel(kind: WorkspaceRoom['kind']): string {
   return kind === 'group' ? '群聊工作区' : '单聊工作区'
 }
 

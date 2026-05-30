@@ -18,6 +18,81 @@ export interface ProjectResponse extends StoredProjectRecord {
   agentHubZipUrl: string
 }
 
+export interface ProjectStatePage {
+  limit: number
+  total: number
+  hasMore: boolean
+}
+
+export interface WorkspaceSignal {
+  runningAgents: number
+  latestEventLabel: string
+  artifactCount: number
+  messageCount: number
+}
+
+export interface WorkbenchRoomSummary {
+  id: string
+  kind: ConversationType
+  title: string
+  subtitle: string
+  workspace: FrontendWorkspace
+  conversation: RuntimeConversation
+  targetAgentId?: string
+  participantAgentIds: string[]
+  signal: WorkspaceSignal
+  lastActivityAt: string
+}
+
+export interface WorkbenchOverviewResponse {
+  agents: RuntimeAgent[]
+  rooms: WorkbenchRoomSummary[]
+  sourceRootLabel: string
+}
+
+export interface ProjectStateResponse {
+  state: FrontendAppState
+  messagePage: ProjectStatePage
+}
+
+export interface CodeSelectionReference {
+  filePath: string
+  selectedText: string
+  startLine: number
+  startColumn: number
+  endLine: number
+  endColumn: number
+  language?: string
+  beforeContext?: string
+  afterContext?: string
+}
+
+export interface ProjectFileNode {
+  path: string
+  name: string
+  kind: 'directory' | 'file'
+  byteLength?: number
+  language?: string
+  isText: boolean
+  children?: ProjectFileNode[]
+}
+
+export interface ProjectFileContent {
+  path: string
+  name: string
+  content: string
+  language: string
+  byteLength: number
+  updatedAt: string
+  lineCount: number
+}
+
+export interface ProjectWorkspaceDiff {
+  baseCommit: string
+  status: string
+  patch: string
+}
+
 export interface RuntimeWorkspace extends Record<string, unknown> {
   id: string
   name: string
@@ -52,6 +127,7 @@ export interface RuntimeMessage extends Record<string, unknown> {
   id: string
   workspaceId: string
   conversationId: string
+  createdAt: string
 }
 
 export interface RuntimeAgent extends Record<string, unknown> {
@@ -161,4 +237,5 @@ export interface StreamProjectMessageInput {
     senderName?: string
     excerpt: string
   }
+  codeSelection?: CodeSelectionReference
 }

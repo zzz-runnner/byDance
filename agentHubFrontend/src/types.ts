@@ -47,6 +47,79 @@ export type WorkspaceSignal = {
   messageCount: number
 }
 
+export type WorkspaceRoom = {
+  id: string
+  kind: 'group' | 'direct'
+  title: string
+  subtitle: string
+  workspace: Workspace
+  conversation: Conversation
+  targetAgentId?: string
+  participantAgentIds: string[]
+  signal: WorkspaceSignal
+  lastActivityAt: string
+}
+
+export type WorkbenchOverview = {
+  agents: AgentDefinition[]
+  rooms: WorkspaceRoom[]
+  sourceRootLabel: string
+}
+
+export type ProjectStatePage = {
+  limit: number
+  total: number
+  hasMore: boolean
+}
+
+export type ProjectStateEnvelope = {
+  state: AppState
+  messagePage: ProjectStatePage
+}
+
+export type CodeSelectionReference = {
+  filePath: string
+  selectedText: string
+  startLine: number
+  startColumn: number
+  endLine: number
+  endColumn: number
+  language?: string
+  beforeContext?: string
+  afterContext?: string
+}
+
+export type WorkspaceFileNode = {
+  path: string
+  name: string
+  kind: 'directory' | 'file'
+  byteLength?: number
+  language?: string
+  isText: boolean
+  children?: WorkspaceFileNode[]
+}
+
+export type WorkspaceFileTree = {
+  rootLabel: string
+  entries: WorkspaceFileNode[]
+}
+
+export type WorkspaceFileContent = {
+  path: string
+  name: string
+  content: string
+  language: string
+  byteLength: number
+  updatedAt: string
+  lineCount: number
+}
+
+export type WorkspaceDiffSnapshot = {
+  baseCommit: string
+  status: string
+  patch: string
+}
+
 export type StreamMessageInput = {
   projectId?: string
   workspaceId: string
@@ -54,6 +127,7 @@ export type StreamMessageInput = {
   content: string
   agentId?: string
   replyTo?: ReplyReference
+  codeSelection?: CodeSelectionReference
 }
 
 export type LiveWorkflowEvent = WorkflowEvent & {
