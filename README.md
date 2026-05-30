@@ -43,7 +43,8 @@ The current local path is focused on one workspace equals one chat window.
   - The frontend shows a quote bar in the composer and a quote header in persisted chat bubbles.
   - `locateBackend` and `agentHub` forward `replyTo` as structured data instead of injecting visible template text into the composer.
   - The quoted relationship survives refresh because the main conversation message now persists `replyTo` in storage.
-  - Main-brain routing, planner context, and child-agent private replies now receive reply context, so short follow-up messages can stay attached to the intended specialist more reliably.
+  - In group chat, quoting one current child agent now has the same routing priority as a weak `@agent`: the quoted agent keeps the visible reply by default unless the user explicitly `@` mentions another agent.
+  - If the quoted sender is `user`, `orchestrator`, or a child agent that is no longer a participant in the current workspace conversation, `agentHub` falls back to normal routing.
 - The visible speaker identity flows through `routing_finished.speakerAgentId`, so the frontend can show the actual replying agent instead of always showing Orchestrator.
 - Frontend chat restores the last active workspace after refresh, auto-scrolls to the bottom on room switch, keeps follow-scroll near the bottom during streaming, shows a jump-to-bottom button when the user scrolls up, and renders temporary waiting bubbles during routing and reply generation.
 - The main chat surface groups each user turn into one visible block: user message, `本轮过程`, inline artifact cards, and the final agent result.

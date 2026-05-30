@@ -689,7 +689,7 @@ function MessageBubble({
             {canReply ? (
               <button type="button" onClick={() => onReply(buildMessageReplyReference(message, senderName))}>
                 <MessageSquareReply size={14} />
-                回复
+                引用
               </button>
             ) : null}
             <button type="button" onClick={() => onCopy(message.content)}>
@@ -1432,7 +1432,7 @@ function ChatComposer({ room, sending, mentionOptions, replyTarget, disabledReas
         {replyTarget ? (
           <div className="composer-reply-bar">
             <div className="composer-reply-bar__copy">
-              <strong>回复 {replySenderLabel(replyTarget)}</strong>
+              <strong>引用 {replySenderLabel(replyTarget)}</strong>
               <span>{replyTarget.excerpt}</span>
             </div>
             <button type="button" onClick={onCancelReply} disabled={composerLocked} title="取消引用">

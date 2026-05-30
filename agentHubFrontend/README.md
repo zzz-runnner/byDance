@@ -35,7 +35,7 @@ The frontend is now `live-only`. If the business backend API is unavailable, the
 - Group workspaces support a WeChat-style `@` mention picker for child agents inside the composer.
 - Direct workspaces keep a fixed target agent and do not open the `@` picker.
 - Chat bubbles now support WeChat-style reply quotes:
-  - Clicking `回复` opens a quote bar above the composer instead of inserting template text into the textarea.
+  - Clicking `引用` opens a quote bar above the composer instead of inserting template text into the textarea.
   - Sent user messages persist a structured `replyTo` relationship, and the quote header still renders after refresh.
   - The outgoing payload now sends `content + replyTo`, so backend routing and agent prompts can use the real quoted target.
 - Composer shortcut chips still exist as a fallback, and all insertions respect the current caret position.

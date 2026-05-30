@@ -1,4 +1,4 @@
-import type { AgentDefinition, ReplyReference } from '@shared/contracts'
+import type { AgentDefinition, Conversation, ReplyReference } from '@shared/contracts'
 
 export type ReplyContextPayload = {
   messageId: string
@@ -44,6 +44,23 @@ export function resolveReplyTargetAgentId(
   }
 
   return agents.find(agent => agent.id === replyTo.senderId)?.id
+}
+
+/**
+ * Resolves one quoted child-agent id only when that agent is still a participant in the current conversation.
+ * Input: reply reference, current conversation, and current agent registry. Output: continuable agent id or undefined.
+ */
+export function resolveReplyContinuationAgentId(
+  replyTo: ReplyReference | undefined,
+  conversation: Pick<Conversation, 'participants'>,
+  agents: AgentDefinition[],
+): string | undefined {
+  const agentId = resolveReplyTargetAgentId(replyTo, agents)
+  if (!agentId) {
+    return undefined
+  }
+
+  return conversation.participants.includes(agentId) ? agentId : undefined
 }
 
 /**

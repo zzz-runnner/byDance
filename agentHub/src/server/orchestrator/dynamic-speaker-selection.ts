@@ -1,5 +1,5 @@
 import type { AgentDefinition, Conversation, ReplyReference, WorkflowTaskStage } from '@shared/contracts'
-import { resolveReplyTargetAgentId } from './reply-context'
+import { resolveReplyContinuationAgentId } from './reply-context'
 
 export type DynamicSpeakerSelection = {
   agentId: string
@@ -184,8 +184,8 @@ export function selectDynamicVisibleSpeaker(input: DynamicSpeakerSelectionInput)
     return undefined
   }
 
-  const repliedAgentId = resolveReplyTargetAgentId(input.replyTo, input.agents)
-  if (repliedAgentId && input.conversation.participants.includes(repliedAgentId)) {
+  const repliedAgentId = resolveReplyContinuationAgentId(input.replyTo, input.conversation, input.agents)
+  if (repliedAgentId) {
     return {
       agentId: repliedAgentId,
       confidence: 0.94,
