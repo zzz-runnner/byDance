@@ -11,6 +11,7 @@ import type {
   ContextSnapshot,
   DiagnosticLog,
   Message,
+  ReplyReference,
   TaskHandoff,
   WorkflowEvent,
   WorkflowEventRecord,
@@ -30,6 +31,7 @@ export type {
   ContextSnapshot,
   DiagnosticLog,
   Message,
+  ReplyReference,
   TaskHandoff,
   WorkflowEvent,
   WorkflowEventRecord,
@@ -51,6 +53,7 @@ export type StreamMessageInput = {
   conversationId: string
   content: string
   agentId?: string
+  replyTo?: ReplyReference
 }
 
 export type LiveWorkflowEvent = WorkflowEvent & {

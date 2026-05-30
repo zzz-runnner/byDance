@@ -155,4 +155,10 @@ export interface StreamProjectMessageInput {
   content: string
   conversationId?: string
   agentId?: string
+  replyTo?: {
+    messageId: string
+    senderId: string
+    senderName?: string
+    excerpt: string
+  }
 }

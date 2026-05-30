@@ -244,6 +244,7 @@ export async function streamBusinessProjectMessage(
       conversationId: input.conversationId,
       content: input.content,
       agentId: input.agentId,
+      replyTo: input.replyTo,
     }),
   })
 

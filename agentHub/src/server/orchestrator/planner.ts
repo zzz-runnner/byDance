@@ -1,4 +1,4 @@
-import type { AgentDefinition, AppState, Conversation, MainBrainTurn, TurnFinalizationMode, Workspace } from '@shared/contracts'
+import type { AgentDefinition, AppState, Conversation, MainBrainTurn, ReplyReference, TurnFinalizationMode, Workspace } from '@shared/contracts'
 import { MainBrainTurnSchema } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import { createModelGateway } from '../model-gateway'
@@ -56,6 +56,7 @@ function buildPlannerSystemPrompt(route?: TurnRoute): string {
     'Dispatch child agents only when the task benefits from real tool use, implementation, verification, or deeper role-specific work.',
     'The availableAgents payload includes routingProfile metadata. Treat responsibilities, goodAt, preferredStages, exampleRequests, and speakerMode as your primary routing signals.',
     'In group conversations, if one available child agent clearly owns the question by domain responsibility, prefer that child agent as the only visible speaker instead of answering as orchestrator.',
+    'If replyContext points to one child agent and the new user message does not clearly switch topics, prefer that same child agent as the visible speaker.',
     'When taskStage is requirements_intake, planning, or awaiting_confirmation, prefer a direct_speaker child agent whose preferredStages include that stage and who does not need file writes for a first response.',
     'Do not let a file-writing implementation agent take first-speaker ownership of a requirement-intake or planning turn unless the user explicitly selected that agent by @mention or direct chat.',
     'When taskStage is review, prefer the best review-focused direct_speaker child agent instead of orchestrator whenever one agent can give the verdict directly.',
@@ -249,6 +250,7 @@ export async function decideRoutingWithPlanner(input: PlannerInput): Promise<Pla
       workspace: input.workspace,
       conversation: input.conversation,
       userMessage: input.content,
+      replyTo: input.replyTo,
       agents: input.agents,
     })
     contextTokenEstimate = estimateTokenCount(contextPackage)

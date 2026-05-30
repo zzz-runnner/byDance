@@ -1,4 +1,5 @@
-import type { AgentDefinition, Conversation, WorkflowTaskStage } from '@shared/contracts'
+import type { AgentDefinition, Conversation, ReplyReference, WorkflowTaskStage } from '@shared/contracts'
+import { resolveReplyTargetAgentId } from './reply-context'
 
 export type DynamicSpeakerSelection = {
   agentId: string
@@ -11,6 +12,7 @@ type DynamicSpeakerSelectionInput = {
   conversation: Conversation
   agents: AgentDefinition[]
   taskStage?: WorkflowTaskStage
+  replyTo?: ReplyReference
 }
 
 const SYSTEM_SUBJECT_PATTERN =
@@ -180,6 +182,15 @@ export function selectDynamicVisibleSpeaker(input: DynamicSpeakerSelectionInput)
 
   if (isSystemStatusQuestion(input.content) || COORDINATION_PATTERN.test(input.content)) {
     return undefined
+  }
+
+  const repliedAgentId = resolveReplyTargetAgentId(input.replyTo, input.agents)
+  if (repliedAgentId && input.conversation.participants.includes(repliedAgentId)) {
+    return {
+      agentId: repliedAgentId,
+      confidence: 0.94,
+      reason: `Reply context favored ${repliedAgentId} as the visible speaker.`,
+    }
   }
 
   const candidateAgents = input.agents.filter(agent => input.conversation.participants.includes(agent.id))

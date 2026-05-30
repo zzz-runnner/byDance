@@ -797,6 +797,34 @@ a {
   word-break: break-word;
 }
 
+.message-quote {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid rgba(59, 130, 246, 0.44);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.message-quote strong,
+.message-quote span {
+  display: block;
+}
+
+.message-quote strong {
+  color: #2c3a4f;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.message-quote span {
+  color: #607087;
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
 .markdown-content {
   color: #283241;
   font-size: 14px;
@@ -1617,6 +1645,53 @@ a {
   border-radius: 14px;
   background: linear-gradient(126deg, rgba(255, 255, 255, 0.53), rgba(255, 255, 255, 0.27) 62%, rgba(246, 242, 255, 0.2)), rgba(255, 255, 255, 0.22);
   backdrop-filter: blur(18px);
+}
+
+.composer-reply-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-column: 1 / -1;
+  gap: 8px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  border-left: 3px solid rgba(59, 130, 246, 0.46);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.26);
+}
+
+.composer-reply-bar__copy {
+  min-width: 0;
+}
+
+.composer-reply-bar__copy strong,
+.composer-reply-bar__copy span {
+  display: block;
+}
+
+.composer-reply-bar__copy strong {
+  color: #243146;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.composer-reply-bar__copy span {
+  margin-top: 3px;
+  color: #607087;
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.composer-reply-bar button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.4);
+  color: #546174;
 }
 
 .mention-picker {

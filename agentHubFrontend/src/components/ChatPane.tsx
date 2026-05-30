@@ -18,6 +18,7 @@ import {
   RefreshCcw,
   ShieldCheck,
   TerminalSquare,
+  X,
 } from 'lucide-react'
 import {
   buildAgentMap,
@@ -33,7 +34,7 @@ import {
   type ChatTurnArtifact,
   type ChatTurnProcessEntry,
 } from '../chatTimeline'
-import type { AgentDefinition, AppState, Artifact, ConnectionStatus, LiveWorkflowEvent, Message } from '../types'
+import type { AgentDefinition, AppState, Artifact, ConnectionStatus, LiveWorkflowEvent, Message, ReplyReference } from '../types'
 import { AgentAvatar } from './AgentAvatar'
 import { AgentMentionPicker, type AgentMentionOption } from './AgentMentionPicker'
 import { GlassPanel } from './GlassPanel'
@@ -52,10 +53,12 @@ type ChatPaneProps = {
   composerDisabledReason: string
   sending: boolean
   activeConversationId: string
+  replyTarget?: ReplyReference
   onRegenerate: () => void
-  onReplyToMessage: (content: string) => void
+  onReplyToMessage: (replyTo: ReplyReference) => void
+  onCancelReply: () => void
   onCopyMessage: (content: string) => void
-  onSend: (content: string) => void
+  onSend: (content: string, replyTo?: ReplyReference) => void
 }
 
 type MentionMatch = {
@@ -65,6 +68,60 @@ type MentionMatch = {
 }
 
 type PreviewFrameStatus = 'loading' | 'slow' | 'ready' | 'error'
+
+/**
+ * Clips one quoted message into a single-line excerpt for reply previews.
+ * Input: raw message text and an optional max length. Output: compact preview text.
+ */
+function clipReplyExcerpt(content: string, maxLength = 120): string {
+  const normalized = content
+    .replace(/```[\s\S]*?```/g, '[code]')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[[^\]]*]\([^)]*\)/g, '')
+    .replace(/\[([^\]]+)]\([^)]*\)/g, '$1')
+    .replace(/^[#>\-\*\d.\s|]+/gm, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) {
+    return '无内容'
+  }
+  if (normalized.length <= maxLength) {
+    return normalized
+  }
+  return `${normalized.slice(0, maxLength)}...`
+}
+
+/**
+ * Resolves the visible sender label for one chat bubble.
+ * Input: message plus optional agent display name. Output: readable sender label.
+ */
+function messageSenderLabel(message: Message, senderName?: string): string {
+  if (message.senderType === 'user') {
+    return '你'
+  }
+  return senderName ?? message.senderId
+}
+
+/**
+ * Builds the persisted reply reference from one visible message bubble.
+ * Input: message plus its visible sender label. Output: structured reply payload.
+ */
+function buildMessageReplyReference(message: Message, senderName?: string): ReplyReference {
+  return {
+    messageId: message.id,
+    senderId: message.senderId,
+    senderName: messageSenderLabel(message, senderName),
+    excerpt: clipReplyExcerpt(message.content),
+  }
+}
+
+/**
+ * Resolves the label displayed inside quote bars and quoted bubble headers.
+ * Input: reply reference. Output: readable sender label.
+ */
+function replySenderLabel(replyTo: ReplyReference): string {
+  return replyTo.senderName?.trim() || replyTo.senderId
+}
 
 /**
  * Builds the available child-agent options for one group room.
@@ -164,8 +221,10 @@ export function ChatPane({
   composerDisabledReason,
   sending,
   activeConversationId,
+  replyTarget,
   onRegenerate,
   onReplyToMessage,
+  onCancelReply,
   onCopyMessage,
   onSend,
 }: ChatPaneProps) {
@@ -369,7 +428,9 @@ export function ChatPane({
         room={room}
         sending={sending}
         mentionOptions={mentionOptions}
+        replyTarget={replyTarget}
         disabledReason={composerDisabledReason}
+        onCancelReply={onCancelReply}
         onSend={onSend}
       />
 
@@ -388,7 +449,7 @@ type TurnBlockProps = {
   agentMap: Map<string, AgentDefinition>
   expanded: boolean
   onToggle: () => void
-  onReply: (content: string) => void
+  onReply: (replyTo: ReplyReference) => void
   onCopy: (content: string) => void
   onOpenArtifact: (artifact: ChatTurnArtifact) => void
 }
@@ -562,7 +623,7 @@ function ProcessLogBlock({ entry }: ProcessLogBlockProps) {
 type MessageBubbleProps = {
   message: Message
   senderName?: string
-  onReply: (content: string) => void
+  onReply: (replyTo: ReplyReference) => void
   onCopy: (content: string) => void
   renderArtifacts?: boolean
   forceStreaming?: boolean
@@ -583,7 +644,8 @@ function MessageBubble({
 }: MessageBubbleProps) {
   const isUser = message.senderType === 'user'
   const isStreamingPlaceholder = forceStreaming || (!isUser && message.content.trim().length === 0)
-  const senderLabel = isUser ? '你' : senderName ?? message.senderId
+  const senderLabel = messageSenderLabel(message, senderName)
+  const canReply = message.content.trim().length > 0
 
   return (
     <article className={`message-row ${isUser ? 'message-row--user' : ''}`}>
@@ -594,6 +656,12 @@ function MessageBubble({
           <time>{formatTime(message.createdAt)}</time>
         </div>
         <div className={`message-bubble ${isUser ? 'message-bubble--user' : 'message-bubble--agent'}`}>
+          {message.replyTo ? (
+            <div className="message-quote">
+              <strong>{replySenderLabel(message.replyTo)}</strong>
+              <span>{message.replyTo.excerpt}</span>
+            </div>
+          ) : null}
           {message.content ? (
             isUser ? (
               <p>{message.content}</p>
@@ -618,10 +686,12 @@ function MessageBubble({
             </div>
           ) : null}
           <div className="message-actions">
-            <button type="button" onClick={() => onReply(message.content)}>
-              <MessageSquareReply size={14} />
-              回复
-            </button>
+            {canReply ? (
+              <button type="button" onClick={() => onReply(buildMessageReplyReference(message, senderName))}>
+                <MessageSquareReply size={14} />
+                回复
+              </button>
+            ) : null}
             <button type="button" onClick={() => onCopy(message.content)}>
               <Copy size={14} />
               复制
@@ -1106,8 +1176,10 @@ type ChatComposerProps = {
   room: WorkspaceRoom | undefined
   sending: boolean
   mentionOptions: AgentMentionOption[]
+  replyTarget?: ReplyReference
   disabledReason: string
-  onSend: (content: string) => void
+  onCancelReply: () => void
+  onSend: (content: string, replyTo?: ReplyReference) => void
 }
 
 /**
@@ -1115,7 +1187,7 @@ type ChatComposerProps = {
  * Input: active workspace room, sending flag, mention options, and send callback.
  * Output: textarea composer with command chips and the group-chat @ picker.
  */
-function ChatComposer({ room, sending, mentionOptions, disabledReason, onSend }: ChatComposerProps) {
+function ChatComposer({ room, sending, mentionOptions, replyTarget, disabledReason, onCancelReply, onSend }: ChatComposerProps) {
   const storageKey = room ? `agenthub:draft:${room.conversation.id}` : ''
   const [value, setValue] = useState('')
   const [mentionMatch, setMentionMatch] = useState<MentionMatch | null>(null)
@@ -1176,19 +1248,6 @@ function ChatComposer({ room, sending, mentionOptions, disabledReason, onSend }:
   useEffect(() => {
     setActiveMentionIndex(0)
   }, [mentionMatch?.query, mentionMatch?.start, room?.id])
-
-  useEffect(() => {
-    function handleInsert(event: Event) {
-      const customEvent = event as CustomEvent<string>
-      const inserted = customEvent.detail ?? ''
-      insertTextAtSelection(inserted)
-    }
-
-    window.addEventListener('agenthub:composer-insert', handleInsert)
-    return () => {
-      window.removeEventListener('agenthub:composer-insert', handleInsert)
-    }
-  }, [room?.kind, value])
 
   /**
    * Recomputes the active @ mention token for the current caret location.
@@ -1269,11 +1328,12 @@ function ChatComposer({ room, sending, mentionOptions, disabledReason, onSend }:
       return
     }
 
-    onSend(content)
+    onSend(content, replyTarget)
     setValue('')
     setMentionMatch(null)
     selectionRef.current = { start: 0, end: 0 }
     window.localStorage.removeItem(storageKey)
+    onCancelReply()
   }
 
   /**
@@ -1369,6 +1429,17 @@ function ChatComposer({ room, sending, mentionOptions, disabledReason, onSend }:
         </div>
       )}
       <div className="composer-box">
+        {replyTarget ? (
+          <div className="composer-reply-bar">
+            <div className="composer-reply-bar__copy">
+              <strong>回复 {replySenderLabel(replyTarget)}</strong>
+              <span>{replyTarget.excerpt}</span>
+            </div>
+            <button type="button" onClick={onCancelReply} disabled={composerLocked} title="取消引用">
+              <X size={14} />
+            </button>
+          </div>
+        ) : null}
         {showMentionPicker ? (
           <AgentMentionPicker
             options={filteredMentionOptions}

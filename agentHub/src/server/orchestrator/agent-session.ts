@@ -8,6 +8,7 @@ import type {
   AppState,
   Conversation,
   Message,
+  ReplyReference,
   RoutingTaskBrief,
   SenderType,
   TaskHandoff,
@@ -25,6 +26,7 @@ import {
   type RoutedTurn,
   type TurnRoute,
 } from './turn-router'
+import { buildReplyContextPayload } from './reply-context'
 
 export type PlannedAgentSessionTurn = {
   session: AgentSession
@@ -50,6 +52,7 @@ export type AgentReplyPersistenceInput = {
   session: AgentSession
   turn: AgentSessionTurn
   userContent: string
+  replyTo?: ReplyReference
   route?: TurnRoute
   metadata: Record<string, unknown>
 }
@@ -68,6 +71,7 @@ type AgentSessionTurnInput = {
   agent: AgentDefinition
   session: AgentSession
   content: string
+  replyTo?: ReplyReference
 }
 
 type TaskHandoffInput = {
@@ -87,6 +91,7 @@ type AgentSessionContextInput = {
   agent: AgentDefinition
   session: AgentSession
   userMessage: string
+  replyTo?: ReplyReference
   contextProfile?: ContextProfile
 }
 
@@ -282,12 +287,14 @@ export function buildAgentSessionContextPackage(input: AgentSessionContextInput)
       senderType: message.senderType,
       senderId: message.senderId,
       content: compactText(message.content, 420),
+      replyTo: message.replyTo,
       createdAt: message.createdAt,
     }))
 
   return JSON.stringify(
     {
       userMessage: input.userMessage,
+      replyContext: buildReplyContextPayload(input.replyTo, [input.agent]),
       workspace: {
         id: input.workspace.id,
         name: input.workspace.name,
@@ -553,6 +560,7 @@ export async function decideAgentSessionTurn(input: AgentSessionTurnInput): Prom
       workspace: input.workspace,
       conversation: input.conversation,
       agent: input.agent,
+      replyTo: input.replyTo,
     })
     return {
       turn: buildFallbackTurn(input.agent, input.content, true),
@@ -570,6 +578,7 @@ export async function decideAgentSessionTurn(input: AgentSessionTurnInput): Prom
       workspace: input.workspace,
       conversation: input.conversation,
       agent: input.agent,
+      replyTo: input.replyTo,
     })
 
     if (!routed.route.needsModel && routed.route.localResponse) {
@@ -607,6 +616,7 @@ export async function decideAgentSessionTurn(input: AgentSessionTurnInput): Prom
       agent: input.agent,
       session: input.session,
       userMessage: input.content,
+      replyTo: input.replyTo,
       contextProfile: routed.route.contextProfile,
     })
     contextTokenEstimate = estimateTokenCount(contextPackage)
@@ -826,6 +836,7 @@ export async function runAgentSessionTurn(input: AgentSessionTurnInput): Promise
     metadata: {
       conversationId: input.conversation.id,
       forcedRun: isForcedAgentRun(input.content),
+      replyTo: input.replyTo,
     },
   })
 
@@ -886,6 +897,7 @@ export async function runAgentSessionTurn(input: AgentSessionTurnInput): Promise
       session: input.session,
       turn: planned.turn,
       userContent,
+      replyTo: input.replyTo,
       route: planned.route,
       metadata,
     })

@@ -32,13 +32,18 @@ It supports both:
 - Group chat composer supports a WeChat-style `@` picker for child agents, while direct rooms keep a fixed target and do not show the picker
 - `locateBackend` forwards one explicit group-chat `@agent` mention as a real upstream target agent
 
-## 2026-05-29 Local Status
+## 2026-05-30 Local Status
 
 The current local path is focused on one workspace equals one chat window.
 
 - Group chat now supports two visible child-agent reply paths in local live mode:
   - One explicit `@agent` mention is forwarded by `locateBackend` as a real upstream target agent.
   - One non-mention specialist question can be routed by `agentHub` to a single visible child agent based on runtime agent metadata, task stage, and message content.
+- Chat messages now support a WeChat-style structured reply reference:
+  - The frontend shows a quote bar in the composer and a quote header in persisted chat bubbles.
+  - `locateBackend` and `agentHub` forward `replyTo` as structured data instead of injecting visible template text into the composer.
+  - The quoted relationship survives refresh because the main conversation message now persists `replyTo` in storage.
+  - Main-brain routing, planner context, and child-agent private replies now receive reply context, so short follow-up messages can stay attached to the intended specialist more reliably.
 - The visible speaker identity flows through `routing_finished.speakerAgentId`, so the frontend can show the actual replying agent instead of always showing Orchestrator.
 - Frontend chat restores the last active workspace after refresh, auto-scrolls to the bottom on room switch, keeps follow-scroll near the bottom during streaming, shows a jump-to-bottom button when the user scrolls up, and renders temporary waiting bubbles during routing and reply generation.
 - The main chat surface groups each user turn into one visible block: user message, `本轮过程`, inline artifact cards, and the final agent result.
@@ -136,6 +141,7 @@ npm run build
 npm run test
 
 cd E:\byDance\locateBackend
+npm run check
 npm run build
 ```
 
@@ -145,6 +151,7 @@ Result:
 - `agentHubFrontend` production build passed
 - `agentHub` TypeScript build passed
 - `agentHub` unit and integration tests passed
+- `locateBackend` TypeScript check passed
 - `locateBackend` TypeScript build passed
 
 ## Current Limits

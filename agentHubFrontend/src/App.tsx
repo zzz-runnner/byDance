@@ -21,7 +21,7 @@ import { GlassPanel } from './components/GlassPanel'
 import { OrbMark } from './components/OrbMark'
 import { StatusPill } from './components/StatusPill'
 import { WorkspaceRail } from './components/WorkspaceRail'
-import type { AppState, ConnectionStatus, LiveWorkflowEvent, Message, WorkflowEvent } from './types'
+import type { AppState, ConnectionStatus, LiveWorkflowEvent, Message, ReplyReference, WorkflowEvent } from './types'
 
 const ACTIVE_WORKSPACE_STORAGE_KEY = 'agenthub.activeWorkspaceId'
 
@@ -36,6 +36,7 @@ function createTemporaryMessage(
   senderType: Message['senderType'],
   senderId: string,
   content: string,
+  replyTo?: Message['replyTo'],
 ): Message {
   return {
     id: `tmp-${senderId}-${Date.now()}`,
@@ -44,6 +45,7 @@ function createTemporaryMessage(
     senderType,
     senderId,
     content,
+    replyTo,
     artifacts: [],
     createdAt: new Date().toISOString(),
   }
@@ -146,6 +148,7 @@ export function App() {
   const [liveWorkflowEvents, setLiveWorkflowEvents] = useState<LiveWorkflowEvent[]>([])
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([])
   const [streamingMessages, setStreamingMessages] = useState<Record<string, Message>>({})
+  const [pendingReplyTo, setPendingReplyTo] = useState<ReplyReference>()
   const [sending, setSending] = useState(false)
   const [loadingState, setLoadingState] = useState(true)
   const [workspaceQuery, setWorkspaceQuery] = useState('')
@@ -238,6 +241,10 @@ export function App() {
     }
     window.localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, activeWorkspaceId)
   }, [activeWorkspaceId])
+
+  useEffect(() => {
+    setPendingReplyTo(undefined)
+  }, [activeConversationId])
 
   /**
    * Switches the active workspace room.
@@ -369,7 +376,7 @@ export function App() {
    * Input: message content.
    * Output: streams backend events and refreshes the current workbench snapshot.
    */
-  async function handleSend(content: string) {
+  async function handleSend(content: string, replyTo?: ReplyReference) {
     if (!activeRoom || connectionStatus !== 'live') {
       return
     }
@@ -377,7 +384,7 @@ export function App() {
     const activeWorkspace = activeRoom.workspace
     const activeConversation = activeRoom.conversation
     const agentId = directAgentId(activeConversation)
-    const userMessage = createTemporaryMessage(activeWorkspace.id, activeConversation.id, 'user', 'user', content)
+    const userMessage = createTemporaryMessage(activeWorkspace.id, activeConversation.id, 'user', 'user', content, replyTo)
     setOptimisticMessages(previous => [...previous, userMessage])
     setSending(true)
 
@@ -389,6 +396,7 @@ export function App() {
           conversationId: activeConversation.id,
           content,
           agentId,
+          replyTo,
         },
         handleStreamEvent,
       )
@@ -427,15 +435,6 @@ export function App() {
   }
 
   /**
-   * Broadcasts text insertion requests to the chat composer.
-   * Input: string to insert into the composer.
-   * Output: dispatches a window event consumed by the chat composer.
-   */
-  function handleInsertComposerText(value: string) {
-    window.dispatchEvent(new CustomEvent<string>('agenthub:composer-insert', { detail: value }))
-  }
-
-  /**
    * Resends the latest user message for the active conversation.
    * Input: none.
    * Output: triggers the same send path as a normal submission.
@@ -447,7 +446,7 @@ export function App() {
       return
     }
 
-    await handleSend(lastUserMessage.content)
+    await handleSend(lastUserMessage.content, lastUserMessage.replyTo)
   }
 
   /**
@@ -468,12 +467,12 @@ export function App() {
   }
 
   /**
-   * Prefills the composer with a quoted message stub.
-   * Input: message content.
-   * Output: inserts a short reply scaffold in the composer.
+   * Stores one quoted message reference for the next outgoing user message.
+   * Input: reply reference from the selected message bubble.
+   * Output: updates the quote bar state in the composer.
    */
-  function handleReplyToMessage(content: string) {
-    handleInsertComposerText(`引用上一条消息：\n${content}\n\n`)
+  function handleReplyToMessage(replyTo: ReplyReference) {
+    setPendingReplyTo(replyTo)
   }
 
   const connectionPillStatus =
@@ -562,8 +561,10 @@ export function App() {
               composerDisabledReason={composerDisabledReason}
               sending={sending}
               activeConversationId={activeConversationId}
+              replyTarget={pendingReplyTo}
               onRegenerate={() => void handleRegenerate()}
               onReplyToMessage={handleReplyToMessage}
+              onCancelReply={() => setPendingReplyTo(undefined)}
               onCopyMessage={content => void handleCopyMessage(content)}
               onSend={handleSend}
             />
