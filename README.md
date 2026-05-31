@@ -1,6 +1,6 @@
 # byDance
 
-This repository keeps the byDance project in one Git repository while each workspace manages its own dependencies.
+This repository keeps the byDance project in one Git repository while workspace source files live in `agentHub` and local preview runtime assets are managed by `agentHubBackend`.
 
 ## Workspaces
 
@@ -41,7 +41,7 @@ It supports both:
 - WeChat-style `@agent` picking in group chat
 - Structured `replyTo` quoting and structured `codeSelection` routing input
 
-## 2026-05-31 Local Status
+## 2026-06-01 Local Status
 
 The current local path is focused on one workspace equals one chat window.
 
@@ -92,12 +92,25 @@ The current local path is focused on one workspace equals one chat window.
   - New workspaces no longer auto-seed a placeholder `index.html`
   - If no static entry exists yet, the preview panel shows an empty state
   - If multiple preview entries exist, the dialog can switch between them and keeps `loading / slow / error` feedback inside the preview panel
-  - Build-mode preview reuses cached output by `sourceHash`, and no longer creates `package-lock.json` for lockfile-free workspaces during local preview install
+  - Build-mode preview now runs in one backend-managed sandbox with a shared `pnpm` store
+  - Preview build no longer writes `node_modules`, build outputs, or runtime lockfiles back into the user workspace repo
+  - Cached preview outputs are reused by one combined preview cache key derived from source plus dependency state
 - When the page is viewed through a remote desktop or remote-control session, decorative blur layers and React dev-mode re-renders can look like visible flicker. Treat this as an environment observation first, not as a confirmed frontend callback loop.
 
 ## Dependency Management
 
-Each workspace owns its own dependency manifest and lockfile. The repository root is not an npm workspace and does not contain a shared `package.json`.
+The repository root is not an npm workspace and does not contain a shared `package.json`.
+
+Local source and runtime dependencies are now split:
+
+- `agentHub/data/workspaces/{workspaceId}/repo` keeps user-facing source files only
+- `agentHubBackend/data/pnpm-store` keeps the shared local `pnpm` package store for preview builds
+- `agentHubBackend/data/build-sandboxes/{workspaceId}/{manifestHash}` keeps backend-only build sandboxes
+- `agentHubBackend/data/preview-outputs/{workspaceId}/{cacheKey}` keeps backend-only preview artifacts served to iframes
+
+This means preview builds do not install `node_modules` into the workspace repo, and `zip` plus code browsing stay focused on source files.
+
+`agentHubBackend/package.json` now pins the local preview runtime package manager through `packageManager`, and the backend preview service expects `pnpm` to be available locally.
 
 ```powershell
 cd E:\byDance\agentHub
@@ -173,8 +186,9 @@ Smoke checks should confirm:
 - Group workspaces can stream real SSE workflow events
 - Direct workspaces create a real runtime direct conversation
 - Group quote follow-ups can keep the quoted child agent as the visible speaker
-- Preview and zip responses return non-empty bodies when workspace outputs exist
-- File tree, file content, and preview-target endpoints respond for the active workspace
+- Static preview URLs return non-empty HTML bodies when workspace outputs exist
+- Build preview can prepare one sandbox, reuse the shared pnpm store, and return one built page without writing runtime files into the source repo
+- File tree, file content, and preview-capability endpoints respond for the active workspace
 
 ## Compatibility
 

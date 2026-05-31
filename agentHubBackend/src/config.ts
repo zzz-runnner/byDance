@@ -7,8 +7,10 @@ export interface AppConfig {
   dataDir: string
   projectsFilePath: string
   agentHubWorkspaceRootPath: string
-  previewBuildsDir: string
-  previewInstallsDir: string
+  pnpmStoreDir: string
+  previewSandboxesDir: string
+  previewOutputsDir: string
+  previewRuntimeDir: string
 }
 
 /**
@@ -34,8 +36,10 @@ export function readConfig(): AppConfig {
     dataDir,
     projectsFilePath: path.join(dataDir, 'projects.json'),
     agentHubWorkspaceRootPath,
-    previewBuildsDir: path.join(dataDir, 'preview-builds'),
-    previewInstallsDir: path.join(dataDir, 'preview-installs'),
+    pnpmStoreDir: path.join(dataDir, 'pnpm-store'),
+    previewSandboxesDir: path.join(dataDir, 'build-sandboxes'),
+    previewOutputsDir: path.join(dataDir, 'preview-outputs'),
+    previewRuntimeDir: path.join(dataDir, 'preview-runtime'),
   }
 }
 

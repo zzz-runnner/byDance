@@ -2,5 +2,9 @@ node_modules/
 dist/
 data/*.json
 !data/.gitkeep
+data/pnpm-store/
+data/build-sandboxes/
+data/preview-outputs/
+data/preview-runtime/
 .agent-locate*
 .agent-backend*
