@@ -73,7 +73,7 @@ type HttpError = Error & {
 }
 
 /**
- * Creates the locateBackend Fastify server and registers all proxy routes.
+ * Creates the AgentHub backend Fastify server and registers all proxy routes.
  * Input: application config.
  * Output: configured Fastify instance.
  */
@@ -97,7 +97,7 @@ export function createServer(config: AppConfig) {
     const agentHubHealth = await agentHub.health()
     return {
       ok: true,
-      service: 'locate-backend',
+      service: 'agenthub-backend',
       agentHubBaseUrl: config.agentHubBaseUrl,
       dataFilePath: config.projectsFilePath,
       agentHub: agentHubHealth,
@@ -302,19 +302,19 @@ export function createServer(config: AppConfig) {
 
   app.all('/build-preview/*', async (_request, reply) => {
     reply.code(404).send({
-      error: 'build-preview is not implemented in locateBackend yet.',
+      error: 'build-preview is not implemented in agentHubBackend yet.',
     })
   })
 
   app.all('/deploy/*', async (_request, reply) => {
     reply.code(404).send({
-      error: 'deploy is not implemented in locateBackend yet.',
+      error: 'deploy is not implemented in agentHubBackend yet.',
     })
   })
 
   app.get('/', async () => ({
     ok: true,
-    service: 'locate-backend',
+    service: 'agenthub-backend',
     previewPathExample: previewUrlFor('workspace-id'),
     zipPathExample: zipUrlFor('workspace-id'),
   }))

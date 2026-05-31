@@ -1,61 +1,139 @@
-# AgentHub Backend
+# agentHubBackend
 
-NestJS business backend for the AgentHub demo. This service does not replace the AgentHub runtime. It binds a business `projectId` to an AgentHub `workspaceId`, then handles product-version persistence, source zip snapshots, Docker build previews, and local deployment artifacts.
+## Purpose
 
-## Responsibilities
+`agentHubBackend` is the local business-style backend adapter between the frontend and the AgentHub runtime.
 
-- Create or bind business projects to AgentHub workspaces.
-- Proxy project chat messages to AgentHub SSE workflow streams.
-- Keep project metadata in local storage.
-- Save accepted workspace state as Git tags and source zip snapshots.
-- Build version artifacts with Docker and expose `/build-preview/...` static URLs.
-- Publish the latest build artifact to `/deploy/...`.
+The current live path is:
 
-## Environment
+`agentHubFrontend -> agentHubBackend -> agentHub runtime -> real agents`
 
-Copy `.env.example` to `.env` when local defaults are not enough.
+This workspace exposes the frontend-facing API on `127.0.0.1:8790` and forwards runtime work to `agentHub`.
+
+## Current Status
+
+The local backend currently supports:
+
+- Loading paged workspace summaries from a local JSON project map
+- Loading runtime-backed project state from `agentHub`
+- Loading runtime agent definitions from `agentHub`
+- Creating group workspaces
+- Creating direct workspaces backed by a real runtime direct conversation
+- Forwarding one unique group-chat `@agent` mention as an explicit target agent
+- Forwarding quoted replies and code selections as structured routing input
+- Streaming SSE workflow events from `agentHub`
+- Proxying workspace preview assets and zip downloads
+- Proxying workspace file tree, file content, diff, and preview target APIs
+
+The backend intentionally does not rewrite visible speaker identity. It forwards upstream events and leaves the final speaker selection to `agentHub`, so the frontend can render `speakerAgentId` from the runtime chain directly.
+
+The local implementation intentionally does not yet support:
+
+- `build-preview` product flow
+- `deploy` product flow
+- Formal business backend features such as versions, approvals, and release records
+
+## Project Structure
 
 ```text
-PORT=8790
-CORS_ORIGIN=http://127.0.0.1:5173
-AGENTHUB_BASE_URL=http://127.0.0.1:8787
-AGENTHUB_RUNTIME_ROOT=../agentHub/data/workspaces
-APP_STORAGE_ROOT=storage
+agentHubBackend/
+  data/
+    .gitkeep
+    projects.json
+  src/
+    agenthub-client.ts
+    config.ts
+    main.ts
+    project-store.ts
+    server.ts
+    sse-proxy.ts
+    state-bridge.ts
+    types.ts
+  package.json
+  tsconfig.json
 ```
 
-`AGENTHUB_RUNTIME_ROOT` must point at AgentHub's runtime workspace root. Each workspace repo is expected at:
+## API Surface
 
-```text
-{AGENTHUB_RUNTIME_ROOT}/{workspaceId}/repo
-```
-
-## Commands
-
-```bash
-npm install
-npm run dev
-npm run build
-npm run check
-```
-
-Start AgentHub first, then start this backend.
-
-## Main API
+The backend exposes the frontend-facing local API on `127.0.0.1:8790`:
 
 - `GET /api/health`
-- `POST /api/projects` creates a business project and AgentHub workspace, or binds an existing `workspaceId`.
+- `GET /api/workbench`
 - `GET /api/projects`
 - `GET /api/projects/:projectId`
-- `POST /api/projects/:projectId/messages/stream` proxies a message to AgentHub SSE.
-- `PUT /api/projects/:projectId/files` writes a manual edit back to the bound workspace repo.
-- `POST /api/projects/:projectId/versions` commits/tags the workspace repo and creates a source zip.
-- `GET /api/projects/:projectId/versions`
-- `GET /api/projects/:projectId/diff?v1=...&v2=...`
-- `GET /api/projects/:projectId/source.zip?versionId=...`
-- `POST /api/projects/:projectId/builds` builds a saved version.
-- `POST /api/projects/:projectId/deploy` publishes a built version.
+- `GET /api/agents`
+- `POST /api/projects`
+- `GET /api/projects/:projectId/state`
+- `GET /api/projects/:projectId/files`
+- `GET /api/projects/:projectId/files/content`
+- `GET /api/projects/:projectId/diff`
+- `GET /api/projects/:projectId/preview-targets`
+- `POST /api/projects/:projectId/messages/stream`
+- `GET /api/workspaces/:workspaceId/zip`
+- `GET /preview/*`
 
-Static artifact routes:
+Placeholders:
 
-- `/build-preview/{projectId}/{versionId}/index.html`
-- `/deploy/{projectId}/latest/index.html`
+- `ALL /build-preview/*` -> `404`
+- `ALL /deploy/*` -> `404`
+
+## Local Startup
+
+Start the local live stack in this order:
+
+```powershell
+cd E:\byDance\agentHub
+npm run dev:api
+```
+
+```powershell
+cd E:\byDance\agentHub
+npm run codex:bridge
+```
+
+```powershell
+cd E:\byDance\agentHubBackend
+npm run dev
+```
+
+```powershell
+cd E:\byDance\agentHubFrontend
+npm run dev
+```
+
+## Local Verification
+
+Basic checks:
+
+```powershell
+cd E:\byDance\agentHubBackend
+npm run check
+npm run build
+```
+
+Runtime real-chain checks:
+
+```powershell
+cd E:\byDance\agentHub
+$env:AGENTHUB_RUN_REAL_TESTS='true'
+npx vitest run tests/real/agent-chain-probe.test.ts -t "keeps an unapproved planning request out of the engineer path" --reporter=verbose
+npx vitest run tests/real/agent-chain-probe.test.ts -t "probes the approved main chain through engineer, reviewer, and synthesis" --reporter=verbose
+```
+
+Live smoke checks should confirm:
+
+- Group workspaces stream real SSE events to the client
+- Direct workspaces create a runtime direct conversation and can run the engineer agent
+- Preview responses return non-empty HTML when a static entry exists
+- Zip responses return non-empty archives
+
+## Compatibility
+
+- Prefer `AGENTHUB_BACKEND_DATA_DIR` for local data overrides
+- `LOCATE_BACKEND_DATA_DIR` is still accepted as a temporary compatibility alias
+
+## Current Local Limits
+
+- `projects.json` is still a lightweight local project map, not a formal business database
+- Direct workspaces still keep the runtime default group conversation in the background, but the frontend binds to the direct conversation
+- `build-preview` and `deploy` are still placeholders

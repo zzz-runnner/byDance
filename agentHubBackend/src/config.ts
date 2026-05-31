@@ -9,13 +9,16 @@ export interface AppConfig {
 }
 
 /**
- * Reads locateBackend runtime configuration from environment variables.
+ * Reads backend runtime configuration from environment variables.
  * Input: process environment and current working directory.
  * Output: normalized application config object.
  */
 export function readConfig(): AppConfig {
   const cwd = process.cwd()
-  const dataDir = path.resolve(cwd, process.env.LOCATE_BACKEND_DATA_DIR ?? 'data')
+  const dataDir = path.resolve(
+    cwd,
+    process.env.AGENTHUB_BACKEND_DATA_DIR ?? process.env.LOCATE_BACKEND_DATA_DIR ?? 'data',
+  )
 
   return {
     host: process.env.HOST ?? '127.0.0.1',
