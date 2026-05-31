@@ -353,6 +353,11 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
 
   app.get('/api/state', async () => services.store.read())
 
+  app.get('/api/agents', async () => {
+    const state = await services.store.read()
+    return state.agents
+  })
+
   app.post('/api/workspaces/overview-batch', async request => {
     const input = WorkspaceOverviewBatchInputSchema.parse(request.body)
     const state = await services.store.read()
