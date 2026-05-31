@@ -70,10 +70,15 @@ The current local path is focused on one workspace equals one chat window.
   - `/api/projects/:projectId/state` accepts `messageLimit`.
   - The chat pane can load older messages incrementally instead of loading the full conversation history on startup.
 - The current workspace can now open one in-window code browser:
-  - The top bar `代码` button opens the configured real local source tree from `locateBackend` `sourceRootPath` instead of the AgentHub runtime seed repo.
-  - The default local source root is `E:\byDance`, so the browser can see `agentHubFrontend/`, `locateBackend/`, `agentHub/`, `docs/` and other real repo folders.
-  - Runtime workspaces, build output, `node_modules`, and agent log files are filtered out of the visible code tree.
-  - The panel uses a read-only Monaco editor, file search, local diff count, and binary-file shielding.
+  - The top bar `代码` button now opens only the current workspace repo through the `agentHub` workspace file APIs proxied by `locateBackend`.
+  - The browser no longer exposes the full local repository root such as `agentHubFrontend/`, `locateBackend/`, `agentHub/`, or `docs/`.
+  - New and old workspaces both follow the same rule: if a workspace repo only contains seed files, only those files appear; if it is empty, the code panel shows an empty state.
+  - Future “edit an existing local project” support should import or copy files into the workspace repo first instead of directly exposing the original local folder.
+  - The panel uses a read-only Monaco editor, file search, local diff count, binary-file shielding, and a dedicated dark code-browser theme.
+  - The right editor panel now uses a stable top-bar plus full-height editor layout, so the Monaco viewport no longer collapses to roughly half-height when the selection banner is hidden.
+  - The desktop breakpoint for the code browser now stays in the two-column layout until narrower widths, so remote-desktop and medium desktop windows no longer fall into a half-height editor feel too early.
+  - The Monaco toolbar now includes one explicit line-wrap toggle. It defaults to wrapped lines for readability and can be switched back to horizontal-scroll mode when raw formatting matters.
+  - Code selection is now confirmed after the drag finishes or the keyboard selection settles, and the compact selection preview floats over the editor instead of pushing the layout mid-selection.
   - One selected code range can be quoted back into the chat composer as structured `codeSelection` data.
   - In group rooms, a message with `codeSelection` and no explicit `@agent` defaults to `engineer` routing in `locateBackend`.
   - The Monaco viewer now measures the visible editor shell with `ResizeObserver` and triggers explicit `layout()` calls after open, resize, and file switches, so it no longer depends on fragile percentage-height inheritance.
@@ -176,7 +181,7 @@ Result:
   - `GET /api/workbench`
   - `GET /api/projects/:projectId/state?messageLimit=2` returning `hasMore=true`
   - `GET /api/projects/:projectId/files`
-  - `GET /api/projects/:projectId/files/content?path=agentHubFrontend/src/App.tsx`
+  - `GET /api/projects/:projectId/files/content?path=index.html`
 
 ## Current Limits
 

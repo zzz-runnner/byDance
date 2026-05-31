@@ -24,7 +24,6 @@ type CodeWorkspaceDialogProps = {
   open: boolean
   projectId?: string
   workspaceName?: string
-  sourceRootLabel?: string
   onClose: () => void
   onQuoteSelection: (selection: CodeSelectionReference) => void
 }
@@ -47,7 +46,74 @@ type EditorSelectionState = {
   afterContext?: string
 }
 
+type CodeWrapMode = 'on' | 'off'
+
 type MonacoEditorInstance = import('monaco-editor').editor.IStandaloneCodeEditor
+type MonacoNamespace = typeof import('monaco-editor')
+type MonacoThemeData = import('monaco-editor').editor.IStandaloneThemeData
+type MonacoDisposable = import('monaco-editor').IDisposable
+
+const CODE_EDITOR_THEME = 'agenthub-dark'
+
+const CODE_EDITOR_THEME_DATA: MonacoThemeData = {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [
+    { token: 'comment', foreground: '6B7A90', fontStyle: 'italic' },
+    { token: 'keyword', foreground: 'FF7B72' },
+    { token: 'operator', foreground: 'FF7B72' },
+    { token: 'string', foreground: '8DDB8C' },
+    { token: 'string.escape', foreground: '56D4DD' },
+    { token: 'number', foreground: 'F2C572' },
+    { token: 'regexp', foreground: '56D4DD' },
+    { token: 'type', foreground: 'EACB5D' },
+    { token: 'type.identifier', foreground: 'EACB5D' },
+    { token: 'class', foreground: 'EACB5D' },
+    { token: 'class.identifier', foreground: 'EACB5D' },
+    { token: 'interface', foreground: 'C792EA' },
+    { token: 'namespace', foreground: 'C792EA' },
+    { token: 'function', foreground: '79C0FF' },
+    { token: 'function.identifier', foreground: '79C0FF' },
+    { token: 'identifier', foreground: 'E6EDF3' },
+    { token: 'variable', foreground: 'E6EDF3' },
+    { token: 'tag', foreground: 'FF7B72' },
+    { token: 'attribute.name', foreground: 'F2C572' },
+    { token: 'attribute.value', foreground: '8DDB8C' },
+    { token: 'delimiter', foreground: '9FB0C7' },
+    { token: 'delimiter.bracket', foreground: '9FB0C7' },
+  ],
+  colors: {
+    'editor.background': '#0F1725',
+    'editor.foreground': '#E6EDF3',
+    'editor.lineHighlightBackground': '#192233',
+    'editor.lineHighlightBorder': '#00000000',
+    'editor.selectionBackground': '#264F78AA',
+    'editor.inactiveSelectionBackground': '#264F7855',
+    'editor.selectionHighlightBackground': '#2F81F755',
+    'editor.wordHighlightBackground': '#2F81F733',
+    'editor.wordHighlightStrongBackground': '#2F81F755',
+    'editorCursor.foreground': '#F8FAFC',
+    'editorWhitespace.foreground': '#334155',
+    'editorIndentGuide.background1': '#243041',
+    'editorIndentGuide.activeBackground1': '#475569',
+    'editorLineNumber.foreground': '#607089',
+    'editorLineNumber.activeForeground': '#D8E1EB',
+    'editorGutter.background': '#0F1725',
+    'editorBracketMatch.background': '#1D4ED833',
+    'editorBracketMatch.border': '#60A5FA',
+    'editorOverviewRuler.border': '#00000000',
+    'editor.findMatchBackground': '#7C3AED55',
+    'editor.findMatchHighlightBackground': '#7C3AED22',
+    'editorHoverWidget.background': '#151F2F',
+    'editorHoverWidget.border': '#304155',
+    'editorWidget.background': '#151F2F',
+    'editorWidget.border': '#304155',
+    'scrollbarSlider.background': '#94A3B833',
+    'scrollbarSlider.hoverBackground': '#94A3B855',
+    'scrollbarSlider.activeBackground': '#CBD5E166',
+    'minimap.background': '#0F1725',
+  },
+}
 
 type FileTreeProps = {
   nodes: WorkspaceFileNode[]
@@ -221,6 +287,15 @@ function buildCodeSelection(
 }
 
 /**
+ * Registers the shared dark Monaco theme used by the workspace code browser.
+ * Input: Monaco namespace before editor mount.
+ * Output: theme available through the local theme id.
+ */
+function registerCodeEditorTheme(monaco: MonacoNamespace): void {
+  monaco.editor.defineTheme(CODE_EDITOR_THEME, CODE_EDITOR_THEME_DATA)
+}
+
+/**
  * Renders the full-screen code workspace dialog for one project workspace.
  * Input: open state, project identity, and quote callback.
  * Output: file tree and read-only code browser dialog.
@@ -229,7 +304,6 @@ export function CodeWorkspaceDialog({
   open,
   projectId,
   workspaceName,
-  sourceRootLabel,
   onClose,
   onQuoteSelection,
 }: CodeWorkspaceDialogProps) {
@@ -237,6 +311,10 @@ export function CodeWorkspaceDialog({
   const editorShellRef = useRef<HTMLDivElement | null>(null)
   const activeFilePathRef = useRef<string | undefined>(undefined)
   const activeLanguageRef = useRef<string | undefined>(undefined)
+  const editorDisposablesRef = useRef<MonacoDisposable[]>([])
+  const selectionDraftRef = useRef<EditorSelectionState | undefined>(undefined)
+  const selectionCommitTimerRef = useRef<number | undefined>(undefined)
+  const pointerSelectionRef = useRef(false)
   const [fileTree, setFileTree] = useState<WorkspaceFileNode[]>([])
   const [treeLoading, setTreeLoading] = useState(false)
   const [treeError, setTreeError] = useState('')
@@ -245,8 +323,9 @@ export function CodeWorkspaceDialog({
   const [activeFilePath, setActiveFilePath] = useState<string>()
   const [fileCache, setFileCache] = useState<Record<string, FileCacheEntry>>({})
   const [diffSnapshot, setDiffSnapshot] = useState<WorkspaceDiffSnapshot>()
-  const [selectionState, setSelectionState] = useState<EditorSelectionState>()
-  const [treeRootLabel, setTreeRootLabel] = useState(sourceRootLabel ?? '')
+  const [selectionState, setSelectionState] = useState<EditorSelectionState | undefined>(undefined)
+  const [treeRootLabel, setTreeRootLabel] = useState('')
+  const [wrapMode, setWrapMode] = useState<CodeWrapMode>('on')
   const [editorViewport, setEditorViewport] = useState({
     width: 0,
     height: 0,
@@ -267,8 +346,61 @@ export function CodeWorkspaceDialog({
   }, [activeFileContent?.language, activeFilePath])
 
   useEffect(() => {
-    setTreeRootLabel(sourceRootLabel ?? '')
-  }, [sourceRootLabel])
+    return () => {
+      clearSelectionCommitTimer()
+      disposeEditorListeners()
+    }
+  }, [])
+
+  /**
+   * Clears the deferred selection commit timer.
+   * Input: none.
+   * Output: pending selection commit canceled.
+   */
+  function clearSelectionCommitTimer() {
+    if (selectionCommitTimerRef.current === undefined) {
+      return
+    }
+
+    window.clearTimeout(selectionCommitTimerRef.current)
+    selectionCommitTimerRef.current = undefined
+  }
+
+  /**
+   * Disposes editor event subscriptions created during mount.
+   * Input: none.
+   * Output: editor listeners released.
+   */
+  function disposeEditorListeners() {
+    for (const disposable of editorDisposablesRef.current) {
+      disposable.dispose()
+    }
+    editorDisposablesRef.current = []
+  }
+
+  /**
+   * Rebuilds the latest code selection from the current editor model.
+   * Input: none.
+   * Output: selection draft stored in the shared ref and returned.
+   */
+  function refreshSelectionDraft(): EditorSelectionState | undefined {
+    const nextSelection = buildCodeSelection(editorRef.current, activeFilePathRef.current, activeLanguageRef.current)
+    selectionDraftRef.current = nextSelection
+    return nextSelection
+  }
+
+  /**
+   * Commits the latest selection draft after the user finishes the current gesture.
+   * Input: optional delay in milliseconds.
+   * Output: selection state updated once the timer fires.
+   */
+  function scheduleSelectionCommit(delayMs = 140) {
+    clearSelectionCommitTimer()
+    selectionCommitTimerRef.current = window.setTimeout(() => {
+      selectionCommitTimerRef.current = undefined
+      setSelectionState(selectionDraftRef.current)
+    }, delayMs)
+  }
 
   /**
    * Loads the current project file browser snapshot from the local backend.
@@ -296,7 +428,7 @@ export function CodeWorkspaceDialog({
           : firstFile
 
       setFileTree(nextTree)
-      setTreeRootLabel(treeSnapshot.rootLabel || sourceRootLabel || '')
+      setTreeRootLabel(treeSnapshot.rootLabel || '')
       setDiffSnapshot(nextDiff)
       setExpandedPaths(previous => ({
         ...previous,
@@ -312,6 +444,10 @@ export function CodeWorkspaceDialog({
 
   useEffect(() => {
     if (!open) {
+      clearSelectionCommitTimer()
+      disposeEditorListeners()
+      pointerSelectionRef.current = false
+      selectionDraftRef.current = undefined
       editorRef.current = null
       setEditorViewport({
         width: 0,
@@ -330,6 +466,9 @@ export function CodeWorkspaceDialog({
     setExpandedPaths({})
     setActiveFilePath(undefined)
     setFileQuery('')
+    setWrapMode('on')
+    selectionDraftRef.current = undefined
+    pointerSelectionRef.current = false
 
     void loadWorkspaceBrowser()
   }, [open, projectId])
@@ -434,7 +573,9 @@ export function CodeWorkspaceDialog({
   }, [activeFilePath, open, projectId])
 
   useEffect(() => {
-    setSelectionState(buildCodeSelection(editorRef.current, activeFilePath, activeFileContent?.language))
+    clearSelectionCommitTimer()
+    selectionDraftRef.current = buildCodeSelection(editorRef.current, activeFilePath, activeFileContent?.language)
+    setSelectionState(selectionDraftRef.current)
   }, [activeFileContent, activeFilePath])
 
   /**
@@ -443,7 +584,22 @@ export function CodeWorkspaceDialog({
    * Output: updates the dialog selection state.
    */
   function syncSelectionState() {
-    setSelectionState(buildCodeSelection(editorRef.current, activeFilePathRef.current, activeLanguageRef.current))
+    refreshSelectionDraft()
+    if (pointerSelectionRef.current) {
+      return
+    }
+    scheduleSelectionCommit()
+  }
+
+  /**
+   * Reflows Monaco after layout-affecting UI state changes.
+   * Input: none.
+   * Output: editor viewport recalculated on the next frame.
+   */
+  function relayoutEditorSoon() {
+    window.requestAnimationFrame(() => {
+      editorRef.current?.layout()
+    })
   }
 
   /**
@@ -466,19 +622,19 @@ export function CodeWorkspaceDialog({
           <header className="code-dialog__header">
             <div>
               <p className="eyebrow">Workspace Code</p>
-              <h2>{workspaceName ?? '代码工作区'}</h2>
+              <h2>{workspaceName ?? '当前工作区代码'}</h2>
               <span>
-                {treeRootLabel ? `当前浏览真实源码根目录：${treeRootLabel}` : '当前浏览真实源码根目录'}
+                {treeRootLabel ? `当前工作区范围：${treeRootLabel}` : '当前工作区范围：repo'}
               </span>
               <span>
-                {changedFileCount > 0 ? `当前工作区有 ${changedFileCount} 个本地变更文件` : '当前工作区还没有未提交改动'}
+                {changedFileCount > 0 ? `当前工作区有 ${changedFileCount} 个本地变更文件` : '当前工作区当前没有本地变更文件'}
               </span>
             </div>
             <div className="code-dialog__actions">
-              <button className="icon-button" type="button" onClick={() => void handleRefresh()} title="刷新文件树">
+              <button className="icon-button code-dialog__icon-button" type="button" onClick={() => void handleRefresh()} title="刷新文件树">
                 <RefreshCcw className={treeLoading ? 'icon-spin' : ''} size={16} />
               </button>
-              <button className="icon-button" type="button" onClick={onClose} title="关闭代码面板">
+              <button className="icon-button code-dialog__icon-button" type="button" onClick={onClose} title="关闭代码面板">
                 <X size={16} />
               </button>
             </div>
@@ -531,40 +687,45 @@ export function CodeWorkspaceDialog({
             </aside>
 
             <section className="code-editor-panel">
-              <div className="code-editor-toolbar">
-                <div className="code-editor-toolbar__meta">
-                  <strong>{activeFileContent?.path ?? activeFilePath ?? '未选择文件'}</strong>
-                  <span>
-                    {activeFileContent
-                      ? `${activeFileContent.language} · ${activeFileContent.lineCount} lines · ${activeFileContent.byteLength} bytes`
-                      : '选择一个文本文件后即可查看代码'}
-                  </span>
+              <div className="code-editor-panel__top">
+                <div className="code-editor-toolbar">
+                  <div className="code-editor-toolbar__meta">
+                    <strong>{activeFileContent?.path ?? activeFilePath ?? '未选择文件'}</strong>
+                    <span>
+                      {activeFileContent
+                        ? `${activeFileContent.language} · ${activeFileContent.lineCount} lines · ${activeFileContent.byteLength} bytes`
+                        : '从左侧选择一个文本文件后即可查看代码'}
+                    </span>
+                  </div>
+                  <div className="code-editor-toolbar__actions">
+                    <button
+                      className={`secondary-button code-editor-toolbar__toggle ${wrapMode === 'on' ? 'is-active' : ''}`}
+                      type="button"
+                      onClick={() => {
+                        setWrapMode(previous => (previous === 'on' ? 'off' : 'on'))
+                        relayoutEditorSoon()
+                      }}
+                    >
+                      {wrapMode === 'on' ? '自动换行开' : '自动换行关'}
+                    </button>
+                    <button
+                      className="primary-button code-editor-toolbar__quote"
+                      type="button"
+                      disabled={!selectionState}
+                      onClick={() => {
+                        if (!selectionState) {
+                          return
+                        }
+                        onQuoteSelection(selectionState)
+                      }}
+                    >
+                      <Quote size={15} />
+                      引用选中代码
+                    </button>
+                  </div>
                 </div>
-                <button
-                  className="primary-button code-editor-toolbar__quote"
-                  type="button"
-                  disabled={!selectionState}
-                  onClick={() => {
-                    if (!selectionState) {
-                      return
-                    }
-                    onQuoteSelection(selectionState)
-                  }}
-                >
-                  <Quote size={15} />
-                  引用选中代码
-                </button>
-              </div>
 
-              {selectionState ? (
-                <div className="code-selection-banner">
-                  <span>
-                    {selectionState.filePath}:{selectionState.startLine}:{selectionState.startColumn} - {selectionState.endLine}:
-                    {selectionState.endColumn}
-                  </span>
-                  <small>{compactLabel(selectionState.selectedText)}</small>
-                </div>
-              ) : null}
+              </div>
 
               <div className="code-editor-shell" ref={editorShellRef}>
                 {activeFileEntry?.loading ? (
@@ -580,30 +741,72 @@ export function CodeWorkspaceDialog({
                     path={activeFileContent.path}
                     language={activeFileContent.language}
                     value={activeFileContent.content}
+                    theme={CODE_EDITOR_THEME}
+                    beforeMount={registerCodeEditorTheme}
                     options={{
                       readOnly: true,
                       fontSize: 13,
+                      fontFamily: 'Consolas, "SFMono-Regular", "JetBrains Mono", monospace',
+                      fontLigatures: true,
                       minimap: { enabled: false },
                       scrollBeyondLastLine: false,
-                      wordWrap: 'on',
+                      wordWrap: wrapMode,
+                      wrappingIndent: 'indent',
                       automaticLayout: true,
                       renderLineHighlight: 'line',
                       lineNumbersMinChars: 3,
+                      padding: { top: 12, bottom: 12 },
+                      smoothScrolling: true,
+                      matchBrackets: 'always',
+                      renderWhitespace: 'selection',
+                      cursorBlinking: 'solid',
+                      guides: {
+                        indentation: true,
+                        highlightActiveIndentation: true,
+                        bracketPairs: true,
+                        bracketPairsHorizontal: 'active',
+                        highlightActiveBracketPair: true,
+                      },
+                      bracketPairColorization: {
+                        enabled: true,
+                        independentColorPoolPerBracketType: true,
+                      },
+                      'semanticHighlighting.enabled': 'configuredByTheme',
                     }}
                     onMount={editor => {
+                      disposeEditorListeners()
                       editorRef.current = editor
                       editor.layout({
                         width: Math.max(editorViewport.width, 1),
                         height: Math.max(editorViewport.height, 1),
                       })
-                      window.requestAnimationFrame(() => {
-                        editor.layout()
-                      })
+                      relayoutEditorSoon()
                       window.setTimeout(() => {
                         editor.layout()
                       }, 140)
-                      editor.onDidChangeCursorSelection(() => {
-                        syncSelectionState()
+                      editorDisposablesRef.current = [
+                        editor.onDidChangeCursorSelection(() => {
+                          syncSelectionState()
+                        }),
+                        editor.onMouseDown(() => {
+                          pointerSelectionRef.current = true
+                          clearSelectionCommitTimer()
+                          setSelectionState(undefined)
+                        }),
+                        editor.onMouseUp(() => {
+                          pointerSelectionRef.current = false
+                          refreshSelectionDraft()
+                          scheduleSelectionCommit(60)
+                        }),
+                        editor.onDidBlurEditorText(() => {
+                          pointerSelectionRef.current = false
+                          refreshSelectionDraft()
+                          scheduleSelectionCommit(0)
+                        }),
+                      ]
+                      editor.onDidDispose(() => {
+                        disposeEditorListeners()
+                        clearSelectionCommitTimer()
                       })
                       syncSelectionState()
                     }}
@@ -619,6 +822,16 @@ export function CodeWorkspaceDialog({
                     从左侧文件树选择一个文本文件开始查看。
                   </div>
                 )}
+
+                {selectionState ? (
+                  <div className="code-selection-banner code-selection-banner--floating" role="status" aria-live="polite">
+                    <span>
+                      {selectionState.filePath}:{selectionState.startLine}:{selectionState.startColumn} - {selectionState.endLine}:
+                      {selectionState.endColumn}
+                    </span>
+                    <small>{compactLabel(selectionState.selectedText)}</small>
+                  </div>
+                ) : null}
               </div>
             </section>
           </div>
