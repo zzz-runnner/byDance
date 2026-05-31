@@ -32,6 +32,7 @@ import {
 } from './artifacts'
 import { decideRoutingWithPlanner, type PlannedRoutingDecision } from './planner'
 import { selectDynamicVisibleSpeaker } from './dynamic-speaker-selection'
+import { resolveReplyContinuationAgentId } from './reply-context'
 import { synthesizeLocally, synthesizeWithMainBrain, type PlannedSynthesis } from './synthesis'
 import { runAutomaticRepairIfNeeded, type TaskBriefRunResult } from './repair'
 import {
@@ -366,7 +367,7 @@ type ReviewEvidence = {
     summary: string
     files: ChangedFile[]
   }
-  previewUrl: string
+  previewUrl?: string
   zipUrl: string
   sourceFileSummaries: ReviewSourceFileSummary[]
 }
@@ -429,7 +430,7 @@ async function buildReviewerEvidence(
           files: trackedFiles,
         }
       : undefined,
-    previewUrl: `/preview/${workspace.id}/index.html`,
+    previewUrl: await services.runtime.getDefaultPreviewUrl(workspace.id),
     zipUrl: `/api/workspaces/${workspace.id}/zip`,
     sourceFileSummaries,
   }
@@ -546,7 +547,7 @@ function augmentContextAssemblyWithReviewEvidence(
   const inputContext = JSON.stringify(payload, null, 2)
   const summaryLines = [
     assembly.summary,
-    `reviewEvidence: preview=${reviewEvidence.previewUrl} zip=${reviewEvidence.zipUrl}`,
+    `reviewEvidence: preview=${reviewEvidence.previewUrl ?? 'none'} zip=${reviewEvidence.zipUrl}`,
     reviewEvidence.latestChangeSet ? `reviewChangeSet: ${reviewEvidence.latestChangeSet.summary}` : 'reviewChangeSet: none',
     `sourceFileSummaries: ${reviewEvidence.sourceFileSummaries.length}`,
   ]
@@ -557,7 +558,7 @@ function augmentContextAssemblyWithReviewEvidence(
     tokenEstimate: Math.max(1, Math.ceil(inputContext.length / 4)),
     sourceRefs: [
       ...assembly.sourceRefs,
-      `preview:${reviewEvidence.previewUrl}`,
+      ...(reviewEvidence.previewUrl ? [`preview:${reviewEvidence.previewUrl}`] : []),
       `zip:${reviewEvidence.zipUrl}`,
       ...(reviewEvidence.latestChangeSet ? [`changeSet:${reviewEvidence.latestChangeSet.id}`] : []),
       ...reviewEvidence.sourceFileSummaries.map(file => `source:${file.path}`),
@@ -786,6 +787,7 @@ async function runTaskBrief(
     task: brief.task,
     requiredContext: brief.requiredContext,
     expectedOutput: brief.expectedOutput,
+    codeSelection: brief.codeSelection,
     agentScope: {
       id: agent.id,
       name: agent.name,
@@ -947,7 +949,10 @@ async function runTaskBrief(
 
   const afterSnapshot = await readRepoSnapshot(services.runtime, runtime.repoPath)
   const { patch, changedFiles } = diffRepoSnapshots(beforeSnapshot, afterSnapshot)
-  const previewReady = agent.id === 'engineer' && Boolean(runtime.previewUrl)
+  const previewUrl = agent.id === 'engineer'
+    ? await services.runtime.getDefaultPreviewUrl(workspace.id)
+    : undefined
+  const previewReady = agent.id === 'engineer' && Boolean(previewUrl)
   const validation = await runDeliveryValidation(agent, runtime.repoPath, brief, changedFiles, previewReady)
   if (validation) {
     emitWorkflowEvent(services, {
@@ -1018,7 +1023,7 @@ async function runTaskBrief(
     changedFiles,
     baseCommit,
     sessionScope,
-    runtime.previewUrl,
+    previewUrl,
     options?.publishConversationMessage ?? true,
   )
 
@@ -1084,6 +1089,8 @@ async function runDirectedAgentConversationTurn(
   conversation: Conversation,
   agentId: string,
   rawContent: string,
+  replyTo?: SendMessageInput['replyTo'],
+  codeSelection?: SendMessageInput['codeSelection'],
 ): Promise<AppState> {
   const agent = requiredById(state.agents, agentId, 'Agent')
   const normalizedContent = stripLeadingAgentMention(rawContent, agent) || rawContent.trim()
@@ -1093,6 +1100,8 @@ async function runDirectedAgentConversationTurn(
     workspace,
     conversation,
     agent,
+    replyTo,
+    codeSelection,
   })
   const previewWillStreamFinalText =
     localRoutePreview && !routeAllowsExecution(localRoutePreview) && localRoutePreview.modelProfile === 'router'
@@ -1148,6 +1157,8 @@ async function runDirectedAgentConversationTurn(
     agent,
     session,
     content: normalizedContent,
+    replyTo,
+    codeSelection,
   })
   logDiagnostic(workflowServices, {
     level: plannedTurn.routeError ? 'warn' : 'info',
@@ -1585,6 +1596,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     senderType: 'user',
     senderId: 'user',
     content: input.content,
+    replyTo: input.replyTo,
     artifacts: [],
   })
 
@@ -1626,6 +1638,8 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       conversation,
       directAgentId,
       input.content,
+      input.replyTo,
+      input.codeSelection,
     )
     /*
     const agent = requiredById(state.agents, directAgentId, 'Agent')
@@ -1826,6 +1840,28 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     */
   }
 
+  const replyContinuationAgentId =
+    !input.agentId && conversation.type === 'group'
+      ? resolveReplyContinuationAgentId(input.replyTo, conversation, state.agents)
+      : undefined
+  const directedGroupAgentId = conversation.type === 'group'
+    ? input.agentId ?? replyContinuationAgentId
+    : undefined
+
+  if (replyContinuationAgentId) {
+    logDiagnostic(workflowServices, {
+      level: 'info',
+      category: 'routing',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      agentId: replyContinuationAgentId,
+      message: 'Preserved quoted child-agent continuity for the current group turn.',
+      data: {
+        replyTo: input.replyTo,
+      },
+    })
+  }
+
   emitWorkflowEvent(workflowServices, {
     type: 'workflow_received',
     workspaceId: input.workspaceId,
@@ -1838,6 +1874,8 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     content: input.content,
     workspace,
     conversation,
+    replyTo: input.replyTo,
+    codeSelection: input.codeSelection,
   })
   logDiagnostic(workflowServices, {
     level: mainRoute.error ? 'warn' : 'info',
@@ -1855,8 +1893,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
   })
   emitTaskStageUpdated(workflowServices, workspace, conversation, mainRoute.route)
 
-  const groupDirectedAgentId = input.agentId && conversation.type === 'group' ? input.agentId : undefined
-  if (groupDirectedAgentId && !routeAllowsExecution(mainRoute.route)) {
+  if (directedGroupAgentId && !routeAllowsExecution(mainRoute.route)) {
     emitWorkflowEvent(workflowServices, {
       type: 'routing_finished',
       workspaceId: input.workspaceId,
@@ -1868,20 +1905,22 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       taskStage: mainRoute.route.taskStage,
       executionReadiness: mainRoute.route.executionReadiness,
       needsUserConfirmation: mainRoute.route.needsUserConfirmation,
-      speakerAgentId: groupDirectedAgentId,
+      speakerAgentId: directedGroupAgentId,
       finalizationMode: 'speaker_direct',
       mode: 'single_agent',
       brainKind: 'dispatch_agents',
       execution: 'serial',
-      targetAgents: [groupDirectedAgentId],
+      targetAgents: [directedGroupAgentId],
     })
     return await runDirectedAgentConversationTurn(
       workflowServices,
       state,
       workspace,
       conversation,
-      groupDirectedAgentId,
+      directedGroupAgentId,
       input.content,
+      input.replyTo,
+      input.codeSelection,
     )
   }
 
@@ -1890,6 +1929,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     conversation,
     agents: state.agents,
     taskStage: mainRoute.route.taskStage,
+    replyTo: input.replyTo,
   })
   if (
     dynamicVisibleSpeaker &&
@@ -1930,6 +1970,8 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       conversation,
       dynamicVisibleSpeaker.agentId,
       input.content,
+      input.replyTo,
+      input.codeSelection,
     )
   }
 
@@ -1957,6 +1999,8 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       workspace,
       conversation,
       input.content,
+      input.replyTo,
+      input.codeSelection,
       mainRoute.route,
       mainRoute.route.localResponse,
     )
@@ -2054,7 +2098,9 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
         content: input.content,
         conversation,
         agents: state.agents,
-        targetAgentId: input.agentId,
+        targetAgentId: directedGroupAgentId,
+        replyTo: input.replyTo,
+        codeSelection: input.codeSelection,
         env: workflowServices.env,
         state,
         workspace,

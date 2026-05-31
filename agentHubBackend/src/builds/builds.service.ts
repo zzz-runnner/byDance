@@ -46,7 +46,7 @@ export class BuildsService {
       const artifactDir = this.storage.buildArtifactDir(projectId, version.versionId)
       await this.storage.ensureCleanDir(artifactDir)
       await fs.copy(outputDir, artifactDir, {
-        filter: source => !source.includes(`${path.sep}node_modules${path.sep}`),
+        filter: (source: string) => !source.includes(`${path.sep}node_modules${path.sep}`),
       })
 
       return this.versions.patchVersion(projectId, version.versionId, current => {

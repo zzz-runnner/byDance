@@ -29,6 +29,18 @@ const CreateConversationInputSchema = z.object({
   participants: z.array(z.string().min(1)).min(1),
 })
 
+const WorkspaceFileContentQuerySchema = z.object({
+  path: z.string().min(1),
+})
+
+const WorkspaceOverviewBatchInputSchema = z.object({
+  items: z.array(z.object({
+    workspaceId: z.string().min(1),
+    conversationType: z.enum(['group', 'direct']).optional(),
+    targetAgentId: z.string().optional(),
+  })).max(100),
+})
+
 const CreateAgentInputSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
@@ -192,13 +204,134 @@ function selectWorkspaceConversation(state: AppState, workspaceId: string): Conv
 }
 
 /**
+ * Selects the conversation that should back one workspace overview item.
+ * Input: application state, workspace id, preferred type, and optional target agent.
+ * Output: matching conversation or the latest workspace fallback.
+ */
+function selectProjectConversation(
+  state: AppState,
+  workspaceId: string,
+  conversationType: 'group' | 'direct',
+  targetAgentId?: string,
+): Conversation | undefined {
+  const workspaceConversations = [...state.conversations]
+    .filter(conversation => conversation.workspaceId === workspaceId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+
+  if (conversationType === 'direct') {
+    return (
+      workspaceConversations.find(
+        conversation =>
+          conversation.type === 'direct' &&
+          (!targetAgentId || conversation.participants.includes(targetAgentId)),
+      ) ??
+      workspaceConversations.find(conversation => conversation.type === 'direct') ??
+      workspaceConversations[0]
+    )
+  }
+
+  return workspaceConversations.find(conversation => conversation.type === 'group') ?? workspaceConversations[0]
+}
+
+/**
+ * Converts the latest persisted workflow record into one short room summary label.
+ * Input: optional persisted workflow event record.
+ * Output: localized one-line activity label.
+ */
+function latestEventLabel(record: AppState['workflowEvents'][number] | undefined): string {
+  const eventType = typeof record?.event?.type === 'string' ? record.event.type : ''
+
+  switch (eventType) {
+    case 'turn_started':
+      return '用户发起了新任务'
+    case 'routing_finished':
+      return '主脑完成了本轮路由'
+    case 'assistant_message_started':
+      return 'Agent 开始回复'
+    case 'assistant_message_finished':
+      return 'Agent 回复完成'
+    case 'preview_ready':
+      return '网页预览已准备好'
+    case 'change_set_created':
+      return '生成了新的代码 Diff'
+    case 'workflow_finished':
+      return '本轮任务已完成'
+    case 'agent_progress':
+      return 'Agent 正在持续执行'
+    default:
+      return '暂无新事件'
+  }
+}
+
+/**
+ * Builds one batch of workspace overview rooms for the requested project mappings.
+ * Input: application state and requested workspace mappings. Output: room summaries keyed by workspace scope.
+ */
+function buildWorkspaceOverviewBatch(
+  state: AppState,
+  items: Array<{
+    workspaceId: string
+    conversationType?: 'group' | 'direct'
+    targetAgentId?: string
+  }>,
+) {
+  return items.flatMap(item => {
+    const workspace = state.workspaces.find(candidate => candidate.id === item.workspaceId)
+    const conversation = selectProjectConversation(
+      state,
+      item.workspaceId,
+      item.conversationType ?? 'group',
+      item.targetAgentId,
+    )
+
+    if (!workspace || !conversation) {
+      return []
+    }
+
+    const participantAgentIds = conversation.participants.filter(participant => participant !== 'user')
+    const latestEvent = state.workflowEvents
+      .filter(record => record.workspaceId === workspace.id && record.conversationId === conversation.id)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+    const latestMessage = state.messages
+      .filter(message => message.conversationId === conversation.id)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+    const artifactCount = state.artifacts.filter(artifact => artifact.workspaceId === workspace.id).length
+    const runningAgents = state.agentRuns.filter(
+      run => run.workspaceId === workspace.id && run.conversationId === conversation.id && run.status === 'running',
+    ).length
+    const messageCount = state.messages.filter(message => message.conversationId === conversation.id).length
+    const lastActivityAt = [workspace.updatedAt, conversation.updatedAt, latestEvent?.createdAt, latestMessage?.createdAt]
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => right.localeCompare(left))[0] ?? conversation.updatedAt
+
+    return [{
+      id: workspace.id,
+      kind: conversation.type,
+      title: conversation.type === 'group' ? workspace.name : conversation.title,
+      subtitle: conversation.type === 'group' ? workspace.goal : `${workspace.name} / ${workspace.goal}`,
+      workspace,
+      conversation,
+      targetAgentId: conversation.type === 'direct' ? participantAgentIds[0] : item.targetAgentId,
+      participantAgentIds,
+      signal: {
+        runningAgents,
+        latestEventLabel: latestEventLabel(latestEvent),
+        artifactCount,
+        messageCount,
+      },
+      lastActivityAt,
+    }]
+  })
+}
+
+/**
  * Resolves a preview asset response and streams it through Fastify.
- * Input: runtime services, workspace id, preview path, and reply context. Output: HTTP reply.
+ * Input: runtime services, workspace id, optional preview path, and reply context. Output: HTTP reply.
  */
 async function sendPreviewAsset(
   services: WorkflowServices,
   workspaceId: string,
-  relativePath: string,
+  relativePath: string | undefined,
   reply: FastifyReply,
 ): Promise<void> {
   const asset = await services.runtime.openPreviewAsset(workspaceId, relativePath)
@@ -219,6 +352,84 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
   }))
 
   app.get('/api/state', async () => services.store.read())
+
+  app.get('/api/agents', async () => {
+    const state = await services.store.read()
+    return state.agents
+  })
+
+  app.post('/api/workspaces/overview-batch', async request => {
+    const input = WorkspaceOverviewBatchInputSchema.parse(request.body)
+    const state = await services.store.read()
+    return {
+      rooms: buildWorkspaceOverviewBatch(state, input.items),
+    }
+  })
+
+  app.get('/api/workspaces/:workspaceId/files', async (request, reply) => {
+    const params = request.params as { workspaceId: string }
+    const state = await services.store.read()
+    const workspace = state.workspaces.find(item => item.id === params.workspaceId)
+    if (!workspace) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+
+    await services.runtime.prepareWorkspace(workspace)
+    return {
+      entries: await services.runtime.listWorkspaceFiles(workspace.id),
+    }
+  })
+
+  app.get('/api/workspaces/:workspaceId/files/content', async (request, reply) => {
+    const params = request.params as { workspaceId: string }
+    const query = WorkspaceFileContentQuerySchema.parse(request.query)
+    const state = await services.store.read()
+    const workspace = state.workspaces.find(item => item.id === params.workspaceId)
+    if (!workspace) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+
+    try {
+      await services.runtime.prepareWorkspace(workspace)
+      return await services.runtime.readWorkspaceTextFile(workspace.id, query.path)
+    } catch (error) {
+      const safeError = error instanceof Error ? error.message : String(error)
+      reply.status(safeError.includes('ENOENT') ? 404 : 400)
+      return reply.send({ error: safeError })
+    }
+  })
+
+  app.get('/api/workspaces/:workspaceId/diff', async (request, reply) => {
+    const params = request.params as { workspaceId: string }
+    const state = await services.store.read()
+    const workspace = state.workspaces.find(item => item.id === params.workspaceId)
+    if (!workspace) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+
+    await services.runtime.prepareWorkspace(workspace)
+    return services.runtime.getWorkspaceDiff(workspace.id)
+  })
+
+  app.get('/api/workspaces/:workspaceId/preview-targets', async (request, reply) => {
+    const params = request.params as { workspaceId: string }
+    const state = await services.store.read()
+    const workspace = state.workspaces.find(item => item.id === params.workspaceId)
+    if (!workspace) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+
+    await services.runtime.prepareWorkspace(workspace)
+    const targets = await services.runtime.listPreviewTargets(workspace.id)
+    return {
+      targets,
+      defaultTarget: targets[0],
+    }
+  })
 
   app.post('/api/workspaces', async request => {
     const input = CreateWorkspaceInputSchema.parse(request.body)
@@ -291,7 +502,7 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
   app.get('/preview/:workspaceId', async (request, reply) => {
     const params = request.params as { workspaceId: string }
     try {
-      await sendPreviewAsset(services, params.workspaceId, 'index.html', reply)
+      await sendPreviewAsset(services, params.workspaceId, undefined, reply)
     } catch (error) {
       const safeError = error instanceof Error ? error.message : String(error)
       reply.status(safeError.includes('not found') || safeError.includes('ENOENT') ? 404 : 400)
@@ -302,7 +513,7 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
   app.get('/preview/:workspaceId/*', async (request, reply) => {
     const params = request.params as { workspaceId: string; '*': string }
     try {
-      await sendPreviewAsset(services, params.workspaceId, params['*'] || 'index.html', reply)
+      await sendPreviewAsset(services, params.workspaceId, params['*'] || undefined, reply)
     } catch (error) {
       const safeError = error instanceof Error ? error.message : String(error)
       reply.status(safeError.includes('not found') || safeError.includes('ENOENT') ? 404 : 400)

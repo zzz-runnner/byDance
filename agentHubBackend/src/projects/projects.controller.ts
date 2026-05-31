@@ -1,6 +1,14 @@
-import { Body, Controller, Get, Param, Post, Put, Res } from '@nestjs/common'
+import { Body, Controller, Get, Param, Post, Put, Query, Res } from '@nestjs/common'
 import { Response } from 'express'
-import { CreateProjectDto, StreamProjectMessageDto, WriteWorkspaceFileDto } from './projects.dto'
+import { toProjectResponse } from '../state-bridge'
+import {
+  CreateProjectDto,
+  FileContentQueryDto,
+  PreviewBuildQueryDto,
+  ProjectStateQueryDto,
+  StreamProjectMessageDto,
+  WriteWorkspaceFileDto,
+} from './projects.dto'
 import { ProjectsService } from './projects.service'
 
 @Controller('api/projects')
@@ -8,18 +16,62 @@ export class ProjectsController {
   constructor(private readonly projects: ProjectsService) {}
 
   @Post()
-  createProject(@Body() input: CreateProjectDto) {
-    return this.projects.createProject(input)
+  async createProject(@Body() input: CreateProjectDto) {
+    return toProjectResponse(await this.projects.createProject(input))
   }
 
   @Get()
-  listProjects() {
-    return this.projects.listProjects()
+  async listProjects() {
+    return (await this.projects.listProjects()).map(project => toProjectResponse(project))
   }
 
   @Get(':projectId')
-  getProject(@Param('projectId') projectId: string) {
-    return this.projects.getProject(projectId)
+  async getProject(@Param('projectId') projectId: string) {
+    return toProjectResponse(await this.projects.getProject(projectId))
+  }
+
+  @Get(':projectId/state')
+  getProjectState(
+    @Param('projectId') projectId: string,
+    @Query() query: ProjectStateQueryDto,
+  ) {
+    return this.projects.getProjectState(projectId, query)
+  }
+
+  @Get(':projectId/files')
+  getProjectFiles(@Param('projectId') projectId: string) {
+    return this.projects.getProjectFiles(projectId)
+  }
+
+  @Get(':projectId/files/content')
+  getProjectFileContent(
+    @Param('projectId') projectId: string,
+    @Query() query: FileContentQueryDto,
+  ) {
+    return this.projects.getProjectFileContent(projectId, query)
+  }
+
+  @Get(':projectId/diff')
+  getProjectDiff(@Param('projectId') projectId: string) {
+    return this.projects.getProjectDiff(projectId)
+  }
+
+  @Get(':projectId/preview-targets')
+  getProjectPreviewTargets(@Param('projectId') projectId: string) {
+    return this.projects.getProjectPreviewTargets(projectId)
+  }
+
+  @Get(':projectId/preview-capability')
+  getProjectPreviewCapability(@Param('projectId') projectId: string) {
+    return this.projects.getProjectPreviewCapability(projectId)
+  }
+
+  @Post(':projectId/preview-build')
+  startProjectPreviewBuild(
+    @Param('projectId') projectId: string,
+    @Query() query: PreviewBuildQueryDto,
+  ) {
+    return this.projects.startProjectPreviewBuild(projectId, query)
   }
 
   @Put(':projectId/files')

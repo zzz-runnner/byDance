@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentSessionMessage, Conversation, MainBrainSynthesis, Message, WorkflowEvent, WorkflowEventRecord, Workspace } from '@shared/contracts'
+import type { AgentSessionMessage, CodeSelectionReference, Conversation, MainBrainSynthesis, Message, WorkflowEvent, WorkflowEventRecord, Workspace } from '@shared/contracts'
 import { isoNow } from '@shared/contracts'
 import type { ServerEnv } from '../../env'
 import { createModelGateway, type ModelGatewayRequest } from '../../model-gateway'
@@ -280,15 +280,21 @@ export async function streamAndPersistMainBrainReply(
   workspace: Workspace,
   conversation: Conversation,
   userMessage: string,
+  replyTo?: Message['replyTo'],
+  codeSelection?: CodeSelectionReference,
   route?: TurnRoute,
   fallbackText?: string,
 ): Promise<string> {
   const safeFallback = fallbackText?.trim() || '已收到。'
+  const latestState = await services.store.read()
   const request = buildMainBrainReplyRequest({
     env: services.env,
     workspace,
     conversation,
     userMessage,
+    replyTo,
+    codeSelection,
+    agents: latestState.agents,
     route,
     fallbackText: safeFallback,
   })
@@ -375,6 +381,8 @@ export async function streamAndPersistAgentReply(
     agent: input.agent,
     session: input.session,
     userMessage: input.userContent,
+    replyTo: input.replyTo,
+    codeSelection: input.codeSelection,
     contextProfile: input.route?.contextProfile,
   })
   const request = input.turn.finalResponse?.trim()
@@ -385,6 +393,8 @@ export async function streamAndPersistAgentReply(
         conversation: input.conversation,
         agent: input.agent,
         userMessage: input.userContent,
+        replyTo: input.replyTo,
+        codeSelection: input.codeSelection,
         sessionContext,
         route: input.route,
         fallbackText: safeFallback,

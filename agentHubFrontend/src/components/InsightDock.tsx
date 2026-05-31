@@ -15,8 +15,8 @@ import {
   Sparkles,
   Wrench,
 } from 'lucide-react'
-import { buildAgentMap, eventLabel, formatTime, stageLabel, workspaceRoomKindLabel, type WorkspaceRoom } from '../appModel'
-import type { AppState, DiagnosticLog, LiveWorkflowEvent } from '../types'
+import { buildAgentMap, eventLabel, formatTime, stageLabel, workspaceRoomKindLabel } from '../appModel'
+import type { AppState, DiagnosticLog, LiveWorkflowEvent, WorkspaceRoom } from '../types'
 import { AgentAvatar } from './AgentAvatar'
 import { GlassPanel } from './GlassPanel'
 import { StatusPill } from './StatusPill'

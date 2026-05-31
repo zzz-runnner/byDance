@@ -11,6 +11,18 @@ type ProjectRow = {
   metadata: ProjectMetadata
 }
 
+type ProjectCursor = {
+  updatedAt: string
+  projectId: string
+}
+
+export interface ProjectPageResult {
+  items: ProjectMetadata[]
+  total: number
+  hasMore: boolean
+  nextCursor?: string
+}
+
 @Injectable()
 export class ProjectMetadataStore implements OnModuleInit, OnModuleDestroy {
   private readonly mode: MetadataStoreMode
@@ -56,7 +68,7 @@ export class ProjectMetadataStore implements OnModuleInit, OnModuleDestroy {
 
     await fs.ensureDir(this.storage.projectsRoot)
     const entries = await fs.readdir(this.storage.projectsRoot)
-    const projects = await Promise.all(entries.map(async entry => {
+    const projects = await Promise.all(entries.map(async (entry: string) => {
       try {
         return await this.getProject(entry)
       } catch {
@@ -66,7 +78,46 @@ export class ProjectMetadataStore implements OnModuleInit, OnModuleDestroy {
 
     return projects
       .filter((project): project is ProjectMetadata => Boolean(project))
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .sort((a: ProjectMetadata, b: ProjectMetadata) => b.updatedAt.localeCompare(a.updatedAt))
+  }
+
+  /**
+   * Loads one cursor-paged project slice with an optional text search.
+   * Input: page size, optional cursor, and optional search query.
+   * Output: one page of stored projects plus pagination metadata.
+   */
+  async listProjectsPage(input: {
+    limit: number
+    cursor?: string
+    query?: string
+  }): Promise<ProjectPageResult> {
+    const projects = await this.listProjects()
+    const normalizedQuery = input.query?.trim().toLowerCase() ?? ''
+    const filtered = normalizedQuery
+      ? projects.filter(project => matchesProjectQuery(project, normalizedQuery))
+      : projects
+    const decodedCursor = decodeCursor(input.cursor)
+    const cursorProject = decodedCursor
+      ? {
+          projectId: decodedCursor.projectId,
+          updatedAt: decodedCursor.updatedAt,
+        }
+      : undefined
+    const sliceStart = cursorProject
+      ? (() => {
+          const index = filtered.findIndex(project => compareProjects(project, cursorProject) > 0)
+          return index >= 0 ? index : filtered.length
+        })()
+      : 0
+    const items = filtered.slice(sliceStart, sliceStart + input.limit)
+    const hasMore = sliceStart + items.length < filtered.length
+
+    return {
+      items,
+      total: filtered.length,
+      hasMore,
+      nextCursor: hasMore && items.length > 0 ? encodeCursor(items[items.length - 1]) : undefined,
+    }
   }
 
   async getProject(projectId: string): Promise<ProjectMetadata | undefined> {
@@ -183,4 +234,78 @@ export class ProjectMetadataStore implements OnModuleInit, OnModuleDestroy {
         on business_projects (workspace_id)
     `)
   }
+}
+
+/**
+ * Sorts projects by descending update time with project id as a tie-breaker.
+ * Input: two project-like records.
+ * Output: standard array sort number.
+ */
+function compareProjects(
+  left: Pick<ProjectMetadata, 'updatedAt' | 'projectId'>,
+  right: Pick<ProjectMetadata, 'updatedAt' | 'projectId'>,
+): number {
+  if (left.updatedAt !== right.updatedAt) {
+    return right.updatedAt.localeCompare(left.updatedAt)
+  }
+  return right.projectId.localeCompare(left.projectId)
+}
+
+/**
+ * Encodes one opaque cursor from a project record.
+ * Input: project id and updated time.
+ * Output: base64url cursor string.
+ */
+function encodeCursor(project: Pick<ProjectMetadata, 'updatedAt' | 'projectId'>): string {
+  return Buffer.from(
+    JSON.stringify({
+      updatedAt: project.updatedAt,
+      projectId: project.projectId,
+    } satisfies ProjectCursor),
+    'utf8',
+  ).toString('base64url')
+}
+
+/**
+ * Decodes one stored cursor into its comparison fields.
+ * Input: opaque cursor string.
+ * Output: decoded cursor or undefined when invalid.
+ */
+function decodeCursor(cursor: string | undefined): ProjectCursor | undefined {
+  if (!cursor) {
+    return undefined
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Partial<ProjectCursor>
+    if (typeof parsed.updatedAt === 'string' && typeof parsed.projectId === 'string') {
+      return {
+        updatedAt: parsed.updatedAt,
+        projectId: parsed.projectId,
+      }
+    }
+  } catch {
+    return undefined
+  }
+
+  return undefined
+}
+
+/**
+ * Checks whether one project matches the current workspace search query.
+ * Input: project metadata and normalized lowercase query text.
+ * Output: true when the project should stay in the filtered page.
+ */
+function matchesProjectQuery(project: ProjectMetadata, query: string): boolean {
+  return [
+    project.name,
+    project.goal,
+    project.workspaceId,
+    project.projectId,
+    project.conversationType ?? '',
+    project.targetAgentId ?? '',
+  ]
+    .join(' ')
+    .toLowerCase()
+    .includes(query)
 }

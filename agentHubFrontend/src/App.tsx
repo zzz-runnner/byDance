@@ -1,29 +1,45 @@
-import { useEffect, useMemo, useState } from 'react'
-import { LayoutDashboard, LoaderCircle, PlugZap, RefreshCcw, ServerCrash, Wifi } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Braces, LayoutDashboard, LoaderCircle, PlugZap, RefreshCcw, ServerCrash, Wifi } from 'lucide-react'
 import {
   createBusinessWorkspace,
   createEmptyWorkbenchState,
-  fetchBusinessWorkbenchState,
+  fetchBusinessProjectState,
+  fetchBusinessWorkbenchOverview,
   streamBusinessProjectMessage,
 } from './api/businessBackend'
 import {
   directAgentId,
-  firstWorkspaceRoomId,
   mergeWorkflowEvents,
   messagesForConversation,
-  workspaceRooms,
 } from './appModel'
 import backgroundImage from './asset/background/newBG.png'
 import { BackgroundCanvas } from './components/BackgroundCanvas'
 import { ChatPane } from './components/ChatPane'
+import { CodeWorkspaceDialog } from './components/CodeWorkspaceDialog'
 import { CreateWorkspaceDialog, type CreateWorkspaceInput } from './components/CreateWorkspaceDialog'
 import { GlassPanel } from './components/GlassPanel'
 import { OrbMark } from './components/OrbMark'
 import { StatusPill } from './components/StatusPill'
 import { WorkspaceRail } from './components/WorkspaceRail'
-import type { AppState, ConnectionStatus, LiveWorkflowEvent, Message, WorkflowEvent } from './types'
+import type {
+  AppState,
+  CodeSelectionReference,
+  ConnectionStatus,
+  LiveWorkflowEvent,
+  Message,
+  ProjectStatePage,
+  ReplyReference,
+  WorkbenchOverview,
+  WorkspaceRoom,
+  WorkflowEvent,
+} from './types'
 
 const ACTIVE_WORKSPACE_STORAGE_KEY = 'agenthub.activeWorkspaceId'
+const INITIAL_WORKSPACE_PAGE_LIMIT = 20
+const WORKSPACE_PAGE_STEP = 20
+const WORKSPACE_QUERY_DEBOUNCE_MS = 250
+const INITIAL_MESSAGE_PAGE_LIMIT = 40
+const MESSAGE_PAGE_STEP = 40
 
 /**
  * Creates a temporary UI message for optimistic chat rendering.
@@ -36,6 +52,7 @@ function createTemporaryMessage(
   senderType: Message['senderType'],
   senderId: string,
   content: string,
+  replyTo?: Message['replyTo'],
 ): Message {
   return {
     id: `tmp-${senderId}-${Date.now()}`,
@@ -44,31 +61,68 @@ function createTemporaryMessage(
     senderType,
     senderId,
     content,
+    replyTo,
     artifacts: [],
     createdAt: new Date().toISOString(),
   }
 }
 
 /**
- * Returns the first usable workspace room id from state.
- * Input: AppState.
- * Output: workspace id or an empty string.
+ * Builds the empty workbench overview used before the first backend response arrives.
+ * Input: none.
+ * Output: empty workbench overview plus pagination metadata.
  */
-function firstWorkspaceId(state: AppState): string {
-  return firstWorkspaceRoomId(state)
+function emptyWorkbenchOverview(): WorkbenchOverview {
+  return {
+    agents: [],
+    rooms: [],
+    page: {
+      limit: INITIAL_WORKSPACE_PAGE_LIMIT,
+      hasMore: false,
+      total: 0,
+    },
+  }
 }
 
 /**
- * Restores the preferred workspace when it still exists in the next snapshot.
- * Input: next AppState snapshot and the preferred workspace id.
+ * Returns the first usable workspace room id from the light workbench overview.
+ * Input: overview payload.
  * Output: a valid workspace id or an empty string.
  */
-function resolveWorkspaceId(state: AppState, preferredWorkspaceId: string): string {
-  if (preferredWorkspaceId && state.workspaces.some(workspace => workspace.id === preferredWorkspaceId)) {
+function firstWorkspaceId(overview: WorkbenchOverview): string {
+  return overview.rooms[0]?.id ?? ''
+}
+
+/**
+ * Restores the preferred workspace when it still exists in the next overview.
+ * Input: next workbench overview and the preferred workspace id.
+ * Output: a valid workspace id or an empty string.
+ */
+function resolveWorkspaceId(overview: WorkbenchOverview, preferredWorkspaceId: string): string {
+  if (preferredWorkspaceId && overview.rooms.some(room => room.id === preferredWorkspaceId)) {
     return preferredWorkspaceId
   }
 
-  return firstWorkspaceId(state)
+  return firstWorkspaceId(overview)
+}
+
+/**
+ * Merges one newly loaded workspace page into the current room list without duplicates.
+ * Input: existing rooms and the next paged room slice.
+ * Output: one deduplicated room list that keeps the original room order.
+ */
+function mergeWorkspaceRooms(currentRooms: WorkspaceRoom[], nextRooms: WorkspaceRoom[]): WorkspaceRoom[] {
+  const seen = new Set(currentRooms.map(room => room.id))
+  return [
+    ...currentRooms,
+    ...nextRooms.filter(room => {
+      if (seen.has(room.id)) {
+        return false
+      }
+      seen.add(room.id)
+      return true
+    }),
+  ]
 }
 
 /**
@@ -135,6 +189,7 @@ function BlockingWorkbenchState({ kind, message, onRetry }: BlockingWorkbenchSta
  */
 export function App() {
   const [state, setState] = useState<AppState>(() => createEmptyWorkbenchState())
+  const [overview, setOverview] = useState<WorkbenchOverview>(() => emptyWorkbenchOverview())
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting')
   const [connectionErrorMessage, setConnectionErrorMessage] = useState('')
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(() => {
@@ -146,33 +201,39 @@ export function App() {
   const [liveWorkflowEvents, setLiveWorkflowEvents] = useState<LiveWorkflowEvent[]>([])
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([])
   const [streamingMessages, setStreamingMessages] = useState<Record<string, Message>>({})
+  const [pendingReplyTo, setPendingReplyTo] = useState<ReplyReference>()
+  const [pendingCodeSelection, setPendingCodeSelection] = useState<CodeSelectionReference>()
   const [sending, setSending] = useState(false)
   const [loadingState, setLoadingState] = useState(true)
+  const [workspaceLoading, setWorkspaceLoading] = useState(false)
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false)
+  const [loadingMoreWorkspaces, setLoadingMoreWorkspaces] = useState(false)
+  const [messagePage, setMessagePage] = useState<ProjectStatePage>({
+    limit: INITIAL_MESSAGE_PAGE_LIMIT,
+    total: 0,
+    hasMore: false,
+  })
+  const [messageLimitByWorkspace, setMessageLimitByWorkspace] = useState<Record<string, number>>({})
   const [workspaceQuery, setWorkspaceQuery] = useState('')
+  const [appliedWorkspaceQuery, setAppliedWorkspaceQuery] = useState('')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [codeDialogOpen, setCodeDialogOpen] = useState(false)
   const [creatingWorkspace, setCreatingWorkspace] = useState(false)
   const [createWorkspaceError, setCreateWorkspaceError] = useState('')
+  const overviewRequestRef = useRef(0)
+  const detailRequestRef = useRef(0)
+  const overviewRef = useRef<WorkbenchOverview>(emptyWorkbenchOverview())
+  const loadedWorkspaceCountRef = useRef(INITIAL_WORKSPACE_PAGE_LIMIT)
+  const workbenchReadyRef = useRef(false)
+  const skipNextQueryReloadRef = useRef(false)
 
   const workflowEvents = useMemo(
     () => mergeWorkflowEvents(state.workflowEvents, liveWorkflowEvents),
     [liveWorkflowEvents, state.workflowEvents],
   )
-  const rooms = useMemo(() => workspaceRooms(state), [state])
-  const filteredRooms = useMemo(() => {
-    const query = workspaceQuery.trim().toLowerCase()
-
-    if (!query) {
-      return rooms
-    }
-
-    return rooms.filter(room => {
-      const searchText = [room.title, room.subtitle, room.targetAgentId ?? '', ...room.participantAgentIds]
-        .join(' ')
-        .toLowerCase()
-      return searchText.includes(query)
-    })
-  }, [rooms, workspaceQuery])
-  const activeRoom = filteredRooms.find(room => room.id === activeWorkspaceId) ?? filteredRooms[0] ?? rooms[0]
+  const rooms = overview.rooms
+  const activeRoom = rooms.find(room => room.id === activeWorkspaceId) ?? rooms[0]
+  const activeProjectId = activeRoom?.workspace.projectId ?? activeRoom?.workspace.id
   const activeConversationId = activeRoom?.conversation.id ?? ''
   const currentMessages = [
     ...messagesForConversation(state, activeConversationId),
@@ -181,56 +242,228 @@ export function App() {
   const currentStreamingMessages = Object.values(streamingMessages).filter(
     message => message.conversationId === activeConversationId,
   )
-  const showBlockingState = !rooms.length && (loadingState || connectionStatus === 'error')
+  const showBlockingState = rooms.length === 0 && (loadingState || connectionStatus === 'error')
   const canCreateWorkspace = connectionStatus === 'live' && !loadingState && !creatingWorkspace
   const composerDisabledReason =
     connectionStatus === 'error'
       ? '后端连接失败，请先点击刷新重试。'
-      : loadingState
-        ? '正在连接后端，请稍候。'
+      : loadingState || workspaceLoading
+        ? '正在加载当前工作区，请稍候。'
         : ''
 
+  useEffect(() => {
+    overviewRef.current = overview
+  }, [overview])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const nextQuery = workspaceQuery.trim()
+      setAppliedWorkspaceQuery(previous => (previous === nextQuery ? previous : nextQuery))
+    }, WORKSPACE_QUERY_DEBOUNCE_MS)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [workspaceQuery])
+
   /**
-   * Loads the live workbench state from the business backend.
-   * Input: none.
-   * Output: updates connection state, snapshot, and workspace selection.
+   * Loads the lightweight workbench overview from the business backend.
+   * Input: optional page size, cursor, query, and merge mode.
+   * Output: updates the left-rail summary snapshot when the request is current.
    */
-  async function loadWorkbenchState() {
-    setLoadingState(true)
-    setCreateWorkspaceError('')
-    setLiveWorkflowEvents([])
-    setStreamingMessages({})
-    const preferredWorkspaceId = activeWorkspaceId
+  async function loadWorkbenchOverviewSnapshot(input?: {
+    limit?: number
+    cursor?: string
+    query?: string
+    merge?: boolean
+  }): Promise<WorkbenchOverview | undefined> {
+    const requestId = ++overviewRequestRef.current
+    const nextOverview = await fetchBusinessWorkbenchOverview({
+      limit: input?.limit,
+      cursor: input?.cursor,
+      query: input?.query,
+    })
+
+    if (requestId !== overviewRequestRef.current) {
+      return undefined
+    }
+
+    const resolvedOverview = input?.merge
+      ? {
+          agents: nextOverview.agents,
+          rooms: mergeWorkspaceRooms(overviewRef.current.rooms, nextOverview.rooms),
+          page: {
+            limit: mergeWorkspaceRooms(overviewRef.current.rooms, nextOverview.rooms).length,
+            nextCursor: nextOverview.page.nextCursor,
+            hasMore: nextOverview.page.hasMore,
+            total: nextOverview.page.total,
+          },
+        }
+      : nextOverview
+
+    loadedWorkspaceCountRef.current = Math.max(
+      resolvedOverview.rooms.length,
+      input?.merge ? loadedWorkspaceCountRef.current : (input?.limit ?? INITIAL_WORKSPACE_PAGE_LIMIT),
+    )
+    overviewRef.current = resolvedOverview
+    setOverview(resolvedOverview)
+    setConnectionStatus('live')
+    setConnectionErrorMessage('')
+    return resolvedOverview
+  }
+
+  /**
+   * Loads one active workspace state page for the chat pane.
+   * Input: selected room, message limit, and loading mode.
+   * Output: updates the active AppState only when the request is still current.
+   */
+  async function loadProjectRoomState(
+    room: WorkspaceRoom,
+    messageLimit: number,
+    mode: 'initial' | 'select' | 'refresh' | 'older',
+  ) {
+    const requestId = ++detailRequestRef.current
+    if (mode === 'older') {
+      setLoadingOlderMessages(true)
+    } else {
+      setWorkspaceLoading(true)
+    }
 
     try {
-      const nextState = await fetchBusinessWorkbenchState()
-      setState(nextState)
+      const nextEnvelope = await fetchBusinessProjectState(
+        room.workspace.projectId ?? room.workspace.id,
+        messageLimit,
+      )
+
+      if (requestId !== detailRequestRef.current) {
+        return
+      }
+
+      setState(nextEnvelope.state)
+      setMessagePage(nextEnvelope.messagePage)
+      setMessageLimitByWorkspace(previous => ({
+        ...previous,
+        [room.id]: nextEnvelope.messagePage.limit,
+      }))
       setConnectionStatus('live')
       setConnectionErrorMessage('')
-      setOptimisticMessages([])
-      setActiveWorkspaceId(resolveWorkspaceId(nextState, preferredWorkspaceId))
+    } catch (error) {
+      if (requestId !== detailRequestRef.current) {
+        return
+      }
+
+      setConnectionStatus('error')
+      setConnectionErrorMessage(errorMessageOf(error))
+      if (mode !== 'older') {
+        setState(createEmptyWorkbenchState(overviewRef.current.agents))
+      }
+    } finally {
+      if (requestId === detailRequestRef.current) {
+        setWorkspaceLoading(false)
+        setLoadingOlderMessages(false)
+      }
+    }
+  }
+
+  /**
+   * Reloads the overview and the currently selected workspace detail together.
+   * Input: preferred workspace id, refresh mode, and optional overview query settings.
+   * Output: keeps the UI on one stable active workspace after refresh.
+   */
+  async function reloadWorkbench(
+    preferredWorkspaceId = activeWorkspaceId,
+    mode: 'initial' | 'refresh' = 'refresh',
+    options?: {
+      query?: string
+      limit?: number
+    },
+  ) {
+    setLoadingState(true)
+    setCreateWorkspaceError('')
+
+    try {
+      const nextOverview = await loadWorkbenchOverviewSnapshot({
+        limit: options?.limit ?? (mode === 'initial'
+          ? INITIAL_WORKSPACE_PAGE_LIMIT
+          : Math.max(loadedWorkspaceCountRef.current, INITIAL_WORKSPACE_PAGE_LIMIT)),
+        query: options?.query ?? appliedWorkspaceQuery,
+      })
+      if (!nextOverview) {
+        return
+      }
+
+      if (!nextOverview.rooms.length) {
+        setState(createEmptyWorkbenchState(nextOverview.agents))
+        setActiveWorkspaceId('')
+        setMessagePage({
+          limit: INITIAL_MESSAGE_PAGE_LIMIT,
+          total: 0,
+          hasMore: false,
+        })
+        setOptimisticMessages([])
+        setStreamingMessages({})
+        setLiveWorkflowEvents([])
+        return
+      }
+
+      const nextWorkspaceId = resolveWorkspaceId(nextOverview, preferredWorkspaceId)
+      const nextRoom = nextOverview.rooms.find(room => room.id === nextWorkspaceId) ?? nextOverview.rooms[0]
+
+      if (!nextRoom) {
+        return
+      }
+
+      const shouldResetActiveState =
+        mode === 'initial' ||
+        nextWorkspaceId !== activeWorkspaceId ||
+        state.workspaces[0]?.id !== nextWorkspaceId
+
+      setActiveWorkspaceId(nextWorkspaceId)
+      if (shouldResetActiveState) {
+        setOptimisticMessages([])
+        setStreamingMessages({})
+        setLiveWorkflowEvents([])
+        setState(createEmptyWorkbenchState(nextOverview.agents))
+        setMessagePage({
+          limit: messageLimitByWorkspace[nextWorkspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
+          total: 0,
+          hasMore: false,
+        })
+      }
+
+      await loadProjectRoomState(
+        nextRoom,
+        messageLimitByWorkspace[nextWorkspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
+        shouldResetActiveState ? 'initial' : 'refresh',
+      )
     } catch (error) {
       setConnectionStatus('error')
       setConnectionErrorMessage(errorMessageOf(error))
     } finally {
+      workbenchReadyRef.current = true
       setLoadingState(false)
     }
   }
 
   useEffect(() => {
-    void loadWorkbenchState()
+    void reloadWorkbench(activeWorkspaceId, 'initial', {
+      limit: INITIAL_WORKSPACE_PAGE_LIMIT,
+      query: appliedWorkspaceQuery,
+    })
   }, [])
 
   useEffect(() => {
-    if (activeRoom) {
+    if (!rooms.length) {
+      if (activeWorkspaceId) {
+        setActiveWorkspaceId('')
+      }
       return
     }
 
-    const nextRoom = filteredRooms[0] ?? rooms[0]
-    if (nextRoom) {
-      setActiveWorkspaceId(nextRoom.id)
+    if (!rooms.some(room => room.id === activeWorkspaceId)) {
+      setActiveWorkspaceId(rooms[0]?.id ?? '')
     }
-  }, [activeRoom, filteredRooms, rooms])
+  }, [activeWorkspaceId, rooms])
 
   useEffect(() => {
     if (!activeWorkspaceId || typeof window === 'undefined') {
@@ -239,13 +472,55 @@ export function App() {
     window.localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, activeWorkspaceId)
   }, [activeWorkspaceId])
 
+  useEffect(() => {
+    setPendingReplyTo(undefined)
+    setPendingCodeSelection(undefined)
+  }, [activeConversationId])
+
+  useEffect(() => {
+    if (!workbenchReadyRef.current) {
+      return
+    }
+    if (skipNextQueryReloadRef.current) {
+      skipNextQueryReloadRef.current = false
+      return
+    }
+
+    loadedWorkspaceCountRef.current = INITIAL_WORKSPACE_PAGE_LIMIT
+    void reloadWorkbench(activeWorkspaceId, 'refresh', {
+      limit: INITIAL_WORKSPACE_PAGE_LIMIT,
+      query: appliedWorkspaceQuery,
+    })
+  }, [appliedWorkspaceQuery])
+
   /**
    * Switches the active workspace room.
    * Input: workspace id.
    * Output: updates active workspace state.
    */
-  function handleSelectWorkspace(workspaceId: string) {
+  async function handleSelectWorkspace(workspaceId: string) {
+    const nextRoom = rooms.find(room => room.id === workspaceId)
+    if (!nextRoom) {
+      return
+    }
+
     setActiveWorkspaceId(workspaceId)
+    setPendingReplyTo(undefined)
+    setPendingCodeSelection(undefined)
+    setOptimisticMessages([])
+    setStreamingMessages({})
+    setLiveWorkflowEvents([])
+    setState(createEmptyWorkbenchState(overview.agents))
+    setMessagePage({
+      limit: messageLimitByWorkspace[workspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
+      total: 0,
+      hasMore: false,
+    })
+    await loadProjectRoomState(
+      nextRoom,
+      messageLimitByWorkspace[workspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
+      'select',
+    )
   }
 
   /**
@@ -261,20 +536,24 @@ export function App() {
     const targetAgentId = input.targetAgentId
 
     try {
-      const nextState = await createBusinessWorkspace(
+      const project = await createBusinessWorkspace(
         input.name,
         input.goal,
         createDirectRoom ? 'chat' : input.workspaceType,
         targetAgentId,
       )
-      setState(nextState)
-      setConnectionStatus('live')
-      setConnectionErrorMessage('')
-      setActiveWorkspaceId(firstWorkspaceId(nextState))
+
+      loadedWorkspaceCountRef.current = INITIAL_WORKSPACE_PAGE_LIMIT
+      setWorkspaceQuery('')
+      skipNextQueryReloadRef.current = true
+      setAppliedWorkspaceQuery('')
+      await reloadWorkbench(project.workspaceId ?? activeWorkspaceId, 'refresh', {
+        limit: INITIAL_WORKSPACE_PAGE_LIMIT,
+        query: '',
+      })
       setCreateDialogOpen(false)
     } catch (error) {
-      const message = errorMessageOf(error)
-      setCreateWorkspaceError(message)
+      setCreateWorkspaceError(errorMessageOf(error))
     } finally {
       setCreatingWorkspace(false)
     }
@@ -369,7 +648,7 @@ export function App() {
    * Input: message content.
    * Output: streams backend events and refreshes the current workbench snapshot.
    */
-  async function handleSend(content: string) {
+  async function handleSend(content: string, replyTo?: ReplyReference, codeSelection?: CodeSelectionReference) {
     if (!activeRoom || connectionStatus !== 'live') {
       return
     }
@@ -377,7 +656,7 @@ export function App() {
     const activeWorkspace = activeRoom.workspace
     const activeConversation = activeRoom.conversation
     const agentId = directAgentId(activeConversation)
-    const userMessage = createTemporaryMessage(activeWorkspace.id, activeConversation.id, 'user', 'user', content)
+    const userMessage = createTemporaryMessage(activeWorkspace.id, activeConversation.id, 'user', 'user', content, replyTo)
     setOptimisticMessages(previous => [...previous, userMessage])
     setSending(true)
 
@@ -389,14 +668,14 @@ export function App() {
           conversationId: activeConversation.id,
           content,
           agentId,
+          replyTo,
+          codeSelection,
         },
         handleStreamEvent,
       )
 
-      const nextState = await fetchBusinessWorkbenchState()
-      setState(nextState)
-      setConnectionStatus('live')
-      setConnectionErrorMessage('')
+      await reloadWorkbench(activeWorkspace.id, 'refresh')
+      setLiveWorkflowEvents([])
       setOptimisticMessages([])
       setStreamingMessages({})
     } catch (error) {
@@ -404,14 +683,16 @@ export function App() {
       setConnectionStatus('error')
       setConnectionErrorMessage(message)
       setStreamingMessages({})
-      const errorMessage = createTemporaryMessage(
-        activeWorkspace.id,
-        activeConversation.id,
-        'system',
-        'system',
-        `发送失败：${message}`,
-      )
-      setOptimisticMessages(previous => [...previous, errorMessage])
+      setOptimisticMessages(previous => [
+        ...previous,
+        createTemporaryMessage(
+          activeWorkspace.id,
+          activeConversation.id,
+          'system',
+          'system',
+          `发送失败：${message}`,
+        ),
+      ])
     } finally {
       setSending(false)
     }
@@ -423,16 +704,53 @@ export function App() {
    * Output: refreshes state without forcing the user off the current workspace.
    */
   async function handleRefresh() {
-    await loadWorkbenchState()
+    await reloadWorkbench(activeWorkspaceId, 'refresh')
+    setLiveWorkflowEvents([])
   }
 
   /**
-   * Broadcasts text insertion requests to the chat composer.
-   * Input: string to insert into the composer.
-   * Output: dispatches a window event consumed by the chat composer.
+   * Loads one more workbench page into the left workspace rail.
+   * Input: none.
+   * Output: appends the next room slice without replacing the active room.
    */
-  function handleInsertComposerText(value: string) {
-    window.dispatchEvent(new CustomEvent<string>('agenthub:composer-insert', { detail: value }))
+  async function handleLoadMoreWorkspaces() {
+    if (
+      loadingMoreWorkspaces ||
+      loadingState ||
+      !overview.page.hasMore ||
+      !overview.page.nextCursor
+    ) {
+      return
+    }
+
+    setLoadingMoreWorkspaces(true)
+    try {
+      await loadWorkbenchOverviewSnapshot({
+        limit: WORKSPACE_PAGE_STEP,
+        cursor: overview.page.nextCursor,
+        query: appliedWorkspaceQuery,
+        merge: true,
+      })
+    } catch (error) {
+      setConnectionStatus('error')
+      setConnectionErrorMessage(errorMessageOf(error))
+    } finally {
+      setLoadingMoreWorkspaces(false)
+    }
+  }
+
+  /**
+   * Loads one older message page for the active workspace by widening the recent message window.
+   * Input: none.
+   * Output: refreshes only the current workspace state with a larger message page.
+   */
+  async function handleLoadOlderMessages() {
+    if (!activeRoom || loadingOlderMessages || workspaceLoading || !messagePage.hasMore) {
+      return
+    }
+
+    const nextLimit = (messageLimitByWorkspace[activeRoom.id] ?? messagePage.limit ?? INITIAL_MESSAGE_PAGE_LIMIT) + MESSAGE_PAGE_STEP
+    await loadProjectRoomState(activeRoom, nextLimit, 'older')
   }
 
   /**
@@ -447,7 +765,7 @@ export function App() {
       return
     }
 
-    await handleSend(lastUserMessage.content)
+    await handleSend(lastUserMessage.content, lastUserMessage.replyTo)
   }
 
   /**
@@ -468,19 +786,29 @@ export function App() {
   }
 
   /**
-   * Prefills the composer with a quoted message stub.
-   * Input: message content.
-   * Output: inserts a short reply scaffold in the composer.
+   * Stores one quoted message reference for the next outgoing user message.
+   * Input: reply reference from the selected message bubble.
+   * Output: updates the quote bar state in the composer.
    */
-  function handleReplyToMessage(content: string) {
-    handleInsertComposerText(`引用上一条消息：\n${content}\n\n`)
+  function handleReplyToMessage(replyTo: ReplyReference) {
+    setPendingReplyTo(replyTo)
+  }
+
+  /**
+   * Stores one quoted code selection for the next outgoing user message.
+   * Input: file path, line range, and selected code payload.
+   * Output: updates the code quote bar in the composer.
+   */
+  function handleQuoteCodeSelection(selection: CodeSelectionReference) {
+    setPendingCodeSelection(selection)
+    setCodeDialogOpen(false)
   }
 
   const connectionPillStatus =
     connectionStatus === 'live' ? 'success' : loadingState || connectionStatus === 'connecting' ? 'running' : 'failed'
   const connectionPillLabel =
     connectionStatus === 'live' ? 'backend live' : loadingState || connectionStatus === 'connecting' ? 'connecting' : 'backend error'
-  const connectionTargetLabel = '业务后端 API · 127.0.0.1:8790'
+  const connectionTargetLabel = '业务后端 API / 127.0.0.1:8790'
   const ConnectionIcon = connectionStatus === 'error' ? ServerCrash : Wifi
 
   return (
@@ -504,18 +832,27 @@ export function App() {
             <StatusPill status={connectionPillStatus} label={connectionPillLabel} />
             <GlassPanel compact className="metric-chip">
               <LayoutDashboard size={15} />
-              {state.workspaces.length} 工作区
+              {overview.page.total} 工作区
             </GlassPanel>
             <GlassPanel compact className="metric-chip">
               <PlugZap size={15} />
-              {state.agents.length} Agents
+              {overview.agents.length || state.agents.length} Agents
             </GlassPanel>
+            <button
+              className="secondary-button topbar-code-button"
+              type="button"
+              onClick={() => setCodeDialogOpen(true)}
+              disabled={!activeProjectId || loadingState || creatingWorkspace}
+            >
+              <Braces size={15} />
+              代码
+            </button>
             <button
               className="icon-button"
               type="button"
               onClick={() => void handleRefresh()}
               title="刷新工作台"
-              disabled={loadingState || creatingWorkspace || sending}
+              disabled={loadingState || creatingWorkspace || sending || loadingMoreWorkspaces}
             >
               <RefreshCcw className={loadingState ? 'icon-spin' : ''} size={16} />
             </button>
@@ -540,15 +877,18 @@ export function App() {
         ) : (
           <section className="workbench">
             <WorkspaceRail
-              state={state}
-              rooms={filteredRooms}
+              rooms={rooms}
               activeWorkspaceId={activeWorkspaceId}
-              events={workflowEvents}
               query={workspaceQuery}
-              loading={loadingState}
+              loading={loadingState && rooms.length === 0}
+              loadingMore={loadingMoreWorkspaces}
+              hasMore={overview.page.hasMore}
+              total={overview.page.total}
+              visibleCount={rooms.length}
               createDisabled={!canCreateWorkspace}
-              onSelectWorkspace={handleSelectWorkspace}
+              onSelectWorkspace={workspaceId => void handleSelectWorkspace(workspaceId)}
               onQueryChange={setWorkspaceQuery}
+              onLoadMore={() => void handleLoadMoreWorkspaces()}
               onCreateWorkspace={() => setCreateDialogOpen(true)}
             />
             <ChatPane
@@ -557,13 +897,20 @@ export function App() {
               messages={currentMessages}
               streamingMessages={currentStreamingMessages}
               workflowEvents={workflowEvents}
-              loading={loadingState}
+              loading={workspaceLoading}
               connectionStatus={connectionStatus}
               composerDisabledReason={composerDisabledReason}
               sending={sending}
               activeConversationId={activeConversationId}
+              replyTarget={pendingReplyTo}
+              codeSelectionTarget={pendingCodeSelection}
+              hasOlderMessages={messagePage.hasMore}
+              loadingOlderMessages={loadingOlderMessages}
               onRegenerate={() => void handleRegenerate()}
+              onLoadOlderMessages={() => void handleLoadOlderMessages()}
               onReplyToMessage={handleReplyToMessage}
+              onCancelReply={() => setPendingReplyTo(undefined)}
+              onCancelCodeSelection={() => setPendingCodeSelection(undefined)}
               onCopyMessage={content => void handleCopyMessage(content)}
               onSend={handleSend}
             />
@@ -573,7 +920,7 @@ export function App() {
 
       <CreateWorkspaceDialog
         open={createDialogOpen}
-        agents={state.agents}
+        agents={overview.agents.length > 0 ? overview.agents : state.agents}
         submitting={creatingWorkspace}
         errorMessage={createWorkspaceError}
         sourceTargetLabel={connectionTargetLabel}
@@ -583,6 +930,13 @@ export function App() {
           }
         }}
         onSubmit={handleCreateWorkspace}
+      />
+      <CodeWorkspaceDialog
+        open={codeDialogOpen}
+        projectId={activeProjectId}
+        workspaceName={activeRoom?.workspace.name}
+        onClose={() => setCodeDialogOpen(false)}
+        onQuoteSelection={handleQuoteCodeSelection}
       />
     </main>
   )

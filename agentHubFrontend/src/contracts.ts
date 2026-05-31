@@ -74,6 +74,13 @@ export type Conversation = {
   updatedAt: string
 }
 
+export type ReplyReference = {
+  messageId: string
+  senderId: string
+  senderName?: string
+  excerpt: string
+}
+
 export type Message = {
   id: string
   workspaceId: string
@@ -81,6 +88,7 @@ export type Message = {
   senderType: SenderType
   senderId: string
   content: string
+  replyTo?: ReplyReference
   artifacts: Artifact[]
   createdAt: string
 }

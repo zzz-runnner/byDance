@@ -25,6 +25,11 @@ describe('preview routes', () => {
     testApp = await createMockTestApp('agenthub-preview-')
     const state = (await testApp.app.inject({ method: 'GET', url: '/api/state' })).json() as AppState
     const { workspace } = selectPrimaryGroup(state)
+    await writeFile(
+      path.join(repoPathFor(testApp, workspace.id), 'index.html'),
+      '<!doctype html><html><head><link rel="stylesheet" href="./styles.css"></head><body>preview</body></html>',
+      'utf8',
+    )
     await writeFile(path.join(repoPathFor(testApp, workspace.id), 'styles.css'), 'body{}', 'utf8')
 
     const html = await testApp.app.inject({ method: 'GET', url: `/preview/${workspace.id}/index.html` })

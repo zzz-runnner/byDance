@@ -3,6 +3,7 @@
 ## 2026-05-29 Local Routing and Chat UX
 
 - Group chat can now choose one visible child agent without an explicit `@mention` when the current turn clearly belongs to a single specialist role.
+- Group chat quote follow-ups now preserve the quoted child agent as the visible speaker by default, using the same priority tier as a weak `@mention` when that agent is still a participant in the current conversation.
 - This local routing is metadata-driven through `routingProfile`, so built-in agents and future custom agents can participate without a hardcoded role table.
 - Requirement questions prefer `product-manager`, implementation questions prefer `engineer`, and review or testing questions prefer `reviewer` when the turn does not need multi-agent execution.
 - `routing_finished` now carries `speakerAgentId` and `finalizationMode`, and the final persisted conversation message keeps the real child-agent `senderId` when one child agent is the visible speaker.
@@ -29,6 +30,7 @@
 ```bash
 $env:AGENTHUB_RUN_REAL_TESTS='true'
 npm run test:real:chain
+npx vitest run tests/real/agent-chain-probe.test.ts -t "keeps quoted engineer follow-ups with engineer in a real group room" --reporter=verbose
 ```
 
 ## 2026-05-25 Bridge、交付校验与自动返工

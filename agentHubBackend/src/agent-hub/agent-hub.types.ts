@@ -1,32 +1,66 @@
-export interface AgentHubWorkspace {
-  id: string
-  name: string
-  goal?: string
-  previewUrl?: string
-  createdAt?: string
-  updatedAt?: string
-}
+import type {
+  CodeSelectionReference,
+  ConversationType,
+  ProjectFileContent,
+  ProjectFileNode,
+  ProjectPreviewTargetsResponse,
+  ProjectWorkspaceDiff,
+  RuntimeAgent,
+  RuntimeAppState,
+  RuntimeConversation,
+  RuntimeWorkbenchRoomSummary,
+  RuntimeWorkspace,
+  WorkspaceType,
+} from '../types'
 
-export interface AgentHubConversation {
-  id: string
-  workspaceId: string
-  type: 'group' | 'direct'
-  title?: string
-}
-
-export interface AgentHubState {
-  workspaces?: AgentHubWorkspace[]
-  conversations?: AgentHubConversation[]
-}
+export type AgentHubWorkspace = RuntimeWorkspace
+export type AgentHubConversation = RuntimeConversation
+export type AgentHubState = RuntimeAppState
+export type AgentHubAgent = RuntimeAgent
 
 export interface CreateAgentHubWorkspaceInput {
   name: string
   goal: string
-  workspaceType?: 'dev' | 'research' | 'writing' | 'chat'
+  workspaceType?: WorkspaceType
+}
+
+export interface CreateAgentHubConversationInput {
+  workspaceId: string
+  type: ConversationType
+  title: string
+  participants: string[]
 }
 
 export interface SendAgentHubMessageInput {
   workspaceId: string
   conversationId: string
   content: string
+  agentId?: string
+  replyTo?: {
+    messageId: string
+    senderId: string
+    senderName?: string
+    excerpt: string
+  }
+  codeSelection?: CodeSelectionReference
 }
+
+export interface WorkspaceOverviewBatchInput {
+  items: Array<{
+    workspaceId: string
+    conversationType?: ConversationType
+    targetAgentId?: string
+  }>
+}
+
+export interface WorkspaceOverviewBatchResponse {
+  rooms: RuntimeWorkbenchRoomSummary[]
+}
+
+export interface WorkspaceFileTreeResponse {
+  entries: ProjectFileNode[]
+}
+
+export type WorkspaceFileContentResponse = ProjectFileContent
+export type WorkspaceDiffResponse = ProjectWorkspaceDiff
+export type WorkspacePreviewTargetsResponse = ProjectPreviewTargetsResponse

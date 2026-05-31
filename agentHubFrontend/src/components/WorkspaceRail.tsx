@@ -1,41 +1,47 @@
-import { MessagesSquare, Plus, RadioTower, Search, UserRound } from 'lucide-react'
-import { workspaceRoomKindLabel, workspaceRoomSignal, type WorkspaceRoom } from '../appModel'
-import type { AppState, LiveWorkflowEvent } from '../types'
+import { LoaderCircle, MessagesSquare, Plus, RadioTower, Search, UserRound } from 'lucide-react'
+import { workspaceRoomKindLabel } from '../appModel'
+import type { WorkspaceRoom } from '../types'
 import { AgentAvatar } from './AgentAvatar'
 import { GlassPanel } from './GlassPanel'
 import { StatusPill } from './StatusPill'
 
 type WorkspaceRailProps = {
-  state: AppState
   rooms: WorkspaceRoom[]
   activeWorkspaceId: string
-  events: LiveWorkflowEvent[]
   query: string
   loading: boolean
+  loadingMore: boolean
+  hasMore: boolean
+  total: number
+  visibleCount: number
   createDisabled: boolean
   onSelectWorkspace: (workspaceId: string) => void
   onQueryChange: (value: string) => void
+  onLoadMore: () => void
   onCreateWorkspace: () => void
 }
 
 /**
  * Renders the left workspace navigation rail.
- * Input: app state, active workspace id, workflow events, and selection callbacks.
+ * Input: room list, active workspace id, pagination state, and selection callbacks.
  * Output: a list of selectable workspaces with live signals.
  */
 export function WorkspaceRail({
-  state,
   rooms,
   activeWorkspaceId,
-  events,
   query,
   loading,
+  loadingMore,
+  hasMore,
+  total,
+  visibleCount,
   createDisabled,
   onSelectWorkspace,
   onQueryChange,
+  onLoadMore,
   onCreateWorkspace,
 }: WorkspaceRailProps) {
-  const isEmptyWorkspaceList = state.workspaces.length === 0 && query.trim().length === 0
+  const isEmptyWorkspaceList = rooms.length === 0 && query.trim().length === 0
 
   return (
     <GlassPanel className="workspace-rail">
@@ -70,9 +76,7 @@ export function WorkspaceRail({
           rooms.map(room => (
             <WorkspaceButton
               key={room.id}
-              state={state}
               room={room}
-              events={events}
               active={room.id === activeWorkspaceId}
               onSelectWorkspace={onSelectWorkspace}
             />
@@ -90,25 +94,46 @@ export function WorkspaceRail({
           </div>
         )}
       </div>
+
+      <div className="workspace-rail__footer">
+        <span className="workspace-rail__summary">
+          已加载 {visibleCount} / {total}
+        </span>
+        {hasMore ? (
+          <button
+            className="secondary-button workspace-rail__load-more"
+            type="button"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+          >
+            {loadingMore ? (
+              <>
+                <LoaderCircle className="icon-spin" size={14} />
+                加载中
+              </>
+            ) : (
+              '加载更多'
+            )}
+          </button>
+        ) : null}
+      </div>
     </GlassPanel>
   )
 }
 
 type WorkspaceButtonProps = {
-  state: AppState
   room: WorkspaceRoom
-  events: LiveWorkflowEvent[]
   active: boolean
   onSelectWorkspace: (workspaceId: string) => void
 }
 
 /**
  * Renders one workspace button with its derived signal summary.
- * Input: app state, workspace, workflow events, active flag, and select callback.
+ * Input: workspace room, active flag, and select callback.
  * Output: a button for switching workspaces.
  */
-function WorkspaceButton({ state, room, events, active, onSelectWorkspace }: WorkspaceButtonProps) {
-  const signal = workspaceRoomSignal(state, room, events)
+function WorkspaceButton({ room, active, onSelectWorkspace }: WorkspaceButtonProps) {
+  const signal = room.signal
   const status = signal.runningAgents > 0 ? 'running' : room.workspace.runtimeStatus === 'ready' ? 'ready' : 'failed'
   const Icon = room.kind === 'group' ? MessagesSquare : UserRound
 
@@ -148,26 +173,22 @@ function WorkspaceButton({ state, room, events, active, onSelectWorkspace }: Wor
 }
 
 type WorkspaceWatchButtonProps = {
-  state: AppState
   room: WorkspaceRoom
-  events: LiveWorkflowEvent[]
   active: boolean
   onSelectWorkspace: (workspaceId: string) => void
 }
 
 /**
  * Renders one compact workspace watcher item.
- * Input: app state, workspace, workflow events, active flag, and selection callback.
+ * Input: workspace room, active flag, and selection callback.
  * Output: a compact button for the watch strip.
  */
 export function WorkspaceWatchButton({
-  state,
   room,
-  events,
   active,
   onSelectWorkspace,
 }: WorkspaceWatchButtonProps) {
-  const signal = workspaceRoomSignal(state, room, events)
+  const signal = room.signal
 
   return (
     <button

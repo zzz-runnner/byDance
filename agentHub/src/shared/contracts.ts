@@ -211,6 +211,27 @@ export const ConversationSchema = z.object({
 })
 export type Conversation = z.infer<typeof ConversationSchema>
 
+export const ReplyReferenceSchema = z.object({
+  messageId: z.string(),
+  senderId: z.string(),
+  senderName: z.string().optional(),
+  excerpt: z.string(),
+})
+export type ReplyReference = z.infer<typeof ReplyReferenceSchema>
+
+export const CodeSelectionReferenceSchema = z.object({
+  filePath: z.string().min(1),
+  selectedText: z.string().min(1),
+  startLine: z.number().int().positive(),
+  startColumn: z.number().int().positive(),
+  endLine: z.number().int().positive(),
+  endColumn: z.number().int().positive(),
+  language: z.string().optional(),
+  beforeContext: z.string().optional(),
+  afterContext: z.string().optional(),
+})
+export type CodeSelectionReference = z.infer<typeof CodeSelectionReferenceSchema>
+
 export const MessageSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
@@ -218,6 +239,7 @@ export const MessageSchema = z.object({
   senderType: SenderTypeSchema,
   senderId: z.string(),
   content: z.string(),
+  replyTo: ReplyReferenceSchema.optional(),
   artifacts: z.array(ArtifactSchema),
   createdAt: z.string(),
 })
@@ -311,6 +333,7 @@ export const RoutingTaskBriefSchema = z.object({
   task: z.string(),
   requiredContext: z.array(z.string()),
   expectedOutput: z.string(),
+  codeSelection: CodeSelectionReferenceSchema.optional(),
 })
 export type RoutingTaskBrief = z.infer<typeof RoutingTaskBriefSchema>
 
@@ -865,6 +888,8 @@ export const SendMessageInputSchema = z.object({
   conversationId: z.string(),
   content: z.string().min(1),
   agentId: z.string().optional(),
+  replyTo: ReplyReferenceSchema.optional(),
+  codeSelection: CodeSelectionReferenceSchema.optional(),
 })
 export type SendMessageInput = z.infer<typeof SendMessageInputSchema>
 

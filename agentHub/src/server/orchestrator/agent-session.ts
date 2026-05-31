@@ -6,8 +6,10 @@ import type {
   AgentSessionMessage,
   AgentSessionTurn,
   AppState,
+  CodeSelectionReference,
   Conversation,
   Message,
+  ReplyReference,
   RoutingTaskBrief,
   SenderType,
   TaskHandoff,
@@ -25,6 +27,7 @@ import {
   type RoutedTurn,
   type TurnRoute,
 } from './turn-router'
+import { buildReplyContextPayload } from './reply-context'
 
 export type PlannedAgentSessionTurn = {
   session: AgentSession
@@ -50,6 +53,8 @@ export type AgentReplyPersistenceInput = {
   session: AgentSession
   turn: AgentSessionTurn
   userContent: string
+  replyTo?: ReplyReference
+  codeSelection?: CodeSelectionReference
   route?: TurnRoute
   metadata: Record<string, unknown>
 }
@@ -68,6 +73,8 @@ type AgentSessionTurnInput = {
   agent: AgentDefinition
   session: AgentSession
   content: string
+  replyTo?: ReplyReference
+  codeSelection?: CodeSelectionReference
 }
 
 type TaskHandoffInput = {
@@ -87,6 +94,8 @@ type AgentSessionContextInput = {
   agent: AgentDefinition
   session: AgentSession
   userMessage: string
+  replyTo?: ReplyReference
+  codeSelection?: CodeSelectionReference
   contextProfile?: ContextProfile
 }
 
@@ -282,12 +291,27 @@ export function buildAgentSessionContextPackage(input: AgentSessionContextInput)
       senderType: message.senderType,
       senderId: message.senderId,
       content: compactText(message.content, 420),
+      replyTo: message.replyTo,
       createdAt: message.createdAt,
     }))
 
   return JSON.stringify(
     {
       userMessage: input.userMessage,
+      replyContext: buildReplyContextPayload(input.replyTo, [input.agent]),
+      codeSelection: input.codeSelection
+        ? {
+            filePath: input.codeSelection.filePath,
+            language: input.codeSelection.language,
+            startLine: input.codeSelection.startLine,
+            startColumn: input.codeSelection.startColumn,
+            endLine: input.codeSelection.endLine,
+            endColumn: input.codeSelection.endColumn,
+            selectedText: compactText(input.codeSelection.selectedText, 1_200),
+            beforeContext: input.codeSelection.beforeContext ? compactText(input.codeSelection.beforeContext, 600) : undefined,
+            afterContext: input.codeSelection.afterContext ? compactText(input.codeSelection.afterContext, 600) : undefined,
+          }
+        : undefined,
       workspace: {
         id: input.workspace.id,
         name: input.workspace.name,
@@ -553,6 +577,8 @@ export async function decideAgentSessionTurn(input: AgentSessionTurnInput): Prom
       workspace: input.workspace,
       conversation: input.conversation,
       agent: input.agent,
+      replyTo: input.replyTo,
+      codeSelection: input.codeSelection,
     })
     return {
       turn: buildFallbackTurn(input.agent, input.content, true),
@@ -570,6 +596,8 @@ export async function decideAgentSessionTurn(input: AgentSessionTurnInput): Prom
       workspace: input.workspace,
       conversation: input.conversation,
       agent: input.agent,
+      replyTo: input.replyTo,
+      codeSelection: input.codeSelection,
     })
 
     if (!routed.route.needsModel && routed.route.localResponse) {
@@ -607,6 +635,8 @@ export async function decideAgentSessionTurn(input: AgentSessionTurnInput): Prom
       agent: input.agent,
       session: input.session,
       userMessage: input.content,
+      replyTo: input.replyTo,
+      codeSelection: input.codeSelection,
       contextProfile: routed.route.contextProfile,
     })
     contextTokenEstimate = estimateTokenCount(contextPackage)
@@ -826,6 +856,7 @@ export async function runAgentSessionTurn(input: AgentSessionTurnInput): Promise
     metadata: {
       conversationId: input.conversation.id,
       forcedRun: isForcedAgentRun(input.content),
+      replyTo: input.replyTo,
     },
   })
 
@@ -886,6 +917,8 @@ export async function runAgentSessionTurn(input: AgentSessionTurnInput): Promise
       session: input.session,
       turn: planned.turn,
       userContent,
+      replyTo: input.replyTo,
+      codeSelection: input.codeSelection,
       route: planned.route,
       metadata,
     })
