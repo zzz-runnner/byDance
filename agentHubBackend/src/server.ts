@@ -5,6 +5,7 @@ import type { AppConfig } from './config.js'
 import { AgentHubClient } from './agenthub-client.js'
 import { ProjectStore } from './project-store.js'
 import { sendBufferedUpstreamResponse, sendSseUpstreamResponse } from './sse-proxy.js'
+import { PreviewService, previewAssetResponse } from './preview-service.js'
 import {
   buildWorkbenchOverviewPage,
   previewUrlFor,
@@ -68,6 +69,14 @@ const WorkbenchQuerySchema = z.object({
   q: z.string().optional(),
 })
 
+const PreviewBuildQuerySchema = z.object({
+  force: z.coerce.boolean().optional(),
+})
+
+const RuntimePreviewQuerySchema = z.object({
+  entry: z.string().min(1).optional(),
+})
+
 type HttpError = Error & {
   statusCode?: number
 }
@@ -84,6 +93,7 @@ export function createServer(config: AppConfig) {
 
   const agentHub = new AgentHubClient(config.agentHubBaseUrl)
   const projectStore = new ProjectStore(config.projectsFilePath)
+  const previewService = new PreviewService(config)
 
   app.setErrorHandler((error, _request, reply) => {
     const statusCode = (error as HttpError).statusCode ?? 500
@@ -263,6 +273,31 @@ export function createServer(config: AppConfig) {
     return agentHub.fetchWorkspacePreviewTargets(project.workspaceId)
   })
 
+  app.get('/api/projects/:projectId/preview-capability', async request => {
+    const { projectId } = request.params as { projectId: string }
+    const project = await projectStore.getProject(projectId)
+
+    if (!project) {
+      throw createHttpError(404, `Project not found: ${projectId}`)
+    }
+
+    return previewService.getPreviewCapability(project)
+  })
+
+  app.post('/api/projects/:projectId/preview-build', async request => {
+    const { projectId } = request.params as { projectId: string }
+    const query = PreviewBuildQuerySchema.parse(request.query)
+    const project = await projectStore.getProject(projectId)
+
+    if (!project) {
+      throw createHttpError(404, `Project not found: ${projectId}`)
+    }
+
+    return previewService.startPreviewBuild(project, {
+      force: query.force,
+    })
+  })
+
   app.post('/api/projects/:projectId/messages/stream', async (request, reply) => {
     const { projectId } = request.params as { projectId: string }
     const input = StreamProjectMessageInputSchema.parse(request.body) as StreamProjectMessageInput
@@ -292,6 +327,38 @@ export function createServer(config: AppConfig) {
     await sendBufferedUpstreamResponse(reply, upstream)
   })
 
+  app.get('/preview/runtime/:projectId', async (request, reply) => {
+    const { projectId } = request.params as { projectId: string }
+    const query = RuntimePreviewQuerySchema.parse(request.query)
+    const project = await projectStore.getProject(projectId)
+
+    if (!project) {
+      throw createHttpError(404, `Project not found: ${projectId}`)
+    }
+
+    const asset = await previewService.openRuntimePreviewAsset(project, undefined, query.entry)
+    const response = previewAssetResponse(asset)
+    reply.type(response.contentType)
+    reply.header('Cache-Control', 'no-cache')
+    await reply.send(response.body)
+  })
+
+  app.get('/preview/runtime/:projectId/*', async (request, reply) => {
+    const params = request.params as { projectId: string; '*': string }
+    const query = RuntimePreviewQuerySchema.parse(request.query)
+    const project = await projectStore.getProject(params.projectId)
+
+    if (!project) {
+      throw createHttpError(404, `Project not found: ${params.projectId}`)
+    }
+
+    const asset = await previewService.openRuntimePreviewAsset(project, params['*'] ?? undefined, query.entry)
+    const response = previewAssetResponse(asset)
+    reply.type(response.contentType)
+    reply.header('Cache-Control', 'no-cache')
+    await reply.send(response.body)
+  })
+
   app.get('/preview/*', async (request, reply) => {
     const params = request.params as { '*': string }
     const suffix = params['*'] ?? ''
@@ -300,10 +367,34 @@ export function createServer(config: AppConfig) {
     await sendBufferedUpstreamResponse(reply, upstream)
   })
 
-  app.all('/build-preview/*', async (_request, reply) => {
-    reply.code(404).send({
-      error: 'build-preview is not implemented in agentHubBackend yet.',
-    })
+  app.get('/build-preview/:projectId/:sourceHash', async (request, reply) => {
+    const { projectId, sourceHash } = request.params as { projectId: string; sourceHash: string }
+    const project = await projectStore.getProject(projectId)
+
+    if (!project) {
+      throw createHttpError(404, `Project not found: ${projectId}`)
+    }
+
+    const asset = await previewService.openBuiltPreviewAsset(project, sourceHash)
+    const response = previewAssetResponse(asset)
+    reply.type(response.contentType)
+    reply.header('Cache-Control', 'no-cache')
+    await reply.send(response.body)
+  })
+
+  app.get('/build-preview/:projectId/:sourceHash/*', async (request, reply) => {
+    const params = request.params as { projectId: string; sourceHash: string; '*': string }
+    const project = await projectStore.getProject(params.projectId)
+
+    if (!project) {
+      throw createHttpError(404, `Project not found: ${params.projectId}`)
+    }
+
+    const asset = await previewService.openBuiltPreviewAsset(project, params.sourceHash, params['*'] ?? undefined)
+    const response = previewAssetResponse(asset)
+    reply.type(response.contentType)
+    reply.header('Cache-Control', 'no-cache')
+    await reply.send(response.body)
   })
 
   app.all('/deploy/*', async (_request, reply) => {

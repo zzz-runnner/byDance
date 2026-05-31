@@ -168,7 +168,7 @@ export class ProjectStore {
 
     try {
       const raw = await readFile(this.filePath, 'utf8')
-      const parsed = JSON.parse(raw) as unknown
+      const parsed = JSON.parse(raw.replace(/^\uFEFF/, '')) as unknown
       return Array.isArray(parsed) ? (parsed as StoredProjectRecord[]) : []
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

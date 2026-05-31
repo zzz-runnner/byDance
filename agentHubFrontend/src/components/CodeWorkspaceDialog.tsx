@@ -16,17 +16,18 @@ import {
   X,
 } from 'lucide-react'
 import {
+  fetchBusinessProjectPreviewCapability,
+  triggerBusinessProjectPreviewBuild,
   fetchBusinessProjectDiff,
   fetchBusinessProjectFileContent,
   fetchBusinessProjectFiles,
-  fetchBusinessProjectPreviewTargets,
 } from '../api/businessBackend'
 import type {
   CodeSelectionReference,
+  WorkspacePreviewCapability,
   WorkspaceDiffSnapshot,
   WorkspaceFileContent,
   WorkspaceFileNode,
-  WorkspacePreviewTarget,
 } from '../types'
 import { GlassPanel } from './GlassPanel'
 
@@ -293,6 +294,62 @@ function registerCodeEditorTheme(monaco: MonacoNamespace): void {
 }
 
 /**
+ * Returns one human-readable label for the detected preview framework.
+ * Input: optional preview capability.
+ * Output: localized framework label.
+ */
+function previewFrameworkLabel(capability: WorkspacePreviewCapability | undefined): string {
+  switch (capability?.framework) {
+    case 'static-html':
+      return '静态 HTML'
+    case 'vanilla-module':
+      return '原生模块'
+    case 'vite-react':
+      return 'Vite React'
+    case 'vite-vue':
+      return 'Vite Vue'
+    case 'vite-svelte':
+      return 'Vite Svelte'
+    case 'vite':
+      return 'Vite'
+    case 'angular':
+      return 'Angular'
+    default:
+      return '未识别'
+  }
+}
+
+/**
+ * Returns one concise summary for the current preview mode and build state.
+ * Input: optional preview capability.
+ * Output: localized preview status label.
+ */
+function previewModeLabel(capability: WorkspacePreviewCapability | undefined): string {
+  if (!capability) {
+    return '正在识别预览模式'
+  }
+  if (capability.mode === 'static') {
+    return '源码可直接预览'
+  }
+  if (capability.mode === 'module-shell') {
+    return '源码可直接运行'
+  }
+  if (capability.mode === 'build') {
+    switch (capability.build?.status) {
+      case 'running':
+        return '正在构建预览产物'
+      case 'success':
+        return '正在查看构建产物'
+      case 'failed':
+        return '构建失败'
+      default:
+        return '等待构建预览产物'
+    }
+  }
+  return '当前工作区不可预览'
+}
+
+/**
  * Renders the full-screen code workspace dialog for one project workspace.
  * Input: open state, project identity, and quote callback.
  * Output: file tree, read-only code browser, and static preview panel.
@@ -312,6 +369,7 @@ export function CodeWorkspaceDialog({
   const selectionDraftRef = useRef<EditorSelectionState | undefined>(undefined)
   const selectionCommitTimerRef = useRef<number | undefined>(undefined)
   const pointerSelectionRef = useRef(false)
+  const autoBuildKeyRef = useRef('')
   const [panelMode, setPanelMode] = useState<WorkspacePanelMode>('code')
   const [fileTree, setFileTree] = useState<WorkspaceFileNode[]>([])
   const [treeLoading, setTreeLoading] = useState(false)
@@ -324,10 +382,11 @@ export function CodeWorkspaceDialog({
   const [selectionState, setSelectionState] = useState<EditorSelectionState | undefined>(undefined)
   const [treeRootLabel, setTreeRootLabel] = useState('')
   const [wrapMode, setWrapMode] = useState<CodeWrapMode>('on')
-  const [previewTargets, setPreviewTargets] = useState<WorkspacePreviewTarget[]>([])
+  const [previewCapability, setPreviewCapability] = useState<WorkspacePreviewCapability>()
   const [selectedPreviewPath, setSelectedPreviewPath] = useState<string>()
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState('')
+  const [previewBuildLoading, setPreviewBuildLoading] = useState(false)
   const [previewAttempt, setPreviewAttempt] = useState(0)
   const [previewStatus, setPreviewStatus] = useState<PreviewFrameStatus>('loading')
   const [editorViewport, setEditorViewport] = useState({
@@ -343,9 +402,18 @@ export function CodeWorkspaceDialog({
   const activeFileContent = activeFileEntry?.content
   const changedFileCount = countChangedFiles(diffSnapshot?.status)
   const canMountEditor = Boolean(activeFileContent && editorViewport.width >= 240 && editorViewport.height >= 220)
+  const previewTargets = previewCapability?.targets ?? []
   const selectedPreviewTarget =
     previewTargets.find(target => target.path === selectedPreviewPath) ??
     previewTargets[0]
+  const previewBuildStatus = previewCapability?.build?.status
+  const previewBusy = previewLoading || previewBuildLoading || previewBuildStatus === 'running'
+  const previewLogExcerpt = previewCapability?.build?.logExcerpt?.trim() ?? ''
+  const canShowPreviewFrame = Boolean(selectedPreviewTarget?.url) && (
+    previewCapability?.mode === 'static' ||
+    previewCapability?.mode === 'module-shell' ||
+    previewBuildStatus === 'success'
+  )
 
   useEffect(() => {
     activeFilePathRef.current = activeFilePath
@@ -434,6 +502,58 @@ export function CodeWorkspaceDialog({
   }
 
   /**
+   * Applies one preview capability payload while preserving the best available active target.
+   * Input: next preview capability and an optional preferred target path.
+   * Output: preview capability, target selection, and iframe retry state updated.
+   */
+  function applyPreviewCapability(
+    capability: WorkspacePreviewCapability,
+    preferredPreviewPath?: string,
+  ) {
+    const nextPreviewTarget =
+      capability.targets.find(target => target.path === preferredPreviewPath) ??
+      capability.targets.find(target => target.path === capability.defaultTargetPath) ??
+      capability.targets[0]
+
+    setPreviewCapability(capability)
+    setSelectedPreviewPath(nextPreviewTarget?.path)
+    setPreviewAttempt(0)
+  }
+
+  /**
+   * Loads the current preview capability without refetching the file tree.
+   * Input: optional preferred preview target path and silent-refresh flag.
+   * Output: preview capability state refreshed from the backend.
+   */
+  async function loadPreviewCapability(
+    preferredPreviewPath?: string,
+    options?: { silent?: boolean },
+  ) {
+    if (!projectId) {
+      return
+    }
+
+    if (!options?.silent) {
+      setPreviewLoading(true)
+      setPreviewError('')
+    }
+
+    try {
+      const capability = await fetchBusinessProjectPreviewCapability(projectId)
+      applyPreviewCapability(capability, preferredPreviewPath)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load preview capability.'
+      setPreviewError(message)
+      setPreviewCapability(undefined)
+      setSelectedPreviewPath(undefined)
+    } finally {
+      if (!options?.silent) {
+        setPreviewLoading(false)
+      }
+    }
+  }
+
+  /**
    * Loads the current project file browser snapshot from the local backend.
    * Input: optional preferred active file path and preview target path.
    * Output: updates file tree, diff state, preview state, and active selections.
@@ -455,10 +575,7 @@ export function CodeWorkspaceDialog({
       const [treeSnapshot, nextDiff, previewSnapshot] = await Promise.all([
         fetchBusinessProjectFiles(projectId),
         fetchBusinessProjectDiff(projectId).catch(() => undefined),
-        fetchBusinessProjectPreviewTargets(projectId).catch(() => ({
-          targets: [],
-          defaultTarget: undefined,
-        })),
+        fetchBusinessProjectPreviewCapability(projectId),
       ])
 
       const nextTree = treeSnapshot.entries
@@ -467,27 +584,21 @@ export function CodeWorkspaceDialog({
         preferredActiveFilePath && treeContainsPath(nextTree, preferredActiveFilePath)
           ? preferredActiveFilePath
           : firstFile
-      const nextPreviewTarget =
-        previewSnapshot.targets.find(target => target.path === preferredPreviewPath) ??
-        previewSnapshot.defaultTarget ??
-        previewSnapshot.targets[0]
 
       setFileTree(nextTree)
       setTreeRootLabel(treeSnapshot.rootLabel || '')
       setDiffSnapshot(nextDiff)
-      setPreviewTargets(previewSnapshot.targets)
-      setSelectedPreviewPath(nextPreviewTarget?.path)
+      applyPreviewCapability(previewSnapshot, preferredPreviewPath)
       setExpandedPaths(previous => ({
         ...previous,
         ...expandAncestors(nextActiveFilePath),
       }))
       setActiveFilePath(nextActiveFilePath)
-      setPreviewAttempt(0)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load workspace files.'
       setTreeError(message)
       setPreviewError(message)
-      setPreviewTargets([])
+      setPreviewCapability(undefined)
       setSelectedPreviewPath(undefined)
     } finally {
       setTreeLoading(false)
@@ -518,13 +629,15 @@ export function CodeWorkspaceDialog({
     setActiveFilePath(undefined)
     setFileQuery('')
     setWrapMode('on')
-    setPreviewTargets([])
+    setPreviewCapability(undefined)
     setSelectedPreviewPath(undefined)
     setPreviewError('')
     setPreviewLoading(false)
+    setPreviewBuildLoading(false)
     setPreviewAttempt(0)
     selectionDraftRef.current = undefined
     pointerSelectionRef.current = false
+    autoBuildKeyRef.current = ''
 
     if (projectId) {
       void loadWorkspaceBrowser()
@@ -641,8 +754,8 @@ export function CodeWorkspaceDialog({
       return
     }
 
-    if (!selectedPreviewTarget?.url) {
-      setPreviewStatus('error')
+    if (!canShowPreviewFrame) {
+      setPreviewStatus(previewBuildStatus === 'running' ? 'loading' : 'error')
       return
     }
 
@@ -658,13 +771,74 @@ export function CodeWorkspaceDialog({
       window.clearTimeout(slowTimer)
       window.clearTimeout(errorTimer)
     }
-  }, [open, panelMode, previewAttempt, selectedPreviewTarget?.url])
+  }, [canShowPreviewFrame, open, panelMode, previewAttempt, previewBuildStatus, selectedPreviewTarget?.url])
+
+  useEffect(() => {
+    if (!open || panelMode !== 'preview' || !projectId || previewCapability?.mode !== 'build') {
+      return
+    }
+
+    if (previewCapability.build?.status !== 'idle') {
+      return
+    }
+
+    const autoBuildKey = `${projectId}:${previewCapability.sourceHash}`
+    if (autoBuildKeyRef.current === autoBuildKey) {
+      return
+    }
+
+    autoBuildKeyRef.current = autoBuildKey
+    void handleStartPreviewBuild()
+  }, [open, panelMode, previewCapability, projectId])
+
+  useEffect(() => {
+    if (
+      !open ||
+      panelMode !== 'preview' ||
+      !projectId ||
+      previewCapability?.mode !== 'build' ||
+      previewCapability.build?.status !== 'running'
+    ) {
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      void loadPreviewCapability(selectedPreviewPath, { silent: true })
+    }, 2000)
+
+    return () => {
+      window.clearInterval(timer)
+    }
+  }, [open, panelMode, previewCapability, projectId, selectedPreviewPath])
 
   useEffect(() => {
     if (panelMode === 'code') {
       relayoutEditorSoon()
     }
   }, [panelMode])
+
+  /**
+   * Starts or retries the current preview build through the business backend.
+   * Input: optional force flag.
+   * Output: build state and preview targets refreshed from the backend.
+   */
+  async function handleStartPreviewBuild(force = false) {
+    if (!projectId) {
+      return
+    }
+
+    setPreviewBuildLoading(true)
+    setPreviewError('')
+
+    try {
+      const capability = await triggerBusinessProjectPreviewBuild(projectId, force)
+      applyPreviewCapability(capability, selectedPreviewPath)
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : 'Failed to start preview build.')
+    } finally {
+      setPreviewBuildLoading(false)
+    }
+  }
 
   /**
    * Refreshes the tree, preview, and diff state for the current workspace.
@@ -819,6 +993,64 @@ export function CodeWorkspaceDialog({
                     </div>
                   </div>
                 ) : (
+                  <>
+                    <div className="code-editor-toolbar code-editor-toolbar--preview">
+                      <div className="code-editor-toolbar__meta">
+                        <strong>{selectedPreviewTarget?.path ?? previewCapability?.entryPath ?? '暂无可预览入口'}</strong>
+                        <span>{`${previewFrameworkLabel(previewCapability)} / ${previewModeLabel(previewCapability)}`}</span>
+                        <span>{previewCapability?.reason ?? '正在识别当前工作区的预览方式。'}</span>
+                      </div>
+                      <div className="code-editor-toolbar__actions code-editor-toolbar__actions--preview">
+                        {previewCapability?.mode === 'build' ? (
+                          <button
+                            className="secondary-button code-preview-build-button"
+                            type="button"
+                            onClick={() => void handleStartPreviewBuild(previewBuildStatus === 'failed' || previewBuildStatus === 'success')}
+                            disabled={previewBusy}
+                          >
+                            {previewBusy ? <LoaderCircle className="icon-spin" size={14} /> : <RefreshCcw size={14} />}
+                            {previewBuildStatus === 'success'
+                              ? '重新构建'
+                              : previewBuildStatus === 'failed'
+                                ? '重试构建'
+                                : previewBuildStatus === 'running'
+                                  ? '构建中'
+                                  : '开始构建'}
+                          </button>
+                        ) : null}
+                        <select
+                          className="code-preview-select"
+                          value={selectedPreviewTarget?.path ?? ''}
+                          onChange={event => {
+                            setSelectedPreviewPath(event.currentTarget.value || undefined)
+                            setPreviewAttempt(0)
+                          }}
+                          disabled={previewTargets.length === 0 || previewBusy}
+                        >
+                          {previewTargets.length === 0 ? (
+                            <option value="">暂无预览入口</option>
+                          ) : (
+                            previewTargets.map(target => (
+                              <option key={target.path} value={target.path}>
+                                {target.path} {target.source === 'build' ? '(build)' : target.source === 'module-shell' ? '(module)' : ''}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                        {selectedPreviewTarget?.url ? (
+                          <a
+                            className="secondary-button code-preview-open"
+                            href={selectedPreviewTarget.url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            新窗口打开
+                            <ExternalLink size={14} />
+                          </a>
+                        ) : null}
+                      </div>
+                    </div>
+                    {false ? (
                   <div className="code-editor-toolbar code-editor-toolbar--preview">
                     <div className="code-editor-toolbar__meta">
                       <strong>{selectedPreviewTarget?.path ?? '暂无可预览入口'}</strong>
@@ -861,6 +1093,8 @@ export function CodeWorkspaceDialog({
                       ) : null}
                     </div>
                   </div>
+                    ) : null}
+                  </>
                 )}
               </div>
 
@@ -966,6 +1200,116 @@ export function CodeWorkspaceDialog({
                   {previewLoading ? (
                     <div className="code-preview-empty">
                       <LoaderCircle className="icon-spin" size={18} />
+                      正在识别预览方式...
+                    </div>
+                  ) : previewError ? (
+                    <div className="code-preview-empty code-preview-empty--error">{previewError}</div>
+                  ) : !previewCapability ? (
+                    <div className="code-preview-empty">
+                      <Globe2 size={18} />
+                      当前工作区还没有可用的预览能力信息。
+                    </div>
+                  ) : previewCapability.mode === 'unsupported' ? (
+                    <div className="code-preview-empty">
+                      <AlertTriangle size={18} />
+                      <strong>当前工作区暂不支持页面预览</strong>
+                      <p>{previewCapability.reason}</p>
+                    </div>
+                  ) : previewCapability.mode === 'build' && previewBuildStatus !== 'success' ? (
+                    <div className="code-preview-build">
+                      <div className={`code-preview-build__card code-preview-build__card--${previewBuildStatus ?? 'idle'}`}>
+                        {previewBuildStatus === 'failed' ? (
+                          <AlertTriangle size={18} />
+                        ) : (
+                          <LoaderCircle className={previewBuildStatus === 'running' ? 'icon-spin' : ''} size={18} />
+                        )}
+                        <strong>{previewCapability.build?.summary ?? previewCapability.reason}</strong>
+                        <p>{previewCapability.reason}</p>
+                        {previewCapability.build?.installCommand ? (
+                          <code>{previewCapability.build.installCommand}</code>
+                        ) : null}
+                        {previewCapability.build?.buildCommand ? (
+                          <code>{previewCapability.build.buildCommand}</code>
+                        ) : null}
+                        {previewLogExcerpt ? (
+                          <pre className="code-preview-log">{previewLogExcerpt}</pre>
+                        ) : null}
+                        <div className="code-preview-actions">
+                          <button
+                            className="primary-button"
+                            type="button"
+                            onClick={() => void handleStartPreviewBuild(previewBuildStatus === 'failed')}
+                            disabled={previewBusy}
+                          >
+                            {previewBuildStatus === 'failed' ? '重新构建' : previewBuildStatus === 'running' ? '构建中...' : '开始构建'}
+                          </button>
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            onClick={() => void loadPreviewCapability(selectedPreviewPath)}
+                            disabled={previewBusy}
+                          >
+                            刷新状态
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : !selectedPreviewTarget?.url ? (
+                    <div className="code-preview-empty">
+                      <Globe2 size={18} />
+                      当前工作区还没有可访问的预览入口。
+                    </div>
+                  ) : (
+                    <>
+                      <iframe
+                        key={`${selectedPreviewTarget.path}-${previewAttempt}`}
+                        className="code-preview-frame"
+                        src={selectedPreviewTarget.url}
+                        title={selectedPreviewTarget.path}
+                        onLoad={() => setPreviewStatus('ready')}
+                        onError={() => setPreviewStatus('error')}
+                      />
+
+                      {previewStatus !== 'ready' ? (
+                        <div className="code-preview-overlay">
+                          <div className={`code-preview-status code-preview-status--${previewStatus}`}>
+                            {previewStatus === 'error' ? (
+                              <AlertTriangle size={18} />
+                            ) : (
+                              <LoaderCircle className="icon-spin" size={18} />
+                            )}
+                            <strong>
+                              {previewStatus === 'error'
+                                ? '预览加载失败'
+                                : previewStatus === 'slow'
+                                  ? '页面加载较慢'
+                                  : '正在加载页面预览'}
+                            </strong>
+                            <p>
+                              {previewStatus === 'error'
+                                ? '可以重试 iframe 预览，或者直接在新窗口打开当前页面。'
+                                : previewStatus === 'slow'
+                                  ? '页面资源较多或构建结果正在冷启动，请再等一会。'
+                                  : '正在拉取当前工作区的页面资源。'}
+                            </p>
+                            {previewStatus === 'error' ? (
+                              <div className="code-preview-actions">
+                                <button className="primary-button" type="button" onClick={handleRetryPreview}>
+                                  重试预览
+                                </button>
+                                <a className="secondary-button" href={selectedPreviewTarget.url} target="_blank" rel="noreferrer">
+                                  新窗口打开
+                                </a>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                  {false ? (<>
+                    <div className="code-preview-empty">
+                      <LoaderCircle className="icon-spin" size={18} />
                       正在加载预览入口...
                     </div>
                   ) : previewError ? (
@@ -1022,7 +1366,7 @@ export function CodeWorkspaceDialog({
                         </div>
                       ) : null}
                     </>
-                  )}
+                  </>) : null}
                 </div>
               )}
             </section>

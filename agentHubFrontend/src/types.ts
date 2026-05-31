@@ -130,11 +130,48 @@ export type WorkspaceDiffSnapshot = {
 export type WorkspacePreviewTarget = {
   path: string
   url: string
+  source?: 'runtime' | 'module-shell' | 'build'
 }
 
 export type WorkspacePreviewTargets = {
   defaultTarget?: WorkspacePreviewTarget
   targets: WorkspacePreviewTarget[]
+}
+
+export type PreviewMode = 'static' | 'module-shell' | 'build' | 'unsupported'
+export type PreviewFramework =
+  | 'static-html'
+  | 'vanilla-module'
+  | 'vite-react'
+  | 'vite-vue'
+  | 'vite-svelte'
+  | 'vite'
+  | 'angular'
+  | 'unsupported'
+export type PreviewBuildStatus = 'idle' | 'running' | 'success' | 'failed'
+
+export type WorkspacePreviewBuildState = {
+  status: PreviewBuildStatus
+  sourceHash: string
+  buildId?: string
+  summary: string
+  installCommand?: string
+  buildCommand?: string
+  startedAt?: string
+  finishedAt?: string
+  logExcerpt?: string
+  error?: string
+}
+
+export type WorkspacePreviewCapability = {
+  mode: PreviewMode
+  framework: PreviewFramework
+  reason: string
+  sourceHash: string
+  entryPath?: string
+  defaultTargetPath?: string
+  targets: WorkspacePreviewTarget[]
+  build?: WorkspacePreviewBuildState
 }
 
 export type StreamMessageInput = {

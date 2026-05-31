@@ -28,7 +28,10 @@ The current local live path is:
 - `GET /api/projects/:projectId/files/content`
 - `GET /api/projects/:projectId/diff`
 - `GET /api/projects/:projectId/preview-targets`
-- `GET /preview/*`
+- `GET /api/projects/:projectId/preview-capability`
+- `POST /api/projects/:projectId/preview-build`
+- `GET /preview/runtime/*`
+- `GET /build-preview/*`
 - `GET /api/workspaces/:workspaceId/zip`
 
 It supports both:
@@ -82,10 +85,14 @@ The current local path is focused on one workspace equals one chat window.
   - Code selection no longer interrupts the drag with a popup and can be quoted back into the composer as structured `codeSelection`
 - The same dialog now includes both `代码` and `预览` panels:
   - `代码` reads only the current workspace repo from `agentHub`
-  - `预览` reads real static entry targets from `/api/projects/:projectId/preview-targets`
+  - `预览` now reads one capability snapshot from `/api/projects/:projectId/preview-capability`
+  - Static HTML workspaces can be previewed directly from source files
+  - Browser-native single-module workspaces can run through one injected module shell
+  - Vite React, Vue, and Svelte workspaces can trigger one local backend build and then render the built `index.html`
   - New workspaces no longer auto-seed a placeholder `index.html`
   - If no static entry exists yet, the preview panel shows an empty state
   - If multiple preview entries exist, the dialog can switch between them and keeps `loading / slow / error` feedback inside the preview panel
+  - Build-mode preview reuses cached output by `sourceHash`, and no longer creates `package-lock.json` for lockfile-free workspaces during local preview install
 - When the page is viewed through a remote desktop or remote-control session, decorative blur layers and React dev-mode re-renders can look like visible flicker. Treat this as an environment observation first, not as a confirmed frontend callback loop.
 
 ## Dependency Management
@@ -179,13 +186,21 @@ Smoke checks should confirm:
 The current local implementation intentionally does not cover:
 
 - Cloud deployment
-- Build-preview and deploy product flows
+- Deploy product flows
 - Version history and one-click apply-diff UX
 - In-browser manual file editing and save-back flow
-- Non-static framework preview builds such as Vue or React source builds through the business backend
+- Framework preview outside the first local phase, such as Angular
 - Desktop and mobile clients
 
-`/build-preview/*` and `/deploy/*` currently return `404` placeholders from `agentHubBackend`.
+The current first-phase local preview support is:
+
+- Static HTML
+- Browser-native ES module entries without bare-package imports
+- Vite React
+- Vite Vue
+- Vite Svelte
+
+`/deploy/*` still returns a placeholder from `agentHubBackend`.
 
 ## Git Workflow
 

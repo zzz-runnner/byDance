@@ -114,6 +114,49 @@ export interface ProjectPreviewTargetsResponse {
   targets: WorkspacePreviewTarget[]
 }
 
+export type PreviewMode = 'static' | 'module-shell' | 'build' | 'unsupported'
+export type PreviewFramework =
+  | 'static-html'
+  | 'vanilla-module'
+  | 'vite-react'
+  | 'vite-vue'
+  | 'vite-svelte'
+  | 'vite'
+  | 'angular'
+  | 'unsupported'
+export type PreviewTargetSource = 'runtime' | 'module-shell' | 'build'
+export type PreviewBuildStatus = 'idle' | 'running' | 'success' | 'failed'
+
+export interface ProjectPreviewRenderableTarget {
+  path: string
+  url: string
+  source: PreviewTargetSource
+}
+
+export interface ProjectPreviewBuildState {
+  status: PreviewBuildStatus
+  sourceHash: string
+  buildId?: string
+  summary: string
+  installCommand?: string
+  buildCommand?: string
+  startedAt?: string
+  finishedAt?: string
+  logExcerpt?: string
+  error?: string
+}
+
+export interface ProjectPreviewCapabilityResponse {
+  mode: PreviewMode
+  framework: PreviewFramework
+  reason: string
+  sourceHash: string
+  entryPath?: string
+  defaultTargetPath?: string
+  targets: ProjectPreviewRenderableTarget[]
+  build?: ProjectPreviewBuildState
+}
+
 export interface RuntimeWorkspace extends Record<string, unknown> {
   id: string
   name: string

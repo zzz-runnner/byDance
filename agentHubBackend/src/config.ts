@@ -6,6 +6,9 @@ export interface AppConfig {
   agentHubBaseUrl: string
   dataDir: string
   projectsFilePath: string
+  agentHubWorkspaceRootPath: string
+  previewBuildsDir: string
+  previewInstallsDir: string
 }
 
 /**
@@ -19,6 +22,10 @@ export function readConfig(): AppConfig {
     cwd,
     process.env.AGENTHUB_BACKEND_DATA_DIR ?? process.env.LOCATE_BACKEND_DATA_DIR ?? 'data',
   )
+  const agentHubWorkspaceRootPath = path.resolve(
+    cwd,
+    process.env.AGENTHUB_WORKSPACE_ROOT_PATH ?? '../agentHub/data/workspaces',
+  )
 
   return {
     host: process.env.HOST ?? '127.0.0.1',
@@ -26,6 +33,9 @@ export function readConfig(): AppConfig {
     agentHubBaseUrl: process.env.AGENTHUB_BASE_URL ?? 'http://127.0.0.1:8787',
     dataDir,
     projectsFilePath: path.join(dataDir, 'projects.json'),
+    agentHubWorkspaceRootPath,
+    previewBuildsDir: path.join(dataDir, 'preview-builds'),
+    previewInstallsDir: path.join(dataDir, 'preview-installs'),
   }
 }
 

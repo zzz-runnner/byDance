@@ -8,6 +8,7 @@ import type {
   Workspace,
   WorkspaceDiffSnapshot,
   WorkspaceFileContent,
+  WorkspacePreviewCapability,
   WorkspacePreviewTargets,
   WorkflowEvent,
 } from '../types'
@@ -285,6 +286,38 @@ export async function fetchBusinessProjectDiff(projectId: string): Promise<Works
 export async function fetchBusinessProjectPreviewTargets(projectId: string): Promise<WorkspacePreviewTargets> {
   const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/preview-targets`)
   return readJson<WorkspacePreviewTargets>(response, 'Load business project preview targets')
+}
+
+/**
+ * Loads the current preview capability for one workspace-backed project.
+ * Input: project id.
+ * Output: preview mode, targets, and optional build state.
+ */
+export async function fetchBusinessProjectPreviewCapability(projectId: string): Promise<WorkspacePreviewCapability> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/preview-capability`)
+  return readJson<WorkspacePreviewCapability>(response, 'Load business project preview capability')
+}
+
+/**
+ * Starts or retries the preview build for one workspace-backed project.
+ * Input: project id and optional force flag.
+ * Output: refreshed preview capability after the build request is accepted.
+ */
+export async function triggerBusinessProjectPreviewBuild(
+  projectId: string,
+  force = false,
+): Promise<WorkspacePreviewCapability> {
+  const query = new URLSearchParams()
+  if (force) {
+    query.set('force', 'true')
+  }
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/preview-build${query.size ? `?${query.toString()}` : ''}`,
+    {
+      method: 'POST',
+    },
+  )
+  return readJson<WorkspacePreviewCapability>(response, 'Start business project preview build')
 }
 
 /**
