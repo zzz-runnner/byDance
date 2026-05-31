@@ -1,4 +1,4 @@
-import { MessagesSquare, Plus, RadioTower, Search, UserRound } from 'lucide-react'
+import { LoaderCircle, MessagesSquare, Plus, RadioTower, Search, UserRound } from 'lucide-react'
 import { workspaceRoomKindLabel } from '../appModel'
 import type { WorkspaceRoom } from '../types'
 import { AgentAvatar } from './AgentAvatar'
@@ -10,15 +10,20 @@ type WorkspaceRailProps = {
   activeWorkspaceId: string
   query: string
   loading: boolean
+  loadingMore: boolean
+  hasMore: boolean
+  total: number
+  visibleCount: number
   createDisabled: boolean
   onSelectWorkspace: (workspaceId: string) => void
   onQueryChange: (value: string) => void
+  onLoadMore: () => void
   onCreateWorkspace: () => void
 }
 
 /**
  * Renders the left workspace navigation rail.
- * Input: app state, active workspace id, workflow events, and selection callbacks.
+ * Input: room list, active workspace id, pagination state, and selection callbacks.
  * Output: a list of selectable workspaces with live signals.
  */
 export function WorkspaceRail({
@@ -26,9 +31,14 @@ export function WorkspaceRail({
   activeWorkspaceId,
   query,
   loading,
+  loadingMore,
+  hasMore,
+  total,
+  visibleCount,
   createDisabled,
   onSelectWorkspace,
   onQueryChange,
+  onLoadMore,
   onCreateWorkspace,
 }: WorkspaceRailProps) {
   const isEmptyWorkspaceList = rooms.length === 0 && query.trim().length === 0
@@ -84,6 +94,29 @@ export function WorkspaceRail({
           </div>
         )}
       </div>
+
+      <div className="workspace-rail__footer">
+        <span className="workspace-rail__summary">
+          已加载 {visibleCount} / {total}
+        </span>
+        {hasMore ? (
+          <button
+            className="secondary-button workspace-rail__load-more"
+            type="button"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+          >
+            {loadingMore ? (
+              <>
+                <LoaderCircle className="icon-spin" size={14} />
+                加载中
+              </>
+            ) : (
+              '加载更多'
+            )}
+          </button>
+        ) : null}
+      </div>
     </GlassPanel>
   )
 }
@@ -96,7 +129,7 @@ type WorkspaceButtonProps = {
 
 /**
  * Renders one workspace button with its derived signal summary.
- * Input: app state, workspace, workflow events, active flag, and select callback.
+ * Input: workspace room, active flag, and select callback.
  * Output: a button for switching workspaces.
  */
 function WorkspaceButton({ room, active, onSelectWorkspace }: WorkspaceButtonProps) {
@@ -147,7 +180,7 @@ type WorkspaceWatchButtonProps = {
 
 /**
  * Renders one compact workspace watcher item.
- * Input: app state, workspace, workflow events, active flag, and selection callback.
+ * Input: workspace room, active flag, and selection callback.
  * Output: a compact button for the watch strip.
  */
 export function WorkspaceWatchButton({

@@ -60,10 +60,17 @@ export type WorkspaceRoom = {
   lastActivityAt: string
 }
 
+export type WorkbenchPage = {
+  limit: number
+  nextCursor?: string
+  hasMore: boolean
+  total: number
+}
+
 export type WorkbenchOverview = {
   agents: AgentDefinition[]
   rooms: WorkspaceRoom[]
-  sourceRootLabel: string
+  page: WorkbenchPage
 }
 
 export type ProjectStatePage = {
@@ -118,6 +125,16 @@ export type WorkspaceDiffSnapshot = {
   baseCommit: string
   status: string
   patch: string
+}
+
+export type WorkspacePreviewTarget = {
+  path: string
+  url: string
+}
+
+export type WorkspacePreviewTargets = {
+  defaultTarget?: WorkspacePreviewTarget
+  targets: WorkspacePreviewTarget[]
 }
 
 export type StreamMessageInput = {

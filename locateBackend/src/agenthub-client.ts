@@ -1,10 +1,13 @@
 import { z } from 'zod'
 import type {
+  ProjectPreviewTargetsResponse,
   CodeSelectionReference,
   ConversationType,
   ProjectFileContent,
   ProjectFileNode,
   ProjectWorkspaceDiff,
+  RuntimeAgent,
+  RuntimeWorkbenchRoomSummary,
   RuntimeAppState,
   WorkspaceType,
 } from './types.js'
@@ -45,6 +48,15 @@ export class AgentHubClient {
   async fetchState(): Promise<RuntimeAppState> {
     const state = await this.fetchJson('/api/state')
     return RuntimeAppStateSchema.parse(state) as RuntimeAppState
+  }
+
+  /**
+   * Loads the registered AgentHub agent definitions.
+   * Input: none.
+   * Output: lightweight agent definition list.
+   */
+  async fetchAgents(): Promise<RuntimeAgent[]> {
+    return this.fetchJson('/api/agents') as Promise<RuntimeAgent[]>
   }
 
   /**
@@ -142,6 +154,38 @@ export class AgentHubClient {
    */
   async fetchWorkspaceDiff(workspaceId: string): Promise<ProjectWorkspaceDiff> {
     return this.fetchJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/diff`) as Promise<ProjectWorkspaceDiff>
+  }
+
+  /**
+   * Loads one batch of workspace room summaries without fetching the full runtime state.
+   * Input: workspace mappings for the current page.
+   * Output: room summaries for the matching workspaces.
+   */
+  async fetchWorkspaceOverviewBatch(input: {
+    items: Array<{
+      workspaceId: string
+      conversationType?: ConversationType
+      targetAgentId?: string
+    }>
+  }): Promise<{ rooms: RuntimeWorkbenchRoomSummary[] }> {
+    return this.fetchJson('/api/workspaces/overview-batch', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    }) as Promise<{ rooms: RuntimeWorkbenchRoomSummary[] }>
+  }
+
+  /**
+   * Loads the current preview targets for one workspace repository.
+   * Input: workspace id.
+   * Output: ordered preview targets plus the default target.
+   */
+  async fetchWorkspacePreviewTargets(workspaceId: string): Promise<ProjectPreviewTargetsResponse> {
+    return this.fetchJson(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/preview-targets`,
+    ) as Promise<ProjectPreviewTargetsResponse>
   }
 
   /**

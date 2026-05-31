@@ -2,13 +2,16 @@ import type {
   ConversationType,
   FrontendAppState,
   FrontendWorkspace,
+  RuntimeAgent,
   ProjectStateResponse,
   ProjectResponse,
   ProjectStatePage,
   RuntimeAppState,
   RuntimeConversation,
   RuntimeDiagnosticLog,
+  RuntimeWorkbenchRoomSummary,
   StoredProjectRecord,
+  WorkbenchPage,
   WorkbenchOverviewResponse,
 } from './types.js'
 
@@ -111,13 +114,12 @@ export function selectProjectState(
 
 /**
  * Builds the lightweight workbench overview used by the left workspace list.
- * Input: full runtime state, stored projects, and one source-root display label.
+ * Input: full runtime state and stored projects.
  * Output: one overview payload with room summaries only.
  */
 export function buildWorkbenchOverview(
   state: RuntimeAppState,
   projects: StoredProjectRecord[],
-  sourceRootLabel: string,
 ): WorkbenchOverviewResponse {
   const rooms = projects
     .flatMap(project => {
@@ -172,7 +174,42 @@ export function buildWorkbenchOverview(
   return {
     agents: state.agents,
     rooms,
-    sourceRootLabel,
+    page: {
+      limit: rooms.length,
+      hasMore: false,
+      total: rooms.length,
+    },
+  }
+}
+
+/**
+ * Builds one paged workbench overview from precomputed AgentHub room summaries.
+ * Input: lightweight agent list, stored projects for the current page, runtime rooms, and page metadata.
+ * Output: frontend-ready workbench overview payload.
+ */
+export function buildWorkbenchOverviewPage(
+  agents: RuntimeAgent[],
+  projects: StoredProjectRecord[],
+  runtimeRooms: RuntimeWorkbenchRoomSummary[],
+  page: WorkbenchPage,
+): WorkbenchOverviewResponse {
+  const projectByWorkspaceId = new Map(projects.map(project => [project.workspaceId, project]))
+  const rooms = runtimeRooms.flatMap(room => {
+    const project = projectByWorkspaceId.get(room.workspace.id)
+    if (!project) {
+      return []
+    }
+
+    return [{
+      ...room,
+      workspace: attachProjectMetadata(room.workspace, project.projectId),
+    }]
+  })
+
+  return {
+    agents,
+    rooms,
+    page,
   }
 }
 
@@ -228,7 +265,7 @@ export function selectProjectConversation(
  * Output: relative preview URL.
  */
 export function previewUrlFor(workspaceId: string): string {
-  return `/preview/${encodeURIComponent(workspaceId)}/index.html`
+  return `/preview/${encodeURIComponent(workspaceId)}`
 }
 
 /**

@@ -2,6 +2,69 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { StoredProjectRecord } from './types.js'
 
+type ProjectCursor = {
+  updatedAt: string
+  projectId: string
+}
+
+export type ProjectPageResult = {
+  items: StoredProjectRecord[]
+  total: number
+  hasMore: boolean
+  nextCursor?: string
+}
+
+/**
+ * Sorts projects by descending update time and uses project id as a stable tie-breaker.
+ * Input: two project records. Output: standard array sort number.
+ */
+function compareProjects(left: StoredProjectRecord, right: StoredProjectRecord): number {
+  if (left.updatedAt !== right.updatedAt) {
+    return right.updatedAt.localeCompare(left.updatedAt)
+  }
+  return right.projectId.localeCompare(left.projectId)
+}
+
+/**
+ * Encodes one pagination cursor from a project record.
+ * Input: project record.
+ * Output: opaque cursor string.
+ */
+function encodeCursor(project: StoredProjectRecord): string {
+  return Buffer.from(
+    JSON.stringify({
+      updatedAt: project.updatedAt,
+      projectId: project.projectId,
+    } satisfies ProjectCursor),
+    'utf8',
+  ).toString('base64url')
+}
+
+/**
+ * Decodes one stored pagination cursor into its comparison fields.
+ * Input: opaque cursor string.
+ * Output: decoded cursor or undefined when invalid.
+ */
+function decodeCursor(cursor: string | undefined): ProjectCursor | undefined {
+  if (!cursor) {
+    return undefined
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Partial<ProjectCursor>
+    if (typeof parsed.updatedAt === 'string' && typeof parsed.projectId === 'string') {
+      return {
+        updatedAt: parsed.updatedAt,
+        projectId: parsed.projectId,
+      }
+    }
+  } catch {
+    return undefined
+  }
+
+  return undefined
+}
+
 export class ProjectStore {
   constructor(private readonly filePath: string) {}
 
@@ -12,7 +75,56 @@ export class ProjectStore {
    */
   async listProjects(): Promise<StoredProjectRecord[]> {
     const projects = await this.readProjects()
-    return projects.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    return projects.sort(compareProjects)
+  }
+
+  /**
+   * Loads one cursor-paged project slice after applying a lightweight search query.
+   * Input: requested limit, optional cursor, and optional search query.
+   * Output: paged project records plus pagination metadata.
+   */
+  async listProjectsPage(input: {
+    limit: number
+    cursor?: string
+    query?: string
+  }): Promise<ProjectPageResult> {
+    const projects = await this.listProjects()
+    const normalizedQuery = input.query?.trim().toLowerCase() ?? ''
+    const filtered = !normalizedQuery
+      ? projects
+      : projects.filter(project =>
+          [
+            project.name,
+            project.goal,
+            project.workspaceId,
+            project.projectId,
+            project.conversationType ?? '',
+            project.targetAgentId ?? '',
+          ]
+            .join(' ')
+            .toLowerCase()
+            .includes(normalizedQuery),
+        )
+    const decodedCursor = decodeCursor(input.cursor)
+    const pageStartIndex = decodedCursor
+      ? filtered.findIndex(project =>
+          compareProjects(project, {
+            ...project,
+            updatedAt: decodedCursor.updatedAt,
+            projectId: decodedCursor.projectId,
+          }) > 0,
+        )
+      : -1
+    const sliceStart = pageStartIndex >= 0 ? pageStartIndex : decodedCursor ? filtered.length : 0
+    const items = filtered.slice(sliceStart, sliceStart + input.limit)
+    const hasMore = sliceStart + items.length < filtered.length
+
+    return {
+      items,
+      total: filtered.length,
+      hasMore,
+      nextCursor: hasMore && items.length > 0 ? encodeCursor(items[items.length - 1]) : undefined,
+    }
   }
 
   /**

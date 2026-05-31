@@ -367,7 +367,7 @@ type ReviewEvidence = {
     summary: string
     files: ChangedFile[]
   }
-  previewUrl: string
+  previewUrl?: string
   zipUrl: string
   sourceFileSummaries: ReviewSourceFileSummary[]
 }
@@ -430,7 +430,7 @@ async function buildReviewerEvidence(
           files: trackedFiles,
         }
       : undefined,
-    previewUrl: `/preview/${workspace.id}/index.html`,
+    previewUrl: await services.runtime.getDefaultPreviewUrl(workspace.id),
     zipUrl: `/api/workspaces/${workspace.id}/zip`,
     sourceFileSummaries,
   }
@@ -547,7 +547,7 @@ function augmentContextAssemblyWithReviewEvidence(
   const inputContext = JSON.stringify(payload, null, 2)
   const summaryLines = [
     assembly.summary,
-    `reviewEvidence: preview=${reviewEvidence.previewUrl} zip=${reviewEvidence.zipUrl}`,
+    `reviewEvidence: preview=${reviewEvidence.previewUrl ?? 'none'} zip=${reviewEvidence.zipUrl}`,
     reviewEvidence.latestChangeSet ? `reviewChangeSet: ${reviewEvidence.latestChangeSet.summary}` : 'reviewChangeSet: none',
     `sourceFileSummaries: ${reviewEvidence.sourceFileSummaries.length}`,
   ]
@@ -558,7 +558,7 @@ function augmentContextAssemblyWithReviewEvidence(
     tokenEstimate: Math.max(1, Math.ceil(inputContext.length / 4)),
     sourceRefs: [
       ...assembly.sourceRefs,
-      `preview:${reviewEvidence.previewUrl}`,
+      ...(reviewEvidence.previewUrl ? [`preview:${reviewEvidence.previewUrl}`] : []),
       `zip:${reviewEvidence.zipUrl}`,
       ...(reviewEvidence.latestChangeSet ? [`changeSet:${reviewEvidence.latestChangeSet.id}`] : []),
       ...reviewEvidence.sourceFileSummaries.map(file => `source:${file.path}`),
@@ -949,7 +949,10 @@ async function runTaskBrief(
 
   const afterSnapshot = await readRepoSnapshot(services.runtime, runtime.repoPath)
   const { patch, changedFiles } = diffRepoSnapshots(beforeSnapshot, afterSnapshot)
-  const previewReady = agent.id === 'engineer' && Boolean(runtime.previewUrl)
+  const previewUrl = agent.id === 'engineer'
+    ? await services.runtime.getDefaultPreviewUrl(workspace.id)
+    : undefined
+  const previewReady = agent.id === 'engineer' && Boolean(previewUrl)
   const validation = await runDeliveryValidation(agent, runtime.repoPath, brief, changedFiles, previewReady)
   if (validation) {
     emitWorkflowEvent(services, {
@@ -1020,7 +1023,7 @@ async function runTaskBrief(
     changedFiles,
     baseCommit,
     sessionScope,
-    runtime.previewUrl,
+    previewUrl,
     options?.publishConversationMessage ?? true,
   )
 

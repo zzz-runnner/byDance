@@ -6,7 +6,6 @@ export interface AppConfig {
   agentHubBaseUrl: string
   dataDir: string
   projectsFilePath: string
-  sourceRootPath: string
 }
 
 /**
@@ -24,7 +23,6 @@ export function readConfig(): AppConfig {
     agentHubBaseUrl: process.env.AGENTHUB_BASE_URL ?? 'http://127.0.0.1:8787',
     dataDir,
     projectsFilePath: path.join(dataDir, 'projects.json'),
-    sourceRootPath: path.resolve(cwd, process.env.LOCATE_SOURCE_ROOT ?? '..'),
   }
 }
 

@@ -4,10 +4,9 @@ import { z } from 'zod'
 import type { AppConfig } from './config.js'
 import { AgentHubClient } from './agenthub-client.js'
 import { ProjectStore } from './project-store.js'
-import { SourceBrowser } from './source-browser.js'
 import { sendBufferedUpstreamResponse, sendSseUpstreamResponse } from './sse-proxy.js'
 import {
-  buildWorkbenchOverview,
+  buildWorkbenchOverviewPage,
   previewUrlFor,
   selectProjectConversation,
   selectProjectState,
@@ -63,6 +62,12 @@ const ProjectStateQuerySchema = z.object({
   messageLimit: z.coerce.number().int().positive().max(200).optional(),
 })
 
+const WorkbenchQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(50).default(20),
+  cursor: z.string().optional(),
+  q: z.string().optional(),
+})
+
 type HttpError = Error & {
   statusCode?: number
 }
@@ -79,7 +84,6 @@ export function createServer(config: AppConfig) {
 
   const agentHub = new AgentHubClient(config.agentHubBaseUrl)
   const projectStore = new ProjectStore(config.projectsFilePath)
-  const sourceBrowser = new SourceBrowser(config.sourceRootPath)
 
   app.setErrorHandler((error, _request, reply) => {
     const statusCode = (error as HttpError).statusCode ?? 500
@@ -96,18 +100,36 @@ export function createServer(config: AppConfig) {
       service: 'locate-backend',
       agentHubBaseUrl: config.agentHubBaseUrl,
       dataFilePath: config.projectsFilePath,
-      sourceRootPath: config.sourceRootPath,
       agentHub: agentHubHealth,
     }
   })
 
-  app.get('/api/workbench', async () => {
-    const [projects, state] = await Promise.all([
-      projectStore.listProjects(),
-      agentHub.fetchState(),
+  app.get('/api/workbench', async request => {
+    const query = WorkbenchQuerySchema.parse(request.query)
+    const projectPage = await projectStore.listProjectsPage({
+      limit: query.limit,
+      cursor: query.cursor,
+      query: query.q,
+    })
+    const [agents, roomBatch] = await Promise.all([
+      agentHub.fetchAgents(),
+      projectPage.items.length > 0
+        ? agentHub.fetchWorkspaceOverviewBatch({
+            items: projectPage.items.map(project => ({
+              workspaceId: project.workspaceId,
+              conversationType: project.conversationType,
+              targetAgentId: project.targetAgentId,
+            })),
+          })
+        : Promise.resolve({ rooms: [] }),
     ])
 
-    return buildWorkbenchOverview(state, projects, sourceBrowser.getRootLabel())
+    return buildWorkbenchOverviewPage(agents, projectPage.items, roomBatch.rooms, {
+      limit: query.limit,
+      nextCursor: projectPage.nextCursor,
+      hasMore: projectPage.hasMore,
+      total: projectPage.total,
+    })
   })
 
   app.get('/api/projects', async () => {
@@ -127,8 +149,7 @@ export function createServer(config: AppConfig) {
   })
 
   app.get('/api/agents', async () => {
-    const state = await agentHub.fetchState()
-    return state.agents
+    return agentHub.fetchAgents()
   })
 
   app.post('/api/projects', async request => {
@@ -201,9 +222,10 @@ export function createServer(config: AppConfig) {
       throw createHttpError(404, `Project not found: ${projectId}`)
     }
 
+    const fileTree = await agentHub.fetchWorkspaceFiles(project.workspaceId)
     return {
-      rootLabel: sourceBrowser.getRootLabel(),
-      entries: await sourceBrowser.listFiles(),
+      rootLabel: `${project.name} / repo`,
+      entries: fileTree.entries,
     }
   })
 
@@ -216,7 +238,7 @@ export function createServer(config: AppConfig) {
       throw createHttpError(404, `Project not found: ${projectId}`)
     }
 
-    return sourceBrowser.readTextFile(query.path)
+    return agentHub.fetchWorkspaceFileContent(project.workspaceId, query.path)
   })
 
   app.get('/api/projects/:projectId/diff', async request => {
@@ -228,6 +250,17 @@ export function createServer(config: AppConfig) {
     }
 
     return agentHub.fetchWorkspaceDiff(project.workspaceId)
+  })
+
+  app.get('/api/projects/:projectId/preview-targets', async request => {
+    const { projectId } = request.params as { projectId: string }
+    const project = await projectStore.getProject(projectId)
+
+    if (!project) {
+      throw createHttpError(404, `Project not found: ${projectId}`)
+    }
+
+    return agentHub.fetchWorkspacePreviewTargets(project.workspaceId)
   })
 
   app.post('/api/projects/:projectId/messages/stream', async (request, reply) => {
@@ -284,7 +317,6 @@ export function createServer(config: AppConfig) {
     service: 'locate-backend',
     previewPathExample: previewUrlFor('workspace-id'),
     zipPathExample: zipUrlFor('workspace-id'),
-    sourceRootPath: config.sourceRootPath,
   }))
 
   return app
@@ -347,6 +379,7 @@ function requireAgent(state: RuntimeAppState, agentId: string): RuntimeAgent {
 
   return agent
 }
+
 
 /**
  * Builds the AgentHub direct conversation payload for one target agent.

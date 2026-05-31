@@ -31,6 +31,13 @@ export interface WorkspaceSignal {
   messageCount: number
 }
 
+export interface WorkbenchPage {
+  limit: number
+  nextCursor?: string
+  hasMore: boolean
+  total: number
+}
+
 export interface WorkbenchRoomSummary {
   id: string
   kind: ConversationType
@@ -44,10 +51,14 @@ export interface WorkbenchRoomSummary {
   lastActivityAt: string
 }
 
+export interface RuntimeWorkbenchRoomSummary extends Omit<WorkbenchRoomSummary, 'workspace'> {
+  workspace: RuntimeWorkspace
+}
+
 export interface WorkbenchOverviewResponse {
   agents: RuntimeAgent[]
   rooms: WorkbenchRoomSummary[]
-  sourceRootLabel: string
+  page: WorkbenchPage
 }
 
 export interface ProjectStateResponse {
@@ -91,6 +102,16 @@ export interface ProjectWorkspaceDiff {
   baseCommit: string
   status: string
   patch: string
+}
+
+export interface WorkspacePreviewTarget {
+  path: string
+  url: string
+}
+
+export interface ProjectPreviewTargetsResponse {
+  defaultTarget?: WorkspacePreviewTarget
+  targets: WorkspacePreviewTarget[]
 }
 
 export interface RuntimeWorkspace extends Record<string, unknown> {

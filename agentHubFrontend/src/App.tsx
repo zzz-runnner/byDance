@@ -35,6 +35,9 @@ import type {
 } from './types'
 
 const ACTIVE_WORKSPACE_STORAGE_KEY = 'agenthub.activeWorkspaceId'
+const INITIAL_WORKSPACE_PAGE_LIMIT = 20
+const WORKSPACE_PAGE_STEP = 20
+const WORKSPACE_QUERY_DEBOUNCE_MS = 250
 const INITIAL_MESSAGE_PAGE_LIMIT = 40
 const MESSAGE_PAGE_STEP = 40
 
@@ -65,15 +68,19 @@ function createTemporaryMessage(
 }
 
 /**
- * Returns the first usable workspace room id from state.
- * Input: AppState.
- * Output: workspace id or an empty string.
+ * Builds the empty workbench overview used before the first backend response arrives.
+ * Input: none.
+ * Output: empty workbench overview plus pagination metadata.
  */
 function emptyWorkbenchOverview(): WorkbenchOverview {
   return {
     agents: [],
     rooms: [],
-    sourceRootLabel: '',
+    page: {
+      limit: INITIAL_WORKSPACE_PAGE_LIMIT,
+      hasMore: false,
+      total: 0,
+    },
   }
 }
 
@@ -97,6 +104,25 @@ function resolveWorkspaceId(overview: WorkbenchOverview, preferredWorkspaceId: s
   }
 
   return firstWorkspaceId(overview)
+}
+
+/**
+ * Merges one newly loaded workspace page into the current room list without duplicates.
+ * Input: existing rooms and the next paged room slice.
+ * Output: one deduplicated room list that keeps the original room order.
+ */
+function mergeWorkspaceRooms(currentRooms: WorkspaceRoom[], nextRooms: WorkspaceRoom[]): WorkspaceRoom[] {
+  const seen = new Set(currentRooms.map(room => room.id))
+  return [
+    ...currentRooms,
+    ...nextRooms.filter(room => {
+      if (seen.has(room.id)) {
+        return false
+      }
+      seen.add(room.id)
+      return true
+    }),
+  ]
 }
 
 /**
@@ -181,6 +207,7 @@ export function App() {
   const [loadingState, setLoadingState] = useState(true)
   const [workspaceLoading, setWorkspaceLoading] = useState(false)
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false)
+  const [loadingMoreWorkspaces, setLoadingMoreWorkspaces] = useState(false)
   const [messagePage, setMessagePage] = useState<ProjectStatePage>({
     limit: INITIAL_MESSAGE_PAGE_LIMIT,
     total: 0,
@@ -188,37 +215,24 @@ export function App() {
   })
   const [messageLimitByWorkspace, setMessageLimitByWorkspace] = useState<Record<string, number>>({})
   const [workspaceQuery, setWorkspaceQuery] = useState('')
+  const [appliedWorkspaceQuery, setAppliedWorkspaceQuery] = useState('')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [codeDialogOpen, setCodeDialogOpen] = useState(false)
   const [creatingWorkspace, setCreatingWorkspace] = useState(false)
   const [createWorkspaceError, setCreateWorkspaceError] = useState('')
   const overviewRequestRef = useRef(0)
   const detailRequestRef = useRef(0)
+  const overviewRef = useRef<WorkbenchOverview>(emptyWorkbenchOverview())
+  const loadedWorkspaceCountRef = useRef(INITIAL_WORKSPACE_PAGE_LIMIT)
+  const workbenchReadyRef = useRef(false)
+  const skipNextQueryReloadRef = useRef(false)
 
   const workflowEvents = useMemo(
     () => mergeWorkflowEvents(state.workflowEvents, liveWorkflowEvents),
     [liveWorkflowEvents, state.workflowEvents],
   )
   const rooms = overview.rooms
-  const filteredRooms = useMemo(() => {
-    const query = workspaceQuery.trim().toLowerCase()
-
-    if (!query) {
-      return rooms
-    }
-
-    return rooms.filter(room => {
-      const searchText = [room.title, room.subtitle, room.targetAgentId ?? '', ...room.participantAgentIds]
-        .join(' ')
-        .toLowerCase()
-      return searchText.includes(query)
-    })
-  }, [rooms, workspaceQuery])
-  const activeRoom =
-    filteredRooms.find(room => room.id === activeWorkspaceId) ??
-    rooms.find(room => room.id === activeWorkspaceId) ??
-    filteredRooms[0] ??
-    rooms[0]
+  const activeRoom = rooms.find(room => room.id === activeWorkspaceId) ?? rooms[0]
   const activeProjectId = activeRoom?.workspace.projectId ?? activeRoom?.workspace.id
   const activeConversationId = activeRoom?.conversation.id ?? ''
   const currentMessages = [
@@ -228,7 +242,7 @@ export function App() {
   const currentStreamingMessages = Object.values(streamingMessages).filter(
     message => message.conversationId === activeConversationId,
   )
-  const showBlockingState = !rooms.length && (loadingState || connectionStatus === 'error')
+  const showBlockingState = rooms.length === 0 && (loadingState || connectionStatus === 'error')
   const canCreateWorkspace = connectionStatus === 'live' && !loadingState && !creatingWorkspace
   const composerDisabledReason =
     connectionStatus === 'error'
@@ -237,23 +251,65 @@ export function App() {
         ? '正在加载当前工作区，请稍候。'
         : ''
 
+  useEffect(() => {
+    overviewRef.current = overview
+  }, [overview])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const nextQuery = workspaceQuery.trim()
+      setAppliedWorkspaceQuery(previous => (previous === nextQuery ? previous : nextQuery))
+    }, WORKSPACE_QUERY_DEBOUNCE_MS)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [workspaceQuery])
+
   /**
    * Loads the lightweight workbench overview from the business backend.
-   * Input: none.
+   * Input: optional page size, cursor, query, and merge mode.
    * Output: updates the left-rail summary snapshot when the request is current.
    */
-  async function loadWorkbenchOverviewSnapshot(): Promise<WorkbenchOverview | undefined> {
+  async function loadWorkbenchOverviewSnapshot(input?: {
+    limit?: number
+    cursor?: string
+    query?: string
+    merge?: boolean
+  }): Promise<WorkbenchOverview | undefined> {
     const requestId = ++overviewRequestRef.current
-    const nextOverview = await fetchBusinessWorkbenchOverview()
+    const nextOverview = await fetchBusinessWorkbenchOverview({
+      limit: input?.limit,
+      cursor: input?.cursor,
+      query: input?.query,
+    })
 
     if (requestId !== overviewRequestRef.current) {
       return undefined
     }
 
-    setOverview(nextOverview)
+    const resolvedOverview = input?.merge
+      ? {
+          agents: nextOverview.agents,
+          rooms: mergeWorkspaceRooms(overviewRef.current.rooms, nextOverview.rooms),
+          page: {
+            limit: mergeWorkspaceRooms(overviewRef.current.rooms, nextOverview.rooms).length,
+            nextCursor: nextOverview.page.nextCursor,
+            hasMore: nextOverview.page.hasMore,
+            total: nextOverview.page.total,
+          },
+        }
+      : nextOverview
+
+    loadedWorkspaceCountRef.current = Math.max(
+      resolvedOverview.rooms.length,
+      input?.merge ? loadedWorkspaceCountRef.current : (input?.limit ?? INITIAL_WORKSPACE_PAGE_LIMIT),
+    )
+    overviewRef.current = resolvedOverview
+    setOverview(resolvedOverview)
     setConnectionStatus('live')
     setConnectionErrorMessage('')
-    return nextOverview
+    return resolvedOverview
   }
 
   /**
@@ -299,7 +355,7 @@ export function App() {
       setConnectionStatus('error')
       setConnectionErrorMessage(errorMessageOf(error))
       if (mode !== 'older') {
-        setState(createEmptyWorkbenchState(overview.agents))
+        setState(createEmptyWorkbenchState(overviewRef.current.agents))
       }
     } finally {
       if (requestId === detailRequestRef.current) {
@@ -311,18 +367,27 @@ export function App() {
 
   /**
    * Reloads the overview and the currently selected workspace detail together.
-   * Input: preferred workspace id after the refresh completes.
+   * Input: preferred workspace id, refresh mode, and optional overview query settings.
    * Output: keeps the UI on one stable active workspace after refresh.
    */
   async function reloadWorkbench(
     preferredWorkspaceId = activeWorkspaceId,
     mode: 'initial' | 'refresh' = 'refresh',
+    options?: {
+      query?: string
+      limit?: number
+    },
   ) {
     setLoadingState(true)
     setCreateWorkspaceError('')
 
     try {
-      const nextOverview = await loadWorkbenchOverviewSnapshot()
+      const nextOverview = await loadWorkbenchOverviewSnapshot({
+        limit: options?.limit ?? (mode === 'initial'
+          ? INITIAL_WORKSPACE_PAGE_LIMIT
+          : Math.max(loadedWorkspaceCountRef.current, INITIAL_WORKSPACE_PAGE_LIMIT)),
+        query: options?.query ?? appliedWorkspaceQuery,
+      })
       if (!nextOverview) {
         return
       }
@@ -365,33 +430,40 @@ export function App() {
           hasMore: false,
         })
       }
+
       await loadProjectRoomState(
         nextRoom,
         messageLimitByWorkspace[nextWorkspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
-        'initial',
+        shouldResetActiveState ? 'initial' : 'refresh',
       )
     } catch (error) {
       setConnectionStatus('error')
       setConnectionErrorMessage(errorMessageOf(error))
     } finally {
+      workbenchReadyRef.current = true
       setLoadingState(false)
     }
   }
 
   useEffect(() => {
-    void reloadWorkbench(activeWorkspaceId, 'initial')
+    void reloadWorkbench(activeWorkspaceId, 'initial', {
+      limit: INITIAL_WORKSPACE_PAGE_LIMIT,
+      query: appliedWorkspaceQuery,
+    })
   }, [])
 
   useEffect(() => {
-    if (activeRoom) {
+    if (!rooms.length) {
+      if (activeWorkspaceId) {
+        setActiveWorkspaceId('')
+      }
       return
     }
 
-    const nextRoom = filteredRooms[0] ?? rooms[0]
-    if (nextRoom) {
-      setActiveWorkspaceId(nextRoom.id)
+    if (!rooms.some(room => room.id === activeWorkspaceId)) {
+      setActiveWorkspaceId(rooms[0]?.id ?? '')
     }
-  }, [activeRoom, filteredRooms, rooms])
+  }, [activeWorkspaceId, rooms])
 
   useEffect(() => {
     if (!activeWorkspaceId || typeof window === 'undefined') {
@@ -404,6 +476,22 @@ export function App() {
     setPendingReplyTo(undefined)
     setPendingCodeSelection(undefined)
   }, [activeConversationId])
+
+  useEffect(() => {
+    if (!workbenchReadyRef.current) {
+      return
+    }
+    if (skipNextQueryReloadRef.current) {
+      skipNextQueryReloadRef.current = false
+      return
+    }
+
+    loadedWorkspaceCountRef.current = INITIAL_WORKSPACE_PAGE_LIMIT
+    void reloadWorkbench(activeWorkspaceId, 'refresh', {
+      limit: INITIAL_WORKSPACE_PAGE_LIMIT,
+      query: appliedWorkspaceQuery,
+    })
+  }, [appliedWorkspaceQuery])
 
   /**
    * Switches the active workspace room.
@@ -454,11 +542,18 @@ export function App() {
         createDirectRoom ? 'chat' : input.workspaceType,
         targetAgentId,
       )
-      await reloadWorkbench(project.workspaceId ?? activeWorkspaceId)
+
+      loadedWorkspaceCountRef.current = INITIAL_WORKSPACE_PAGE_LIMIT
+      setWorkspaceQuery('')
+      skipNextQueryReloadRef.current = true
+      setAppliedWorkspaceQuery('')
+      await reloadWorkbench(project.workspaceId ?? activeWorkspaceId, 'refresh', {
+        limit: INITIAL_WORKSPACE_PAGE_LIMIT,
+        query: '',
+      })
       setCreateDialogOpen(false)
     } catch (error) {
-      const message = errorMessageOf(error)
-      setCreateWorkspaceError(message)
+      setCreateWorkspaceError(errorMessageOf(error))
     } finally {
       setCreatingWorkspace(false)
     }
@@ -588,14 +683,16 @@ export function App() {
       setConnectionStatus('error')
       setConnectionErrorMessage(message)
       setStreamingMessages({})
-      const errorMessage = createTemporaryMessage(
-        activeWorkspace.id,
-        activeConversation.id,
-        'system',
-        'system',
-        `发送失败：${message}`,
-      )
-      setOptimisticMessages(previous => [...previous, errorMessage])
+      setOptimisticMessages(previous => [
+        ...previous,
+        createTemporaryMessage(
+          activeWorkspace.id,
+          activeConversation.id,
+          'system',
+          'system',
+          `发送失败：${message}`,
+        ),
+      ])
     } finally {
       setSending(false)
     }
@@ -609,6 +706,37 @@ export function App() {
   async function handleRefresh() {
     await reloadWorkbench(activeWorkspaceId, 'refresh')
     setLiveWorkflowEvents([])
+  }
+
+  /**
+   * Loads one more workbench page into the left workspace rail.
+   * Input: none.
+   * Output: appends the next room slice without replacing the active room.
+   */
+  async function handleLoadMoreWorkspaces() {
+    if (
+      loadingMoreWorkspaces ||
+      loadingState ||
+      !overview.page.hasMore ||
+      !overview.page.nextCursor
+    ) {
+      return
+    }
+
+    setLoadingMoreWorkspaces(true)
+    try {
+      await loadWorkbenchOverviewSnapshot({
+        limit: WORKSPACE_PAGE_STEP,
+        cursor: overview.page.nextCursor,
+        query: appliedWorkspaceQuery,
+        merge: true,
+      })
+    } catch (error) {
+      setConnectionStatus('error')
+      setConnectionErrorMessage(errorMessageOf(error))
+    } finally {
+      setLoadingMoreWorkspaces(false)
+    }
   }
 
   /**
@@ -680,7 +808,7 @@ export function App() {
     connectionStatus === 'live' ? 'success' : loadingState || connectionStatus === 'connecting' ? 'running' : 'failed'
   const connectionPillLabel =
     connectionStatus === 'live' ? 'backend live' : loadingState || connectionStatus === 'connecting' ? 'connecting' : 'backend error'
-  const connectionTargetLabel = '业务后端 API · 127.0.0.1:8790'
+  const connectionTargetLabel = '业务后端 API / 127.0.0.1:8790'
   const ConnectionIcon = connectionStatus === 'error' ? ServerCrash : Wifi
 
   return (
@@ -704,11 +832,11 @@ export function App() {
             <StatusPill status={connectionPillStatus} label={connectionPillLabel} />
             <GlassPanel compact className="metric-chip">
               <LayoutDashboard size={15} />
-              {rooms.length} 工作区
+              {overview.page.total} 工作区
             </GlassPanel>
             <GlassPanel compact className="metric-chip">
               <PlugZap size={15} />
-              {(overview.agents.length || state.agents.length)} Agents
+              {overview.agents.length || state.agents.length} Agents
             </GlassPanel>
             <button
               className="secondary-button topbar-code-button"
@@ -724,7 +852,7 @@ export function App() {
               type="button"
               onClick={() => void handleRefresh()}
               title="刷新工作台"
-              disabled={loadingState || creatingWorkspace || sending}
+              disabled={loadingState || creatingWorkspace || sending || loadingMoreWorkspaces}
             >
               <RefreshCcw className={loadingState ? 'icon-spin' : ''} size={16} />
             </button>
@@ -749,13 +877,18 @@ export function App() {
         ) : (
           <section className="workbench">
             <WorkspaceRail
-              rooms={filteredRooms}
+              rooms={rooms}
               activeWorkspaceId={activeWorkspaceId}
               query={workspaceQuery}
-              loading={loadingState && !rooms.length}
+              loading={loadingState && rooms.length === 0}
+              loadingMore={loadingMoreWorkspaces}
+              hasMore={overview.page.hasMore}
+              total={overview.page.total}
+              visibleCount={rooms.length}
               createDisabled={!canCreateWorkspace}
               onSelectWorkspace={workspaceId => void handleSelectWorkspace(workspaceId)}
               onQueryChange={setWorkspaceQuery}
+              onLoadMore={() => void handleLoadMoreWorkspaces()}
               onCreateWorkspace={() => setCreateDialogOpen(true)}
             />
             <ChatPane
@@ -798,14 +931,13 @@ export function App() {
         }}
         onSubmit={handleCreateWorkspace}
       />
-        <CodeWorkspaceDialog
-          open={codeDialogOpen}
-          projectId={activeProjectId}
-          workspaceName={activeRoom?.workspace.name}
-          sourceRootLabel={overview.sourceRootLabel}
-          onClose={() => setCodeDialogOpen(false)}
-          onQuoteSelection={handleQuoteCodeSelection}
-        />
+      <CodeWorkspaceDialog
+        open={codeDialogOpen}
+        projectId={activeProjectId}
+        workspaceName={activeRoom?.workspace.name}
+        onClose={() => setCodeDialogOpen(false)}
+        onQuoteSelection={handleQuoteCodeSelection}
+      />
     </main>
   )
 }

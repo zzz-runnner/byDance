@@ -26,6 +26,7 @@ The current local live path is:
 - `GET /api/projects/:projectId/files`
 - `GET /api/projects/:projectId/files/content`
 - `GET /api/projects/:projectId/diff`
+- `GET /api/projects/:projectId/preview-targets`
 - `GET /preview/*`
 - `GET /api/workspaces/:workspaceId/zip`
 
@@ -66,6 +67,10 @@ The current local path is focused on one workspace equals one chat window.
   - The left workspace rail is backed by one lightweight `/api/workbench` summary payload.
   - The right chat pane only fetches the active workspace detail.
   - Sending a message or refreshing one room no longer refetches every workspace state.
+- The workspace rail now uses real server-side paging instead of loading every workspace at once:
+  - `locateBackend /api/workbench` accepts `limit`, `cursor`, and `q`.
+  - The frontend search box is now server-driven and the rail appends results through `加载更多`.
+  - Refresh keeps the current visible page size instead of snapping back to a full-list sweep.
 - The current workspace history now uses one recent-message window:
   - `/api/projects/:projectId/state` accepts `messageLimit`.
   - The chat pane can load older messages incrementally instead of loading the full conversation history on startup.
@@ -78,10 +83,15 @@ The current local path is focused on one workspace equals one chat window.
   - The right editor panel now uses a stable top-bar plus full-height editor layout, so the Monaco viewport no longer collapses to roughly half-height when the selection banner is hidden.
   - The desktop breakpoint for the code browser now stays in the two-column layout until narrower widths, so remote-desktop and medium desktop windows no longer fall into a half-height editor feel too early.
   - The Monaco toolbar now includes one explicit line-wrap toggle. It defaults to wrapped lines for readability and can be switched back to horizontal-scroll mode when raw formatting matters.
-  - Code selection is now confirmed after the drag finishes or the keyboard selection settles, and the compact selection preview floats over the editor instead of pushing the layout mid-selection.
+  - Code selection is now confirmed after the drag finishes or the keyboard selection settles, without interrupting the drag with a floating selection popup.
   - One selected code range can be quoted back into the chat composer as structured `codeSelection` data.
   - In group rooms, a message with `codeSelection` and no explicit `@agent` defaults to `engineer` routing in `locateBackend`.
   - The Monaco viewer now measures the visible editor shell with `ResizeObserver` and triggers explicit `layout()` calls after open, resize, and file switches, so it no longer depends on fragile percentage-height inheritance.
+  - The same dialog now includes both `代码` and `预览` panels:
+    - `代码` reads only the current workspace repo from `agentHub`, not the whole monorepo.
+    - `预览` reads real static entry targets from `/api/projects/:projectId/preview-targets`.
+    - New workspaces no longer auto-seed a placeholder `index.html`; if no static entry exists yet, the preview panel shows an empty state.
+    - If multiple static preview entries exist, the dialog can switch between them and keeps `loading / slow / error` feedback inside the preview panel.
 - When the page is viewed through a remote desktop or remote-control session, decorative blur layers and React dev-mode re-renders can look like visible flicker. Treat this as an environment observation first, not as a confirmed frontend callback loop.
 - `agentHubBackend/` is still outside the local live path and remains untouched.
 
@@ -162,6 +172,9 @@ Additional live smoke tests were executed against `http://127.0.0.1:8790` and th
 Latest local code verification for this checkpoint:
 
 ```powershell
+cd E:\byDance\agentHub
+npm run build
+
 cd E:\byDance\agentHubFrontend
 npm run check
 npm run build
@@ -173,6 +186,7 @@ npm run build
 
 Result:
 
+- `agentHub` TypeScript build passed
 - `agentHubFrontend` TypeScript check passed
 - `agentHubFrontend` production build passed
 - `locateBackend` TypeScript check passed

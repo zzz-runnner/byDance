@@ -8,6 +8,7 @@ import type {
   Workspace,
   WorkspaceDiffSnapshot,
   WorkspaceFileContent,
+  WorkspacePreviewTargets,
   WorkflowEvent,
 } from '../types'
 
@@ -31,7 +32,7 @@ type AgentsResponse = AgentDefinition[] | {
 type WorkbenchOverviewResponse = WorkbenchOverview | {
   agents?: AgentDefinition[]
   rooms?: WorkbenchOverview['rooms']
-  sourceRootLabel?: string
+  page?: WorkbenchOverview['page']
 }
 
 type ProjectStateEnvelopeResponse = ProjectStateEnvelope | {
@@ -40,6 +41,12 @@ type ProjectStateEnvelopeResponse = ProjectStateEnvelope | {
 }
 
 const DEFAULT_GROUP_AGENT_IDS = ['product-manager', 'engineer', 'reviewer']
+
+type FetchWorkbenchOverviewInput = {
+  limit?: number
+  cursor?: string
+  query?: string
+}
 
 /**
  * Builds an empty workbench state for a backend with no projects yet.
@@ -92,11 +99,16 @@ function extractAgents(payload: AgentsResponse): AgentDefinition[] {
  * Output: normalized light workbench overview.
  */
 function extractWorkbenchOverview(payload: WorkbenchOverviewResponse): WorkbenchOverview {
-  if ('rooms' in payload && Array.isArray(payload.rooms) && Array.isArray(payload.agents)) {
+  if (
+    'rooms' in payload &&
+    Array.isArray(payload.rooms) &&
+    Array.isArray(payload.agents) &&
+    payload.page
+  ) {
     return {
       agents: payload.agents,
       rooms: payload.rooms,
-      sourceRootLabel: payload.sourceRootLabel ?? '',
+      page: payload.page,
     }
   }
 
@@ -132,11 +144,23 @@ export async function fetchBusinessAgents(): Promise<AgentDefinition[]> {
 
 /**
  * Loads the lightweight workbench overview used by the left workspace list.
- * Input: none.
- * Output: room summaries plus agent definitions.
+ * Input: optional cursor-paging and server-side search arguments.
+ * Output: room summaries plus agent definitions and page metadata.
  */
-export async function fetchBusinessWorkbenchOverview(): Promise<WorkbenchOverview> {
-  const response = await fetch('/api/workbench')
+export async function fetchBusinessWorkbenchOverview(
+  input: FetchWorkbenchOverviewInput = {},
+): Promise<WorkbenchOverview> {
+  const query = new URLSearchParams()
+  if (input.limit) {
+    query.set('limit', String(input.limit))
+  }
+  if (input.cursor) {
+    query.set('cursor', input.cursor)
+  }
+  if (input.query?.trim()) {
+    query.set('q', input.query.trim())
+  }
+  const response = await fetch(`/api/workbench${query.size ? `?${query.toString()}` : ''}`)
   const payload = await readJson<WorkbenchOverviewResponse>(response, 'Load workbench overview')
   return extractWorkbenchOverview(payload)
 }
@@ -225,7 +249,7 @@ export async function streamBusinessProjectMessage(
 /**
  * Loads the browser-visible file tree for one project workspace.
  * Input: project id.
- * Output: nested file nodes rooted at the configured real source tree.
+ * Output: nested file nodes rooted at the current workspace repo.
  */
 export async function fetchBusinessProjectFiles(projectId: string): Promise<WorkspaceFileTree> {
   const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`)
@@ -251,6 +275,16 @@ export async function fetchBusinessProjectFileContent(projectId: string, filePat
 export async function fetchBusinessProjectDiff(projectId: string): Promise<WorkspaceDiffSnapshot> {
   const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/diff`)
   return readJson<WorkspaceDiffSnapshot>(response, 'Load business project diff')
+}
+
+/**
+ * Loads the current static preview targets for one workspace-backed project.
+ * Input: project id.
+ * Output: preview target list plus the default target when available.
+ */
+export async function fetchBusinessProjectPreviewTargets(projectId: string): Promise<WorkspacePreviewTargets> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/preview-targets`)
+  return readJson<WorkspacePreviewTargets>(response, 'Load business project preview targets')
 }
 
 /**

@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import {
+  AlertTriangle,
   Braces,
   ChevronRight,
+  ExternalLink,
   FileCode2,
   Folder,
   FolderOpen,
+  Globe2,
   LoaderCircle,
   Quote,
   RefreshCcw,
@@ -16,8 +19,15 @@ import {
   fetchBusinessProjectDiff,
   fetchBusinessProjectFileContent,
   fetchBusinessProjectFiles,
+  fetchBusinessProjectPreviewTargets,
 } from '../api/businessBackend'
-import type { CodeSelectionReference, WorkspaceDiffSnapshot, WorkspaceFileContent, WorkspaceFileNode } from '../types'
+import type {
+  CodeSelectionReference,
+  WorkspaceDiffSnapshot,
+  WorkspaceFileContent,
+  WorkspaceFileNode,
+  WorkspacePreviewTarget,
+} from '../types'
 import { GlassPanel } from './GlassPanel'
 
 type CodeWorkspaceDialogProps = {
@@ -47,6 +57,8 @@ type EditorSelectionState = {
 }
 
 type CodeWrapMode = 'on' | 'off'
+type WorkspacePanelMode = 'code' | 'preview'
+type PreviewFrameStatus = 'loading' | 'slow' | 'ready' | 'error'
 
 type MonacoEditorInstance = import('monaco-editor').editor.IStandaloneCodeEditor
 type MonacoNamespace = typeof import('monaco-editor')
@@ -132,21 +144,6 @@ type FileTreeNodeProps = {
   forceExpanded: boolean
   onToggleDirectory: (directoryPath: string) => void
   onSelectFile: (filePath: string) => void
-}
-
-/**
- * Clips one long text fragment for compact labels.
- * Input: raw text and max length. Output: one compact single-line label.
- */
-function compactLabel(text: string, maxLength = 90): string {
-  const normalized = text.replace(/\s+/g, ' ').trim()
-  if (!normalized) {
-    return ''
-  }
-  if (normalized.length <= maxLength) {
-    return normalized
-  }
-  return `${normalized.slice(0, maxLength)}...`
 }
 
 /**
@@ -298,7 +295,7 @@ function registerCodeEditorTheme(monaco: MonacoNamespace): void {
 /**
  * Renders the full-screen code workspace dialog for one project workspace.
  * Input: open state, project identity, and quote callback.
- * Output: file tree and read-only code browser dialog.
+ * Output: file tree, read-only code browser, and static preview panel.
  */
 export function CodeWorkspaceDialog({
   open,
@@ -315,6 +312,7 @@ export function CodeWorkspaceDialog({
   const selectionDraftRef = useRef<EditorSelectionState | undefined>(undefined)
   const selectionCommitTimerRef = useRef<number | undefined>(undefined)
   const pointerSelectionRef = useRef(false)
+  const [panelMode, setPanelMode] = useState<WorkspacePanelMode>('code')
   const [fileTree, setFileTree] = useState<WorkspaceFileNode[]>([])
   const [treeLoading, setTreeLoading] = useState(false)
   const [treeError, setTreeError] = useState('')
@@ -326,6 +324,12 @@ export function CodeWorkspaceDialog({
   const [selectionState, setSelectionState] = useState<EditorSelectionState | undefined>(undefined)
   const [treeRootLabel, setTreeRootLabel] = useState('')
   const [wrapMode, setWrapMode] = useState<CodeWrapMode>('on')
+  const [previewTargets, setPreviewTargets] = useState<WorkspacePreviewTarget[]>([])
+  const [selectedPreviewPath, setSelectedPreviewPath] = useState<string>()
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState('')
+  const [previewAttempt, setPreviewAttempt] = useState(0)
+  const [previewStatus, setPreviewStatus] = useState<PreviewFrameStatus>('loading')
   const [editorViewport, setEditorViewport] = useState({
     width: 0,
     height: 0,
@@ -339,6 +343,9 @@ export function CodeWorkspaceDialog({
   const activeFileContent = activeFileEntry?.content
   const changedFileCount = countChangedFiles(diffSnapshot?.status)
   const canMountEditor = Boolean(activeFileContent && editorViewport.width >= 240 && editorViewport.height >= 220)
+  const selectedPreviewTarget =
+    previewTargets.find(target => target.path === selectedPreviewPath) ??
+    previewTargets[0]
 
   useEffect(() => {
     activeFilePathRef.current = activeFilePath
@@ -403,42 +410,88 @@ export function CodeWorkspaceDialog({
   }
 
   /**
-   * Loads the current project file browser snapshot from the local backend.
-   * Input: optional preferred active file path.
-   * Output: updates file tree, diff state, and active file selection.
+   * Recomputes the structured code selection from the current editor state.
+   * Input: none.
+   * Output: updates the dialog selection state.
    */
-  async function loadWorkspaceBrowser(preferredActiveFilePath?: string) {
+  function syncSelectionState() {
+    refreshSelectionDraft()
+    if (pointerSelectionRef.current) {
+      return
+    }
+    scheduleSelectionCommit()
+  }
+
+  /**
+   * Reflows Monaco after layout-affecting UI state changes.
+   * Input: none.
+   * Output: editor viewport recalculated on the next frame.
+   */
+  function relayoutEditorSoon() {
+    window.requestAnimationFrame(() => {
+      editorRef.current?.layout()
+    })
+  }
+
+  /**
+   * Loads the current project file browser snapshot from the local backend.
+   * Input: optional preferred active file path and preview target path.
+   * Output: updates file tree, diff state, preview state, and active selections.
+   */
+  async function loadWorkspaceBrowser(
+    preferredActiveFilePath?: string,
+    preferredPreviewPath?: string,
+  ) {
     if (!projectId) {
       return
     }
 
     setTreeLoading(true)
+    setPreviewLoading(true)
     setTreeError('')
+    setPreviewError('')
 
     try {
-      const [treeSnapshot, nextDiff] = await Promise.all([
+      const [treeSnapshot, nextDiff, previewSnapshot] = await Promise.all([
         fetchBusinessProjectFiles(projectId),
         fetchBusinessProjectDiff(projectId).catch(() => undefined),
+        fetchBusinessProjectPreviewTargets(projectId).catch(() => ({
+          targets: [],
+          defaultTarget: undefined,
+        })),
       ])
+
       const nextTree = treeSnapshot.entries
       const firstFile = firstTextFilePath(nextTree)
       const nextActiveFilePath =
         preferredActiveFilePath && treeContainsPath(nextTree, preferredActiveFilePath)
           ? preferredActiveFilePath
           : firstFile
+      const nextPreviewTarget =
+        previewSnapshot.targets.find(target => target.path === preferredPreviewPath) ??
+        previewSnapshot.defaultTarget ??
+        previewSnapshot.targets[0]
 
       setFileTree(nextTree)
       setTreeRootLabel(treeSnapshot.rootLabel || '')
       setDiffSnapshot(nextDiff)
+      setPreviewTargets(previewSnapshot.targets)
+      setSelectedPreviewPath(nextPreviewTarget?.path)
       setExpandedPaths(previous => ({
         ...previous,
         ...expandAncestors(nextActiveFilePath),
       }))
       setActiveFilePath(nextActiveFilePath)
+      setPreviewAttempt(0)
     } catch (error) {
-      setTreeError(error instanceof Error ? error.message : 'Failed to load workspace files.')
+      const message = error instanceof Error ? error.message : 'Failed to load workspace files.'
+      setTreeError(message)
+      setPreviewError(message)
+      setPreviewTargets([])
+      setSelectedPreviewPath(undefined)
     } finally {
       setTreeLoading(false)
+      setPreviewLoading(false)
     }
   }
 
@@ -455,10 +508,8 @@ export function CodeWorkspaceDialog({
       })
       return
     }
-    if (!projectId) {
-      return
-    }
 
+    setPanelMode('code')
     setFileTree([])
     setFileCache({})
     setDiffSnapshot(undefined)
@@ -467,14 +518,21 @@ export function CodeWorkspaceDialog({
     setActiveFilePath(undefined)
     setFileQuery('')
     setWrapMode('on')
+    setPreviewTargets([])
+    setSelectedPreviewPath(undefined)
+    setPreviewError('')
+    setPreviewLoading(false)
+    setPreviewAttempt(0)
     selectionDraftRef.current = undefined
     pointerSelectionRef.current = false
 
-    void loadWorkspaceBrowser()
+    if (projectId) {
+      void loadWorkspaceBrowser()
+    }
   }, [open, projectId])
 
   useEffect(() => {
-    if (!open) {
+    if (!open || panelMode !== 'code') {
       return
     }
 
@@ -515,7 +573,7 @@ export function CodeWorkspaceDialog({
       window.clearTimeout(delayedFrame)
       resizeObserver.disconnect()
     }
-  }, [open, activeFilePath, activeFileContent?.path])
+  }, [open, panelMode, activeFilePath, activeFileContent?.path])
 
   useEffect(() => {
     if (!open || !projectId || !activeFilePath) {
@@ -527,8 +585,8 @@ export function CodeWorkspaceDialog({
     }
 
     let cancelled = false
-    const currentProjectId: string = projectId
-    const currentFilePath: string = activeFilePath
+    const currentProjectId = projectId
+    const currentFilePath = activeFilePath
 
     async function loadFileContent() {
       setSelectionState(undefined)
@@ -578,37 +636,52 @@ export function CodeWorkspaceDialog({
     setSelectionState(selectionDraftRef.current)
   }, [activeFileContent, activeFilePath])
 
-  /**
-   * Recomputes the structured code selection from the current editor state.
-   * Input: none.
-   * Output: updates the dialog selection state.
-   */
-  function syncSelectionState() {
-    refreshSelectionDraft()
-    if (pointerSelectionRef.current) {
+  useEffect(() => {
+    if (!open || panelMode !== 'preview') {
       return
     }
-    scheduleSelectionCommit()
-  }
+
+    if (!selectedPreviewTarget?.url) {
+      setPreviewStatus('error')
+      return
+    }
+
+    setPreviewStatus('loading')
+    const slowTimer = window.setTimeout(() => {
+      setPreviewStatus(previous => (previous === 'loading' ? 'slow' : previous))
+    }, 2500)
+    const errorTimer = window.setTimeout(() => {
+      setPreviewStatus(previous => (previous === 'ready' ? previous : 'error'))
+    }, 10000)
+
+    return () => {
+      window.clearTimeout(slowTimer)
+      window.clearTimeout(errorTimer)
+    }
+  }, [open, panelMode, previewAttempt, selectedPreviewTarget?.url])
+
+  useEffect(() => {
+    if (panelMode === 'code') {
+      relayoutEditorSoon()
+    }
+  }, [panelMode])
 
   /**
-   * Reflows Monaco after layout-affecting UI state changes.
-   * Input: none.
-   * Output: editor viewport recalculated on the next frame.
-   */
-  function relayoutEditorSoon() {
-    window.requestAnimationFrame(() => {
-      editorRef.current?.layout()
-    })
-  }
-
-  /**
-   * Refreshes the tree and diff state for the current workspace.
+   * Refreshes the tree, preview, and diff state for the current workspace.
    * Input: none.
    * Output: reloads browser data from the local backend.
    */
   async function handleRefresh() {
-    await loadWorkspaceBrowser(activeFilePath)
+    await loadWorkspaceBrowser(activeFilePath, selectedPreviewPath)
+  }
+
+  /**
+   * Restarts the preview iframe load sequence after a timeout or iframe error.
+   * Input: none.
+   * Output: remounts the iframe and resets the preview status.
+   */
+  function handleRetryPreview() {
+    setPreviewAttempt(previous => previous + 1)
   }
 
   if (!open) {
@@ -621,7 +694,7 @@ export function CodeWorkspaceDialog({
         <GlassPanel className="code-dialog">
           <header className="code-dialog__header">
             <div>
-              <p className="eyebrow">Workspace Code</p>
+              <p className="eyebrow">Workspace Assets</p>
               <h2>{workspaceName ?? '当前工作区代码'}</h2>
               <span>
                 {treeRootLabel ? `当前工作区范围：${treeRootLabel}` : '当前工作区范围：repo'}
@@ -631,8 +704,8 @@ export function CodeWorkspaceDialog({
               </span>
             </div>
             <div className="code-dialog__actions">
-              <button className="icon-button code-dialog__icon-button" type="button" onClick={() => void handleRefresh()} title="刷新文件树">
-                <RefreshCcw className={treeLoading ? 'icon-spin' : ''} size={16} />
+              <button className="icon-button code-dialog__icon-button" type="button" onClick={() => void handleRefresh()} title="刷新工作区">
+                <RefreshCcw className={treeLoading || previewLoading ? 'icon-spin' : ''} size={16} />
               </button>
               <button className="icon-button code-dialog__icon-button" type="button" onClick={onClose} title="关闭代码面板">
                 <X size={16} />
@@ -673,6 +746,7 @@ export function CodeWorkspaceDialog({
                       }))
                     }}
                     onSelectFile={filePath => {
+                      setPanelMode('code')
                       setActiveFilePath(filePath)
                       setExpandedPaths(previous => ({
                         ...previous,
@@ -681,158 +755,276 @@ export function CodeWorkspaceDialog({
                     }}
                   />
                 ) : (
-                  <div className="code-tree__empty">没有匹配的文件。</div>
+                  <div className="code-tree__empty">当前工作区还没有可浏览文件。</div>
                 )}
               </div>
             </aside>
 
             <section className="code-editor-panel">
               <div className="code-editor-panel__top">
-                <div className="code-editor-toolbar">
-                  <div className="code-editor-toolbar__meta">
-                    <strong>{activeFileContent?.path ?? activeFilePath ?? '未选择文件'}</strong>
-                    <span>
-                      {activeFileContent
-                        ? `${activeFileContent.language} · ${activeFileContent.lineCount} lines · ${activeFileContent.byteLength} bytes`
-                        : '从左侧选择一个文本文件后即可查看代码'}
-                    </span>
-                  </div>
-                  <div className="code-editor-toolbar__actions">
-                    <button
-                      className={`secondary-button code-editor-toolbar__toggle ${wrapMode === 'on' ? 'is-active' : ''}`}
-                      type="button"
-                      onClick={() => {
-                        setWrapMode(previous => (previous === 'on' ? 'off' : 'on'))
-                        relayoutEditorSoon()
-                      }}
-                    >
-                      {wrapMode === 'on' ? '自动换行开' : '自动换行关'}
-                    </button>
-                    <button
-                      className="primary-button code-editor-toolbar__quote"
-                      type="button"
-                      disabled={!selectionState}
-                      onClick={() => {
-                        if (!selectionState) {
-                          return
-                        }
-                        onQuoteSelection(selectionState)
-                      }}
-                    >
-                      <Quote size={15} />
-                      引用选中代码
-                    </button>
-                  </div>
+                <div className="code-panel-tabs">
+                  <button
+                    className={`code-panel-tab ${panelMode === 'code' ? 'is-active' : ''}`}
+                    type="button"
+                    onClick={() => setPanelMode('code')}
+                  >
+                    <Braces size={15} />
+                    代码
+                  </button>
+                  <button
+                    className={`code-panel-tab ${panelMode === 'preview' ? 'is-active' : ''}`}
+                    type="button"
+                    onClick={() => setPanelMode('preview')}
+                  >
+                    <Globe2 size={15} />
+                    预览
+                  </button>
                 </div>
 
-              </div>
-
-              <div className="code-editor-shell" ref={editorShellRef}>
-                {activeFileEntry?.loading ? (
-                  <div className="code-editor-empty">
-                    <LoaderCircle className="icon-spin" size={18} />
-                    正在加载文件内容...
-                  </div>
-                ) : activeFileEntry?.error ? (
-                  <div className="code-editor-empty code-editor-empty--error">{activeFileEntry.error}</div>
-                ) : activeFileContent && canMountEditor ? (
-                  <Editor
-                    height="100%"
-                    path={activeFileContent.path}
-                    language={activeFileContent.language}
-                    value={activeFileContent.content}
-                    theme={CODE_EDITOR_THEME}
-                    beforeMount={registerCodeEditorTheme}
-                    options={{
-                      readOnly: true,
-                      fontSize: 13,
-                      fontFamily: 'Consolas, "SFMono-Regular", "JetBrains Mono", monospace',
-                      fontLigatures: true,
-                      minimap: { enabled: false },
-                      scrollBeyondLastLine: false,
-                      wordWrap: wrapMode,
-                      wrappingIndent: 'indent',
-                      automaticLayout: true,
-                      renderLineHighlight: 'line',
-                      lineNumbersMinChars: 3,
-                      padding: { top: 12, bottom: 12 },
-                      smoothScrolling: true,
-                      matchBrackets: 'always',
-                      renderWhitespace: 'selection',
-                      cursorBlinking: 'solid',
-                      guides: {
-                        indentation: true,
-                        highlightActiveIndentation: true,
-                        bracketPairs: true,
-                        bracketPairsHorizontal: 'active',
-                        highlightActiveBracketPair: true,
-                      },
-                      bracketPairColorization: {
-                        enabled: true,
-                        independentColorPoolPerBracketType: true,
-                      },
-                      'semanticHighlighting.enabled': 'configuredByTheme',
-                    }}
-                    onMount={editor => {
-                      disposeEditorListeners()
-                      editorRef.current = editor
-                      editor.layout({
-                        width: Math.max(editorViewport.width, 1),
-                        height: Math.max(editorViewport.height, 1),
-                      })
-                      relayoutEditorSoon()
-                      window.setTimeout(() => {
-                        editor.layout()
-                      }, 140)
-                      editorDisposablesRef.current = [
-                        editor.onDidChangeCursorSelection(() => {
-                          syncSelectionState()
-                        }),
-                        editor.onMouseDown(() => {
-                          pointerSelectionRef.current = true
-                          clearSelectionCommitTimer()
-                          setSelectionState(undefined)
-                        }),
-                        editor.onMouseUp(() => {
-                          pointerSelectionRef.current = false
-                          refreshSelectionDraft()
-                          scheduleSelectionCommit(60)
-                        }),
-                        editor.onDidBlurEditorText(() => {
-                          pointerSelectionRef.current = false
-                          refreshSelectionDraft()
-                          scheduleSelectionCommit(0)
-                        }),
-                      ]
-                      editor.onDidDispose(() => {
-                        disposeEditorListeners()
-                        clearSelectionCommitTimer()
-                      })
-                      syncSelectionState()
-                    }}
-                  />
-                ) : activeFileContent ? (
-                  <div className="code-editor-empty">
-                    <LoaderCircle className="icon-spin" size={18} />
-                    正在初始化代码编辑器...
+                {panelMode === 'code' ? (
+                  <div className="code-editor-toolbar">
+                    <div className="code-editor-toolbar__meta">
+                      <strong>{activeFileContent?.path ?? activeFilePath ?? '未选择文件'}</strong>
+                      <span>
+                        {activeFileContent
+                          ? `${activeFileContent.language} / ${activeFileContent.lineCount} lines / ${activeFileContent.byteLength} bytes`
+                          : '从左侧选择一个文本文件后即可查看代码'}
+                      </span>
+                    </div>
+                    <div className="code-editor-toolbar__actions">
+                      <button
+                        className={`secondary-button code-editor-toolbar__toggle ${wrapMode === 'on' ? 'is-active' : ''}`}
+                        type="button"
+                        onClick={() => {
+                          setWrapMode(previous => (previous === 'on' ? 'off' : 'on'))
+                          relayoutEditorSoon()
+                        }}
+                      >
+                        {wrapMode === 'on' ? '自动换行开' : '自动换行关'}
+                      </button>
+                      <button
+                        className="primary-button code-editor-toolbar__quote"
+                        type="button"
+                        disabled={!selectionState}
+                        onClick={() => {
+                          if (!selectionState) {
+                            return
+                          }
+                          onQuoteSelection(selectionState)
+                        }}
+                      >
+                        <Quote size={15} />
+                        引用选中代码
+                      </button>
+                    </div>
                   </div>
                 ) : (
-                  <div className="code-editor-empty">
-                    <Braces size={18} />
-                    从左侧文件树选择一个文本文件开始查看。
+                  <div className="code-editor-toolbar code-editor-toolbar--preview">
+                    <div className="code-editor-toolbar__meta">
+                      <strong>{selectedPreviewTarget?.path ?? '暂无可预览入口'}</strong>
+                      <span>
+                        {selectedPreviewTarget
+                          ? '当前预览来自工作区内真实静态入口文件。'
+                          : '当前工作区还没有生成可预览的静态页面。'}
+                      </span>
+                    </div>
+                    <div className="code-editor-toolbar__actions code-editor-toolbar__actions--preview">
+                      <select
+                        className="code-preview-select"
+                        value={selectedPreviewTarget?.path ?? ''}
+                        onChange={event => {
+                          setSelectedPreviewPath(event.currentTarget.value || undefined)
+                          setPreviewAttempt(0)
+                        }}
+                        disabled={previewTargets.length === 0 || previewLoading}
+                      >
+                        {previewTargets.length === 0 ? (
+                          <option value="">暂无预览入口</option>
+                        ) : (
+                          previewTargets.map(target => (
+                            <option key={target.path} value={target.path}>
+                              {target.path}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                      {selectedPreviewTarget?.url ? (
+                        <a
+                          className="secondary-button code-preview-open"
+                          href={selectedPreviewTarget.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          新窗口打开
+                          <ExternalLink size={14} />
+                        </a>
+                      ) : null}
+                    </div>
                   </div>
                 )}
-
-                {selectionState ? (
-                  <div className="code-selection-banner code-selection-banner--floating" role="status" aria-live="polite">
-                    <span>
-                      {selectionState.filePath}:{selectionState.startLine}:{selectionState.startColumn} - {selectionState.endLine}:
-                      {selectionState.endColumn}
-                    </span>
-                    <small>{compactLabel(selectionState.selectedText)}</small>
-                  </div>
-                ) : null}
               </div>
+
+              {panelMode === 'code' ? (
+                <div className="code-editor-shell" ref={editorShellRef}>
+                  {activeFileEntry?.loading ? (
+                    <div className="code-editor-empty">
+                      <LoaderCircle className="icon-spin" size={18} />
+                      正在加载文件内容...
+                    </div>
+                  ) : activeFileEntry?.error ? (
+                    <div className="code-editor-empty code-editor-empty--error">{activeFileEntry.error}</div>
+                  ) : activeFileContent && canMountEditor ? (
+                    <Editor
+                      height="100%"
+                      path={activeFileContent.path}
+                      language={activeFileContent.language}
+                      value={activeFileContent.content}
+                      theme={CODE_EDITOR_THEME}
+                      beforeMount={registerCodeEditorTheme}
+                      options={{
+                        readOnly: true,
+                        fontSize: 13,
+                        fontFamily: 'Consolas, "SFMono-Regular", "JetBrains Mono", monospace',
+                        fontLigatures: true,
+                        minimap: { enabled: false },
+                        scrollBeyondLastLine: false,
+                        wordWrap: wrapMode,
+                        wrappingIndent: 'indent',
+                        automaticLayout: true,
+                        renderLineHighlight: 'line',
+                        lineNumbersMinChars: 3,
+                        padding: { top: 12, bottom: 12 },
+                        smoothScrolling: true,
+                        matchBrackets: 'always',
+                        renderWhitespace: 'selection',
+                        cursorBlinking: 'solid',
+                        guides: {
+                          indentation: true,
+                          highlightActiveIndentation: true,
+                          bracketPairs: true,
+                          bracketPairsHorizontal: 'active',
+                          highlightActiveBracketPair: true,
+                        },
+                        bracketPairColorization: {
+                          enabled: true,
+                          independentColorPoolPerBracketType: true,
+                        },
+                        'semanticHighlighting.enabled': 'configuredByTheme',
+                      }}
+                      onMount={editor => {
+                        disposeEditorListeners()
+                        editorRef.current = editor
+                        editor.layout({
+                          width: Math.max(editorViewport.width, 1),
+                          height: Math.max(editorViewport.height, 1),
+                        })
+                        relayoutEditorSoon()
+                        window.setTimeout(() => {
+                          editor.layout()
+                        }, 140)
+                        editorDisposablesRef.current = [
+                          editor.onDidChangeCursorSelection(() => {
+                            syncSelectionState()
+                          }),
+                          editor.onMouseDown(() => {
+                            pointerSelectionRef.current = true
+                            clearSelectionCommitTimer()
+                            setSelectionState(undefined)
+                          }),
+                          editor.onMouseUp(() => {
+                            pointerSelectionRef.current = false
+                            refreshSelectionDraft()
+                            scheduleSelectionCommit(60)
+                          }),
+                          editor.onDidBlurEditorText(() => {
+                            pointerSelectionRef.current = false
+                            refreshSelectionDraft()
+                            scheduleSelectionCommit(0)
+                          }),
+                        ]
+                        editor.onDidDispose(() => {
+                          disposeEditorListeners()
+                          clearSelectionCommitTimer()
+                        })
+                        syncSelectionState()
+                      }}
+                    />
+                  ) : activeFileContent ? (
+                    <div className="code-editor-empty">
+                      <LoaderCircle className="icon-spin" size={18} />
+                      正在初始化代码编辑器...
+                    </div>
+                  ) : (
+                    <div className="code-editor-empty">
+                      <Braces size={18} />
+                      从左侧文件树选择一个文本文件开始查看。
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="code-preview-shell">
+                  {previewLoading ? (
+                    <div className="code-preview-empty">
+                      <LoaderCircle className="icon-spin" size={18} />
+                      正在加载预览入口...
+                    </div>
+                  ) : previewError ? (
+                    <div className="code-preview-empty code-preview-empty--error">{previewError}</div>
+                  ) : !selectedPreviewTarget?.url ? (
+                    <div className="code-preview-empty">
+                      <Globe2 size={18} />
+                      当前工作区还没有静态预览入口。
+                    </div>
+                  ) : (
+                    <>
+                      <iframe
+                        key={`${selectedPreviewTarget.path}-${previewAttempt}`}
+                        className="code-preview-frame"
+                        src={selectedPreviewTarget.url}
+                        title={selectedPreviewTarget.path}
+                        onLoad={() => setPreviewStatus('ready')}
+                        onError={() => setPreviewStatus('error')}
+                      />
+
+                      {previewStatus !== 'ready' ? (
+                        <div className="code-preview-overlay">
+                          <div className={`code-preview-status code-preview-status--${previewStatus}`}>
+                            {previewStatus === 'error' ? (
+                              <AlertTriangle size={18} />
+                            ) : (
+                              <LoaderCircle className="icon-spin" size={18} />
+                            )}
+                            <strong>
+                              {previewStatus === 'error'
+                                ? '预览加载失败'
+                                : previewStatus === 'slow'
+                                  ? '预览生成较慢'
+                                  : '正在加载页面预览'}
+                            </strong>
+                            <p>
+                              {previewStatus === 'error'
+                                ? '可以重试预览，或直接在新窗口打开当前页面。'
+                                : previewStatus === 'slow'
+                                  ? '页面构建或传输较慢，请再等一下。'
+                                  : '正在拉取当前工作区的页面预览资源。'}
+                            </p>
+                            {previewStatus === 'error' ? (
+                              <div className="code-preview-actions">
+                                <button className="primary-button" type="button" onClick={handleRetryPreview}>
+                                  重试预览
+                                </button>
+                                <a className="secondary-button" href={selectedPreviewTarget.url} target="_blank" rel="noreferrer">
+                                  新窗口打开
+                                </a>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+              )}
             </section>
           </div>
         </GlassPanel>
