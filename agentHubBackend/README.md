@@ -8,6 +8,8 @@ The current local live path is:
 
 This backend keeps the Nest business modules from `origin/main`, and also carries the local adapter capabilities that the frontend needs for real local workspaces.
 
+The old `locateBackend` compatibility layer has been removed. Local startup and local API access now use `agentHubBackend` only.
+
 ## Current Responsibilities
 
 - create and bind business projects to AgentHub workspaces
@@ -49,6 +51,8 @@ AGENTHUB_RUNTIME_ROOT=../agentHub/data/workspaces
 APP_STORAGE_ROOT=data
 APP_METADATA_STORE=local
 ```
+
+Prefer `APP_STORAGE_ROOT` as the local runtime data root. `LOCATE_BACKEND_DATA_DIR` is no longer used.
 
 Optional PostgreSQL metadata storage:
 

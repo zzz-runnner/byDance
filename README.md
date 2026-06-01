@@ -14,6 +14,8 @@ The current local live path is:
 
 `agentHubFrontend -> agentHubBackend -> agentHub runtime -> real agents`
 
+The deprecated `locateBackend/` adapter has been removed from the repository. The unified local backend path is now only `agentHubBackend/`.
+
 The current local chain covers:
 
 - `GET /api/health`

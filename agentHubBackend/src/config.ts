@@ -19,7 +19,6 @@ export function readConfig(): AppConfig {
     cwd,
     process.env.APP_STORAGE_ROOT
       ?? process.env.AGENTHUB_BACKEND_DATA_DIR
-      ?? process.env.LOCATE_BACKEND_DATA_DIR
       ?? 'data',
   )
   const agentHubWorkspaceRootPath = path.resolve(
