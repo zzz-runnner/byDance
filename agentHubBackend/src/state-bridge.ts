@@ -101,6 +101,12 @@ export function selectProjectState(
   const mergedMessages = [...allMessages, ...deliveryMessages]
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
   const messagePage = paginateMessages(mergedMessages, options?.messageLimit)
+  const visibleTurnIds = new Set(
+    messagePage.messages
+      .map(message => typeof message.turnId === 'string' ? message.turnId : undefined)
+      .filter((turnId): turnId is string => Boolean(turnId)),
+  )
+  const visibleMessageIds = new Set(messagePage.messages.map(message => message.id))
   const mergedArtifacts = [
     ...state.artifacts.filter(
       artifact => artifact.workspaceId === workspaceId || (artifact.agentRunId ? runIds.has(artifact.agentRunId) : false),
@@ -138,7 +144,13 @@ export function selectProjectState(
           (snapshot.agentRunId ? runIds.has(snapshot.agentRunId) : false),
       ),
       workflowEvents: state.workflowEvents.filter(
-        record => record.workspaceId === workspaceId || conversationIds.has(record.conversationId),
+        record => (
+          record.workspaceId === workspaceId || conversationIds.has(record.conversationId)
+        ) && (
+          visibleTurnIds.size === 0 ||
+          (typeof record.event.turnId === 'string' && visibleTurnIds.has(record.event.turnId)) ||
+          (record.event.type === 'assistant_message_started' && typeof record.event.messageId === 'string' && visibleMessageIds.has(record.event.messageId))
+        ),
       ),
       diagnosticLogs: state.diagnosticLogs.filter(log =>
         belongsToWorkspace(log, workspaceId, conversationIds, sessionIds, handoffIds, runIds),

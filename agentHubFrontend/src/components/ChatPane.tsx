@@ -6,7 +6,6 @@ import {
   Braces,
   CheckCircle2,
   ChevronDown,
-  ChevronUp,
   Copy,
   Download,
   ExternalLink,
@@ -42,6 +41,7 @@ import type {
   LiveWorkflowEvent,
   Message,
   ReplyReference,
+  StreamingAssistantDraft,
   WorkspaceRoom,
 } from '../types'
 import { AgentAvatar } from './AgentAvatar'
@@ -55,7 +55,7 @@ type ChatPaneProps = {
   state: AppState
   room: WorkspaceRoom | undefined
   messages: Message[]
-  streamingMessages: Message[]
+  streamingMessages: StreamingAssistantDraft[]
   workflowEvents: LiveWorkflowEvent[]
   loading: boolean
   connectionStatus: ConnectionStatus
@@ -82,6 +82,14 @@ type MentionMatch = {
 }
 
 type PreviewFrameStatus = 'loading' | 'slow' | 'ready' | 'error'
+
+type TurnLifecycleSnapshot = {
+  status: ChatTurn['status']
+  visibleReplyId?: string
+  finalMessageId?: string
+}
+
+const TURN_PROCESS_AUTO_COLLAPSE_DELAY_MS = 360
 
 /**
  * Clips one quoted message into a single-line excerpt for reply previews.
@@ -227,7 +235,11 @@ function findActiveMention(value: string, selectionStart: number | null, selecti
  * Output: true when the process should stay open by default.
  */
 function shouldDefaultExpandTurn(turn: ChatTurn): boolean {
-  return turn.status === 'running' || turn.status === 'failed' || turn.status === 'partial'
+  return (
+    ((turn.status === 'running' || Boolean(turn.settlingMessage)) && turn.processEntries.length > 0) ||
+    turn.status === 'failed' ||
+    turn.status === 'partial'
+  )
 }
 
 /**
@@ -310,6 +322,9 @@ export function ChatPane({
   const [isNearBottom, setIsNearBottom] = useState(true)
   const [artifactDialog, setArtifactDialog] = useState<ChatTurnArtifact | null>(null)
   const [turnExpandOverrides, setTurnExpandOverrides] = useState<Record<string, boolean>>({})
+  const [turnAutoExpandStates, setTurnAutoExpandStates] = useState<Record<string, boolean>>({})
+  const turnLifecycleRef = useRef<Record<string, TurnLifecycleSnapshot>>({})
+  const turnAutoCollapseTimersRef = useRef<Record<string, number>>({})
   const composerDisabled = connectionStatus !== 'live' || loading
   const headerStatus =
     sending ? 'running' : connectionStatus === 'error' ? 'failed' : loading ? 'running' : 'ready'
@@ -373,7 +388,86 @@ export function ChatPane({
       const nextEntries = Object.entries(previous).filter(([turnId]) => activeTurnIds.has(turnId))
       return Object.fromEntries(nextEntries)
     })
+
+    setTurnAutoExpandStates(previous => {
+      const nextEntries = Object.entries(previous).filter(([turnId]) => activeTurnIds.has(turnId))
+      return Object.fromEntries(nextEntries)
+    })
+
+    const nextLifecycleEntries = Object.entries(turnLifecycleRef.current).filter(([turnId]) => activeTurnIds.has(turnId))
+    turnLifecycleRef.current = Object.fromEntries(nextLifecycleEntries)
+
+    Object.entries(turnAutoCollapseTimersRef.current).forEach(([turnId, timerId]) => {
+      if (!activeTurnIds.has(turnId)) {
+        window.clearTimeout(timerId)
+        delete turnAutoCollapseTimersRef.current[turnId]
+      }
+    })
   }, [timelineItems])
+
+  useEffect(() => {
+    const turns = timelineItems.filter((item): item is Extract<ChatTimelineItem, { kind: 'turn' }> => item.kind === 'turn')
+
+    turns.forEach(({ turn }) => {
+      const previous = turnLifecycleRef.current[turn.id]
+      const nextVisibleReplyId = turn.finalMessage?.id ?? turn.settlingMessage?.id
+      const nextFinalMessageId = turn.finalMessage?.id
+      const justReceivedVisibleReply = Boolean(previous && nextVisibleReplyId && previous.visibleReplyId !== nextVisibleReplyId)
+
+      turnLifecycleRef.current[turn.id] = {
+        status: turn.status,
+        visibleReplyId: nextVisibleReplyId,
+        finalMessageId: nextFinalMessageId,
+      }
+
+      if (!justReceivedVisibleReply || (!turn.finalMessage && !turn.settlingMessage)) {
+        return
+      }
+
+      window.clearTimeout(turnAutoCollapseTimersRef.current[turn.id])
+
+      setTurnAutoExpandStates(previousStates => ({
+        ...previousStates,
+        [turn.id]: true,
+      }))
+
+      turnAutoCollapseTimersRef.current[turn.id] = window.setTimeout(() => {
+        setTurnAutoExpandStates(previousStates => {
+          if (!previousStates[turn.id]) {
+            return previousStates
+          }
+
+          const nextStates = { ...previousStates }
+          delete nextStates[turn.id]
+          return nextStates
+        })
+        delete turnAutoCollapseTimersRef.current[turn.id]
+      }, TURN_PROCESS_AUTO_COLLAPSE_DELAY_MS)
+    })
+  }, [timelineItems])
+
+  useEffect(() => () => {
+    Object.values(turnAutoCollapseTimersRef.current).forEach(timerId => {
+      window.clearTimeout(timerId)
+    })
+    turnAutoCollapseTimersRef.current = {}
+  }, [])
+
+  /**
+   * Detects the first render frame where one completed turn receives its final reply.
+   * Input: one chat turn.
+   * Output: true only for the fresh completion transition frame.
+   */
+  function shouldKeepTurnOpenForFreshCompletion(turn: ChatTurn): boolean {
+    const previous = turnLifecycleRef.current[turn.id]
+    const nextVisibleReplyId = turn.finalMessage?.id ?? turn.settlingMessage?.id
+
+    if (!previous || (!turn.finalMessage && !turn.settlingMessage) || !nextVisibleReplyId) {
+      return false
+    }
+
+    return previous.visibleReplyId !== nextVisibleReplyId
+  }
 
   /**
    * Tracks whether the user is still close enough to the latest message.
@@ -410,7 +504,15 @@ export function ChatPane({
    * Output: expanded state after user overrides and defaults.
    */
   function isTurnExpanded(turn: ChatTurn): boolean {
-    return turnExpandOverrides[turn.id] ?? shouldDefaultExpandTurn(turn)
+    if (turnExpandOverrides[turn.id] !== undefined) {
+      return turnExpandOverrides[turn.id]
+    }
+
+    if (turnAutoExpandStates[turn.id] || shouldKeepTurnOpenForFreshCompletion(turn)) {
+      return true
+    }
+
+    return shouldDefaultExpandTurn(turn)
   }
 
   /**
@@ -419,8 +521,23 @@ export function ChatPane({
    * Output: updates the local expansion override table.
    */
   function toggleTurn(turn: ChatTurn) {
+    if (turnAutoCollapseTimersRef.current[turn.id]) {
+      window.clearTimeout(turnAutoCollapseTimersRef.current[turn.id])
+      delete turnAutoCollapseTimersRef.current[turn.id]
+    }
+
+    setTurnAutoExpandStates(previous => {
+      if (!previous[turn.id]) {
+        return previous
+      }
+
+      const next = { ...previous }
+      delete next[turn.id]
+      return next
+    })
+
     const defaultExpanded = shouldDefaultExpandTurn(turn)
-    const currentExpanded = turnExpandOverrides[turn.id] ?? defaultExpanded
+    const currentExpanded = isTurnExpanded(turn)
     const nextExpanded = !currentExpanded
 
     setTurnExpandOverrides(previous => {
@@ -571,8 +688,16 @@ function TurnBlock({
   onCopy,
   onOpenArtifact,
 }: TurnBlockProps) {
-  const finalMessage = turn.finalMessage ?? turn.streamingMessage
+  const finalMessage = turn.finalMessage
+  const streamingMessage = turn.streamingMessage
+  const settlingMessage = turn.settlingMessage
   const finalSpeakerName = finalMessage?.senderType === 'agent' ? agentMap.get(finalMessage.senderId)?.name : undefined
+  const streamingSpeakerName = streamingMessage?.senderType === 'agent'
+    ? agentMap.get(streamingMessage.senderId)?.name
+    : undefined
+  const settlingSpeakerName = settlingMessage?.senderType === 'agent'
+    ? agentMap.get(settlingMessage.senderId)?.name
+    : undefined
 
   return (
     <article className="turn-block">
@@ -582,9 +707,9 @@ function TurnBlock({
         onCopy={onCopy}
       />
 
-      {(turn.processEntries.length > 0 || turn.status === 'running') ? (
+      {(turn.processEntries.length > 0 || (turn.status === 'running' && turn.streamingMessage) || Boolean(turn.settlingMessage)) ? (
         <section className={`turn-process turn-process--${turn.status}`}>
-          <button className="turn-process__header" type="button" onClick={onToggle}>
+          <button className="turn-process__header" type="button" onClick={onToggle} aria-expanded={expanded}>
             <span className="turn-process__title">
               <TerminalSquare size={15} />
               本轮过程
@@ -592,18 +717,24 @@ function TurnBlock({
             <span className="turn-process__meta">
               <StatusPill status={turnStatusPillStatus(turn)} label={processStatusLabel(turn)} />
               <em>{turn.processEntries.length} 条</em>
-              {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+              <ChevronDown className={`turn-process__chevron ${expanded ? 'is-expanded' : ''}`} size={15} />
             </span>
           </button>
 
-          {expanded ? (
-            <div className="turn-process__body">
+          <div
+            className={`turn-process__body-shell ${expanded ? 'is-expanded' : 'is-collapsed'}`}
+            aria-hidden={!expanded}
+          >
+            <div className="turn-process__body-inner">
+              <div className="turn-process__body">
               {turn.processEntries.length > 0 ? (
-                turn.processEntries.map(entry => (
+                turn.processEntries.map((entry, index) => (
                   <ProcessEntryCard
                     key={entry.id}
                     entry={entry}
                     agentName={entry.agentId ? agentMap.get(entry.agentId)?.name : undefined}
+                    enterDelayMs={Math.min(index, 4) * 36}
+                    animate={turn.status === 'running'}
                   />
                 ))
               ) : (
@@ -612,8 +743,9 @@ function TurnBlock({
                   <span>正在等待更多过程事件...</span>
                 </div>
               )}
+              </div>
             </div>
-          ) : null}
+          </div>
         </section>
       ) : null}
 
@@ -637,7 +769,23 @@ function TurnBlock({
           onReply={onReply}
           onCopy={onCopy}
           renderArtifacts={false}
-          forceStreaming={Boolean(turn.streamingMessage && !turn.finalMessage)}
+        />
+      ) : settlingMessage ? (
+        <MessageBubble
+          message={settlingMessage}
+          senderName={settlingSpeakerName}
+          onReply={onReply}
+          onCopy={onCopy}
+          renderArtifacts={false}
+        />
+      ) : streamingMessage ? (
+        <MessageBubble
+          message={streamingMessage}
+          senderName={streamingSpeakerName}
+          onReply={onReply}
+          onCopy={onCopy}
+          renderArtifacts={false}
+          forceStreaming
         />
       ) : turn.status === 'running' ? (
         <PendingResultBubble />
@@ -649,6 +797,8 @@ function TurnBlock({
 type ProcessEntryCardProps = {
   entry: ChatTurnProcessEntry
   agentName?: string
+  enterDelayMs?: number
+  animate?: boolean
 }
 
 /**
@@ -656,11 +806,14 @@ type ProcessEntryCardProps = {
  * Input: process entry and optional agent display name.
  * Output: one process card.
  */
-function ProcessEntryCard({ entry, agentName }: ProcessEntryCardProps) {
+function ProcessEntryCard({ entry, agentName, enterDelayMs = 0, animate = false }: ProcessEntryCardProps) {
   const Icon = processEntryIcon(entry)
 
   return (
-    <article className={`process-card process-card--${entry.kind} process-card--${entry.tone}`}>
+    <article
+      className={`process-card process-card--${entry.kind} process-card--${entry.tone} ${animate ? 'process-card--animated' : ''}`}
+      style={{ animationDelay: `${enterDelayMs}ms` }}
+    >
       <div className="process-card__top">
         <span className="process-card__icon">
           <Icon size={14} />
@@ -749,16 +902,40 @@ function MessageBubble({
   const isStreamingPlaceholder = forceStreaming || (!isUser && message.content.trim().length === 0)
   const senderLabel = messageSenderLabel(message, senderName)
   const canReply = message.content.trim().length > 0
+  const wasStreamingRef = useRef(isStreamingPlaceholder)
+  const [isSettling, setIsSettling] = useState(false)
+
+  useEffect(() => {
+    if (wasStreamingRef.current && !isStreamingPlaceholder) {
+      setIsSettling(true)
+      const timer = window.setTimeout(() => setIsSettling(false), 220)
+      wasStreamingRef.current = isStreamingPlaceholder
+      return () => window.clearTimeout(timer)
+    }
+
+    wasStreamingRef.current = isStreamingPlaceholder
+  }, [isStreamingPlaceholder])
+
+  const rowClassName = [
+    'message-row',
+    isUser ? 'message-row--user' : '',
+    isStreamingPlaceholder ? 'message-row--streaming' : '',
+    isSettling ? 'message-row--settled' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
 
   return (
-    <article className={`message-row ${isUser ? 'message-row--user' : ''}`}>
+    <article className={rowClassName}>
       {!isUser ? <AgentAvatar agentId={message.senderId} name={senderName} /> : null}
       <div className="message-stack">
         <div className="message-meta">
           <strong>{senderLabel}</strong>
           <time>{formatTime(message.createdAt)}</time>
         </div>
-        <div className={`message-bubble ${isUser ? 'message-bubble--user' : 'message-bubble--agent'}`}>
+        <div
+          className={`message-bubble ${isUser ? 'message-bubble--user' : 'message-bubble--agent'} ${isStreamingPlaceholder ? 'message-bubble--streaming' : ''}`}
+        >
           {message.replyTo ? (
             <div className="message-quote">
               <strong>{replySenderLabel(message.replyTo)}</strong>

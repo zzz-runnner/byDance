@@ -235,3 +235,10 @@ export type StreamMessageInput = {
 export type LiveWorkflowEvent = WorkflowEvent & {
   receivedAt: string
 }
+
+export type StreamingMessagePhase = 'streaming' | 'awaiting_commit'
+
+export type StreamingAssistantDraft = {
+  message: Message
+  phase: StreamingMessagePhase
+}

@@ -71,6 +71,19 @@ The backend still keeps the Nest business modules for:
   - preview panel
 - New workspaces no longer auto-seed a placeholder `index.html`.
 - If no previewable entry exists yet, the preview panel stays empty instead of fabricating a page.
+- Chat history recovery now uses turn-safe grouping:
+  - user messages, workflow events, and final replies are grouped by `turnId` when available
+  - older historical messages without `turnId` fall back to the nearest visible unmatched user turn
+  - the frontend no longer groups turns by array index
+- Project state recovery now keeps message and event windows aligned:
+  - `/api/projects/:projectId/state` still returns a recent message window
+  - returned `workflowEvents` are now restricted to the visible message window turns instead of full-history replay
+- The chat surface no longer fabricates routing placeholder bubbles such as "main brain is deciding who should reply".
+- Waiting placeholders are now limited to turns with a real streaming reply, so completed history no longer shows empty running cards after refresh.
+- Streaming chat replies now keep a frontend handoff stage:
+  - `streaming` while SSE deltas are arriving
+  - `awaiting_commit` after SSE finishes but before the persisted message is reloaded
+  - the process block auto-collapses only after a visible reply has appeared, which avoids collapsing the process block before the reply bubble is visible
 
 ## Local Preview
 

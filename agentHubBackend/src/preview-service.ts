@@ -124,7 +124,7 @@ type PackageManifest = {
   devDependencies?: Record<string, string>
 }
 
-type PreviewAsset =
+export type PreviewAsset =
   | {
       kind: 'html'
       content: string

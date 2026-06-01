@@ -13,6 +13,7 @@
     "test:watch": "vitest tests/unit tests/integration",
     "test:real": "vitest run tests/real",
     "test:real:chain": "vitest run tests/real/agent-chain-probe.test.ts",
+    "verify:workspace:closure": "tsx scripts/verify-existing-workspace-local-closure.ts",
     "verify": "npm run check && npm test",
     "db:init": "tsx src/server/db/init.ts",
     "db:smoke": "tsx scripts/postgres-smoke.ts"

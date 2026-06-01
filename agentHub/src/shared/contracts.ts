@@ -236,6 +236,7 @@ export const MessageSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
   conversationId: z.string(),
+  turnId: z.string().optional(),
   senderType: SenderTypeSchema,
   senderId: z.string(),
   content: z.string(),

@@ -7,7 +7,7 @@ import { AgentHubClientService } from '../agent-hub/agent-hub.service'
 import { AgentHubState, AgentHubWorkspace } from '../agent-hub/agent-hub.types'
 import { isoNow } from '../common/time'
 import { readConfig } from '../config'
-import { PreviewService, previewAssetResponse } from '../preview-service'
+import { PreviewAsset, PreviewService } from '../preview-service'
 import {
   buildWorkbenchOverviewPage,
   previewUrlFor,
@@ -371,10 +371,7 @@ export class ProjectsService {
       requestedPath,
       entry,
     )
-    const payload = previewAssetResponse(previewAsset)
-    response.type(payload.contentType)
-    response.setHeader('Cache-Control', 'no-cache')
-    response.send(payload.body)
+    await this.sendPreviewAsset(response, previewAsset)
   }
 
   /**
@@ -394,10 +391,35 @@ export class ProjectsService {
       sourceHash,
       requestedPath,
     )
-    const payload = previewAssetResponse(previewAsset)
-    response.type(payload.contentType)
+    await this.sendPreviewAsset(response, previewAsset)
+  }
+
+  /**
+   * Sends one preview asset as inline HTML or a local file response.
+   * Input: downstream Express response and one resolved preview asset.
+   * Output: preview body written to the browser.
+   */
+  private async sendPreviewAsset(
+    response: ExpressResponse,
+    asset: PreviewAsset,
+  ): Promise<void> {
+    response.type(asset.contentType)
     response.setHeader('Cache-Control', 'no-cache')
-    response.send(payload.body)
+
+    if (asset.kind === 'html') {
+      response.send(asset.content)
+      return
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      response.sendFile(asset.filePath, error => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve()
+      })
+    })
   }
 
   /**
