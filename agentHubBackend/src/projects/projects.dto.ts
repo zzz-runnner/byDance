@@ -165,10 +165,17 @@ export class ProjectStateQueryDto {
 }
 
 export class WorkbenchQueryDto {
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   limit = 20
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  pageSize?: number
 
   @IsOptional()
   @IsString()
@@ -177,6 +184,22 @@ export class WorkbenchQueryDto {
   @IsOptional()
   @IsString()
   q?: string
+
+  @IsOptional()
+  @IsString()
+  query?: string
+
+  @IsOptional()
+  @IsIn(['active', 'archived', 'all'])
+  status: 'active' | 'archived' | 'all' = 'active'
+
+  @IsOptional()
+  @IsIn(['updatedAt', 'createdAt', 'name'])
+  sortBy: 'updatedAt' | 'createdAt' | 'name' = 'updatedAt'
+
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortDirection: 'asc' | 'desc' = 'desc'
 }
 
 export class PreviewBuildQueryDto {
@@ -184,4 +207,16 @@ export class PreviewBuildQueryDto {
   @Transform(({ value }: { value: unknown }) => value === true || value === 'true')
   @IsBoolean()
   force?: boolean
+}
+
+export class UpdateProjectMetadataDto {
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => value === true || value === 'true')
+  @IsBoolean()
+  pinned?: boolean
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => value === true || value === 'true')
+  @IsBoolean()
+  archived?: boolean
 }

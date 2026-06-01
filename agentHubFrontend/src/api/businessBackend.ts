@@ -1,15 +1,22 @@
 import type {
   AgentDefinition,
+  AgentProvider,
   AppState,
   ProjectStateEnvelope,
+  SortDirection,
   WorkspaceFileTree,
   WorkbenchOverview,
   StreamMessageInput,
   Workspace,
   WorkspaceDiffSnapshot,
+  WorkspaceDeliverySummary,
+  WorkspaceDeploymentRecord,
   WorkspaceFileContent,
+  WorkspaceListStatus,
   WorkspacePreviewCapability,
   WorkspacePreviewTargets,
+  WorkspaceSortField,
+  WorkspaceVersionRecord,
   WorkflowEvent,
 } from '../types'
 
@@ -22,6 +29,8 @@ type BusinessProject = {
   conversationId?: string
   agentHubPreviewUrl?: string
   agentHubZipUrl?: string
+  pinnedAt?: string
+  archivedAt?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -45,8 +54,40 @@ const DEFAULT_GROUP_AGENT_IDS = ['product-manager', 'engineer', 'reviewer']
 
 type FetchWorkbenchOverviewInput = {
   limit?: number
+  pageSize?: number
   cursor?: string
   query?: string
+  status?: WorkspaceListStatus
+  sortBy?: WorkspaceSortField
+  sortDirection?: SortDirection
+}
+
+export type CreateBusinessAgentInput = {
+  id?: string
+  name: string
+  role?: string
+  description?: string
+  whenToUse?: string
+  systemPrompt: string
+  modelProvider?: AgentProvider
+  model?: string
+  contextPolicy?: AgentDefinition['contextPolicy']
+  tools?: string[]
+  permissions?: AgentDefinition['permissions']
+  disallowedTools?: string[]
+  permissionMode?: AgentDefinition['permissionMode']
+  runtimePolicy?: AgentDefinition['runtimePolicy']
+  outputSchema?: string
+  isolation?: AgentDefinition['isolation']
+  skills?: string[]
+  routingProfile?: AgentDefinition['routingProfile']
+}
+
+export type UpdateBusinessAgentInput = Partial<Omit<CreateBusinessAgentInput, 'id'>>
+
+export type WorkspaceMetadataUpdate = {
+  pinned?: boolean
+  archived?: boolean
 }
 
 /**
@@ -143,6 +184,38 @@ export async function fetchBusinessAgents(): Promise<AgentDefinition[]> {
   return extractAgents(payload)
 }
 
+export async function createBusinessAgent(input: CreateBusinessAgentInput): Promise<AgentDefinition> {
+  const response = await fetch('/api/agents', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  return readJson<AgentDefinition>(response, 'Create business agent')
+}
+
+export async function updateBusinessAgent(
+  agentId: string,
+  input: UpdateBusinessAgentInput,
+): Promise<AgentDefinition> {
+  const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  return readJson<AgentDefinition>(response, 'Update business agent')
+}
+
+export async function deleteBusinessAgent(agentId: string): Promise<void> {
+  const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}`, {
+    method: 'DELETE',
+  })
+  await readJson<{ deleted: boolean; agentId: string }>(response, 'Delete business agent')
+}
+
 /**
  * Loads the lightweight workbench overview used by the left workspace list.
  * Input: optional cursor-paging and server-side search arguments.
@@ -152,18 +225,42 @@ export async function fetchBusinessWorkbenchOverview(
   input: FetchWorkbenchOverviewInput = {},
 ): Promise<WorkbenchOverview> {
   const query = new URLSearchParams()
-  if (input.limit) {
-    query.set('limit', String(input.limit))
+  const pageSize = input.pageSize ?? input.limit
+  if (pageSize) {
+    query.set('pageSize', String(pageSize))
   }
   if (input.cursor) {
     query.set('cursor', input.cursor)
   }
   if (input.query?.trim()) {
-    query.set('q', input.query.trim())
+    query.set('query', input.query.trim())
+  }
+  if (input.status) {
+    query.set('status', input.status)
+  }
+  if (input.sortBy) {
+    query.set('sortBy', input.sortBy)
+  }
+  if (input.sortDirection) {
+    query.set('sortDirection', input.sortDirection)
   }
   const response = await fetch(`/api/workbench${query.size ? `?${query.toString()}` : ''}`)
   const payload = await readJson<WorkbenchOverviewResponse>(response, 'Load workbench overview')
   return extractWorkbenchOverview(payload)
+}
+
+export async function updateBusinessWorkspaceMetadata(
+  projectId: string,
+  input: WorkspaceMetadataUpdate,
+): Promise<BusinessProject> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/metadata`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  return readJson<BusinessProject>(response, 'Update workspace metadata')
 }
 
 /**
@@ -318,6 +415,79 @@ export async function triggerBusinessProjectPreviewBuild(
     },
   )
   return readJson<WorkspacePreviewCapability>(response, 'Start business project preview build')
+}
+
+/**
+ * Loads the current delivery summary for one workspace-backed project.
+ * Input: project id.
+ * Output: latest source archive, build, and deployment status summary.
+ */
+export async function fetchBusinessProjectDeliverySummary(projectId: string): Promise<WorkspaceDeliverySummary> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/delivery`)
+  return readJson<WorkspaceDeliverySummary>(response, 'Load business project delivery summary')
+}
+
+/**
+ * Saves the current workspace repo as one downloadable source snapshot.
+ * Input: project id and optional git-style message.
+ * Output: created or refreshed version record.
+ */
+export async function createBusinessProjectVersion(
+  projectId: string,
+  message?: string,
+): Promise<WorkspaceVersionRecord> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/versions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      ...(message ? { message } : {}),
+    }),
+  })
+  return readJson<WorkspaceVersionRecord>(response, 'Create business project version')
+}
+
+/**
+ * Builds the selected saved version into a deployable static artifact.
+ * Input: project id and optional version id override.
+ * Output: updated version record after the build finishes.
+ */
+export async function buildBusinessProjectVersion(
+  projectId: string,
+  versionId?: string,
+): Promise<WorkspaceVersionRecord> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/builds`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      ...(versionId ? { versionId } : {}),
+    }),
+  })
+  return readJson<WorkspaceVersionRecord>(response, 'Build business project version')
+}
+
+/**
+ * Deploys the selected built version into the local static deployment route.
+ * Input: project id and optional version id override.
+ * Output: created deployment record.
+ */
+export async function deployBusinessProjectVersion(
+  projectId: string,
+  versionId?: string,
+): Promise<WorkspaceDeploymentRecord> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/deploy`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      ...(versionId ? { versionId } : {}),
+    }),
+  })
+  return readJson<WorkspaceDeploymentRecord>(response, 'Deploy business project version')
 }
 
 /**

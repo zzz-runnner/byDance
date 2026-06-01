@@ -35,6 +35,7 @@ describe('WorkspaceRuntimeManager', () => {
     const asset = await runtime.openPreviewAsset(workspace.id, 'styles.css')
 
     expect(asset.contentType).toBe('text/css; charset=utf-8')
+    asset.stream.destroy()
   })
 
   it('rejects preview paths outside the workspace', async () => {

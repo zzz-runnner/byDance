@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Query, Res } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res } from '@nestjs/common'
 import { Response } from 'express'
 import { toProjectResponse } from '../state-bridge'
 import {
@@ -7,6 +7,7 @@ import {
   PreviewBuildQueryDto,
   ProjectStateQueryDto,
   StreamProjectMessageDto,
+  UpdateProjectMetadataDto,
   WriteWorkspaceFileDto,
 } from './projects.dto'
 import { ProjectsService } from './projects.service'
@@ -30,12 +31,45 @@ export class ProjectsController {
     return toProjectResponse(await this.projects.getProject(projectId))
   }
 
+  @Patch(':projectId/metadata')
+  async updateProjectMetadata(
+    @Param('projectId') projectId: string,
+    @Body() input: UpdateProjectMetadataDto,
+  ) {
+    return toProjectResponse(await this.projects.updateProjectMetadata(projectId, input))
+  }
+
+  @Put(':projectId/pin')
+  async pinProject(@Param('projectId') projectId: string) {
+    return toProjectResponse(await this.projects.setProjectPinned(projectId, true))
+  }
+
+  @Delete(':projectId/pin')
+  async unpinProject(@Param('projectId') projectId: string) {
+    return toProjectResponse(await this.projects.setProjectPinned(projectId, false))
+  }
+
+  @Put(':projectId/archive')
+  async archiveProject(@Param('projectId') projectId: string) {
+    return toProjectResponse(await this.projects.setProjectArchived(projectId, true))
+  }
+
+  @Delete(':projectId/archive')
+  async unarchiveProject(@Param('projectId') projectId: string) {
+    return toProjectResponse(await this.projects.setProjectArchived(projectId, false))
+  }
+
   @Get(':projectId/state')
   getProjectState(
     @Param('projectId') projectId: string,
     @Query() query: ProjectStateQueryDto,
   ) {
     return this.projects.getProjectState(projectId, query)
+  }
+
+  @Get(':projectId/delivery')
+  getProjectDelivery(@Param('projectId') projectId: string) {
+    return this.projects.getProjectDeliverySummary(projectId)
   }
 
   @Get(':projectId/files')

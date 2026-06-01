@@ -31,6 +31,8 @@ export function toProjectResponse(project: {
   conversationId?: string
   conversationType?: ConversationType
   targetAgentId?: string
+  pinnedAt?: string
+  archivedAt?: string
   createdAt: string
   updatedAt: string
 }): ProjectResponse {
@@ -52,6 +54,25 @@ export function selectProjectState(
   project: {
     projectId: string
     workspaceId: string
+    conversationId?: string
+    pinnedAt?: string
+    archivedAt?: string
+    currentVersionId?: string
+    versions?: Array<{
+      versionId: string
+      sourceZipUrl: string
+      buildPreviewUrl?: string
+      buildStatus?: 'pending' | 'success' | 'failed'
+      buildLog?: string
+      createdAt: string
+      updatedAt: string
+    }>
+    deployments?: Array<{
+      deploymentId: string
+      versionId: string
+      deployUrl: string
+      createdAt: string
+    }>
   },
   options?: {
     messageLimit?: number
@@ -66,17 +87,47 @@ export function selectProjectState(
   const handoffIds = new Set(taskHandoffs.map(handoff => handoff.id))
   const agentRuns = state.agentRuns.filter(run => run.workspaceId === workspaceId)
   const runIds = new Set(agentRuns.map(run => run.id))
+  const conversationId = project.conversationId && conversationIds.has(project.conversationId)
+    ? project.conversationId
+    : conversations[0]?.id
   const allMessages = state.messages
     .filter(message => message.workspaceId === workspaceId || conversationIds.has(message.conversationId))
     .slice()
+  const deliveryMessages = conversationId
+    ? buildProjectDeliveryMessages({
+        workspaceId,
+        conversationId,
+        currentVersionId: project.currentVersionId,
+        versions: project.versions ?? [],
+        deployments: project.deployments ?? [],
+      })
+    : []
+  const mergedMessages = [...allMessages, ...deliveryMessages]
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-  const messagePage = paginateMessages(allMessages, options?.messageLimit)
+  const messagePage = paginateMessages(mergedMessages, options?.messageLimit)
+  const visibleTurnIds = new Set(
+    messagePage.messages
+      .map(message => typeof message.turnId === 'string' ? message.turnId : undefined)
+      .filter((turnId): turnId is string => Boolean(turnId)),
+  )
+  const visibleMessageIds = new Set(messagePage.messages.map(message => message.id))
+  const mergedArtifacts = [
+    ...state.artifacts.filter(
+      artifact => artifact.workspaceId === workspaceId || (artifact.agentRunId ? runIds.has(artifact.agentRunId) : false),
+    ),
+    ...buildProjectDeliveryArtifacts({
+      workspaceId,
+      currentVersionId: project.currentVersionId,
+      versions: project.versions ?? [],
+      deployments: project.deployments ?? [],
+    }),
+  ].sort((left, right) => readTimestamp(left.createdAt).localeCompare(readTimestamp(right.createdAt)))
 
   return {
     state: {
       workspaces: state.workspaces
         .filter(workspace => workspace.id === workspaceId)
-        .map(workspace => attachProjectMetadata(workspace, project.projectId)),
+        .map(workspace => attachProjectMetadata(workspace, project)),
       conversations,
       messages: messagePage.messages,
       agents: state.agents,
@@ -86,9 +137,7 @@ export function selectProjectState(
       ),
       taskHandoffs,
       agentRuns,
-      artifacts: state.artifacts.filter(
-        artifact => artifact.workspaceId === workspaceId || (artifact.agentRunId ? runIds.has(artifact.agentRunId) : false),
-      ),
+      artifacts: mergedArtifacts,
       changeSets: state.changeSets.filter(
         changeSet => changeSet.workspaceId === workspaceId || runIds.has(changeSet.agentRunId),
       ),
@@ -99,7 +148,13 @@ export function selectProjectState(
           (snapshot.agentRunId ? runIds.has(snapshot.agentRunId) : false),
       ),
       workflowEvents: state.workflowEvents.filter(
-        record => record.workspaceId === workspaceId || conversationIds.has(record.conversationId),
+        record => (
+          record.workspaceId === workspaceId || conversationIds.has(record.conversationId)
+        ) && (
+          visibleTurnIds.size === 0 ||
+          (typeof record.event.turnId === 'string' && visibleTurnIds.has(record.event.turnId)) ||
+          (record.event.type === 'assistant_message_started' && typeof record.event.messageId === 'string' && visibleMessageIds.has(record.event.messageId))
+        ),
       ),
       diagnosticLogs: state.diagnosticLogs.filter(log =>
         belongsToWorkspace(log, workspaceId, conversationIds, sessionIds, handoffIds, runIds),
@@ -157,7 +212,7 @@ export function buildWorkbenchOverview(
         kind: conversation.type,
         title: conversation.type === 'group' ? workspace.name : conversation.title,
         subtitle: conversation.type === 'group' ? workspace.goal : `${workspace.name} / ${workspace.goal}`,
-        workspace: attachProjectMetadata(workspace, project.projectId),
+        workspace: attachProjectMetadata(workspace, project),
         conversation,
         targetAgentId: conversation.type === 'direct' ? participantAgentIds[0] : project.targetAgentId,
         participantAgentIds,
@@ -203,7 +258,7 @@ export function buildWorkbenchOverviewPage(
 
     return [{
       ...room,
-      workspace: attachProjectMetadata(room.workspace, project.projectId),
+      workspace: attachProjectMetadata(room.workspace, project),
     }]
   })
 
@@ -283,12 +338,17 @@ export function zipUrlFor(workspaceId: string): string {
  * Input: runtime workspace and project id.
  * Output: augmented workspace object.
  */
-function attachProjectMetadata(workspace: RuntimeAppState['workspaces'][number], projectId: string): FrontendWorkspace {
+function attachProjectMetadata(
+  workspace: RuntimeAppState['workspaces'][number],
+  project: Pick<StoredProjectRecord, 'projectId' | 'pinnedAt' | 'archivedAt'>,
+): FrontendWorkspace {
   return {
     ...workspace,
-    projectId,
+    projectId: project.projectId,
     agentHubPreviewUrl: previewUrlFor(workspace.id),
     agentHubZipUrl: zipUrlFor(workspace.id),
+    pinnedAt: project.pinnedAt,
+    archivedAt: project.archivedAt,
   }
 }
 
@@ -309,6 +369,215 @@ function paginateMessages(
     hasMore: messages.length > pagedMessages.length,
     messages: pagedMessages,
   }
+}
+
+type DeliveryProjectionInput = {
+  workspaceId: string
+  conversationId?: string
+  currentVersionId?: string
+  versions: Array<{
+    versionId: string
+    sourceZipUrl: string
+    buildPreviewUrl?: string
+    buildStatus?: 'pending' | 'success' | 'failed'
+    buildLog?: string
+    createdAt: string
+    updatedAt: string
+  }>
+  deployments: Array<{
+    deploymentId: string
+    versionId: string
+    deployUrl: string
+    createdAt: string
+  }>
+}
+
+/**
+ * Builds the synthetic delivery artifacts derived from business-project metadata.
+ * Input: current project delivery metadata.
+ * Output: stable artifact records injected into the frontend state.
+ */
+function buildProjectDeliveryArtifacts(input: DeliveryProjectionInput): FrontendAppState['artifacts'] {
+  const artifacts: FrontendAppState['artifacts'] = []
+  const currentVersion = resolveCurrentDeliveryVersion(input)
+  const latestDeployment = resolveLatestDeployment(input)
+
+  if (currentVersion) {
+    artifacts.push({
+      id: `local-source-${currentVersion.versionId}`,
+      workspaceId: input.workspaceId,
+      type: 'zip',
+      title: '源码快照',
+      content: `版本 ${currentVersion.versionId} 的源码快照已保存，可直接下载。`,
+      url: currentVersion.sourceZipUrl,
+      createdByAgentId: 'system',
+      metadata: {
+        status: 'ready',
+        versionId: currentVersion.versionId,
+      },
+      createdAt: currentVersion.createdAt,
+    })
+
+    if (currentVersion.buildStatus === 'success' && currentVersion.buildPreviewUrl) {
+      artifacts.push({
+        id: `local-build-${currentVersion.versionId}`,
+        workspaceId: input.workspaceId,
+        type: 'web-preview',
+        title: '交付构建预览',
+        content: `版本 ${currentVersion.versionId} 的交付构建已完成，可直接查看构建产物。`,
+        url: currentVersion.buildPreviewUrl,
+        createdByAgentId: 'system',
+        metadata: {
+          status: 'ready',
+          versionId: currentVersion.versionId,
+          kind: 'build',
+        },
+        createdAt: currentVersion.updatedAt,
+      })
+    } else if (currentVersion.buildStatus === 'failed') {
+      artifacts.push({
+        id: `local-build-${currentVersion.versionId}`,
+        workspaceId: input.workspaceId,
+        type: 'deploy-status',
+        title: '交付构建状态',
+        content: clipDeliveryLog(
+          currentVersion.buildLog,
+          `版本 ${currentVersion.versionId} 的交付构建失败，可在代码面板重试。`,
+        ),
+        createdByAgentId: 'system',
+        metadata: {
+          status: 'failed',
+          versionId: currentVersion.versionId,
+          kind: 'build',
+        },
+        createdAt: currentVersion.updatedAt,
+      })
+    }
+  }
+
+  if (latestDeployment) {
+    artifacts.push({
+      id: `local-deploy-${latestDeployment.deploymentId}`,
+      workspaceId: input.workspaceId,
+      type: 'deploy-status',
+      title: '本地部署',
+      content: `版本 ${latestDeployment.versionId} 已部署到本地地址，可直接打开查看。`,
+      url: latestDeployment.deployUrl,
+      createdByAgentId: 'system',
+      metadata: {
+        status: 'ready',
+        versionId: latestDeployment.versionId,
+        kind: 'deployment',
+      },
+      createdAt: latestDeployment.createdAt,
+    })
+  }
+
+  return artifacts
+}
+
+/**
+ * Builds the synthetic delivery messages shown in the main chat flow.
+ * Input: current project delivery metadata plus one target conversation id.
+ * Output: stable system messages with inline delivery artifacts.
+ */
+function buildProjectDeliveryMessages(input: DeliveryProjectionInput & {
+  conversationId: string
+}): FrontendAppState['messages'] {
+  const messages: FrontendAppState['messages'] = []
+  const currentVersion = resolveCurrentDeliveryVersion(input)
+  const latestDeployment = resolveLatestDeployment(input)
+  const artifacts = buildProjectDeliveryArtifacts(input)
+
+  if (currentVersion) {
+    const versionArtifacts = artifacts.filter(artifact =>
+      artifact.id === `local-source-${currentVersion.versionId}` ||
+      artifact.id === `local-build-${currentVersion.versionId}`,
+    )
+    messages.push({
+      id: `local-version-message-${currentVersion.versionId}`,
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      senderType: 'system',
+      senderId: 'system',
+      content: currentVersion.buildStatus === 'success'
+        ? `已保存源码版本 ${currentVersion.versionId}，并生成了可用于交付的构建产物。`
+        : currentVersion.buildStatus === 'failed'
+          ? `已保存源码版本 ${currentVersion.versionId}，但交付构建失败。`
+          : `已保存源码版本 ${currentVersion.versionId}。`,
+      artifacts: versionArtifacts,
+      createdAt: currentVersion.updatedAt,
+    })
+  }
+
+  if (latestDeployment) {
+    const deploymentArtifacts = artifacts.filter(artifact => artifact.id === `local-deploy-${latestDeployment.deploymentId}`)
+    messages.push({
+      id: `local-deploy-message-${latestDeployment.deploymentId}`,
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      senderType: 'system',
+      senderId: 'system',
+      content: `本地部署已更新到 ${latestDeployment.versionId}。`,
+      artifacts: deploymentArtifacts,
+      createdAt: latestDeployment.createdAt,
+    })
+  }
+
+  return messages
+}
+
+/**
+ * Resolves the current delivery version, preferring the tracked current version id.
+ * Input: current delivery metadata.
+ * Output: matching version record or the newest fallback.
+ */
+function resolveCurrentDeliveryVersion(input: DeliveryProjectionInput) {
+  if (input.currentVersionId) {
+    const currentVersion = input.versions.find(version => version.versionId === input.currentVersionId)
+    if (currentVersion) {
+      return currentVersion
+    }
+  }
+
+  return input.versions
+    .slice()
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+}
+
+/**
+ * Resolves the newest local deployment record for one project.
+ * Input: current deployment metadata.
+ * Output: latest deployment or undefined.
+ */
+function resolveLatestDeployment(input: DeliveryProjectionInput) {
+  return input.deployments
+    .slice()
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+}
+
+/**
+ * Clips one delivery log into a short frontend-safe sentence.
+ * Input: optional raw build log and fallback summary.
+ * Output: compact delivery log excerpt.
+ */
+function clipDeliveryLog(log: string | undefined, fallback: string): string {
+  const normalized = log
+    ?.replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) {
+    return fallback
+  }
+  return normalized.length > 220 ? `${normalized.slice(0, 220)}...` : normalized
+}
+
+/**
+ * Normalizes one unknown timestamp-like value into a comparable ISO string.
+ * Input: unknown createdAt payload.
+ * Output: string timestamp or an empty fallback.
+ */
+function readTimestamp(value: unknown): string {
+  return typeof value === 'string' ? value : ''
 }
 
 /**

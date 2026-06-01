@@ -20,9 +20,18 @@ The current local chain covers:
 
 - `GET /api/health`
 - `GET /api/agents`
+- `GET /api/agents/:agentId`
+- `POST /api/agents`
+- `PATCH /api/agents/:agentId`
+- `DELETE /api/agents/:agentId`
 - `GET /api/workbench`
 - `GET /api/projects`
 - `GET /api/projects/:projectId`
+- `PATCH /api/projects/:projectId/metadata`
+- `PUT /api/projects/:projectId/pin`
+- `DELETE /api/projects/:projectId/pin`
+- `PUT /api/projects/:projectId/archive`
+- `DELETE /api/projects/:projectId/archive`
 - `GET /api/projects/:projectId/state`
 - `GET /api/projects/:projectId/files`
 - `GET /api/projects/:projectId/files/content`
@@ -53,7 +62,9 @@ The backend still keeps the Nest business modules for:
   - code selection, which defaults to `engineer` when no explicit target is given
 - Direct rooms stay fixed to one agent and do not show the mention picker.
 - Visible speaker identity comes from runtime routing and is no longer flattened to Orchestrator.
+- Built-in and custom child agents can now be viewed, created, edited, provider-switched, and deleted from the frontend through the business backend API.
 - The left workspace rail uses server-backed paging through `/api/workbench`.
+- The left workspace rail also supports backend-backed search, status filtering, sorting, pinning, and archiving.
 - The right chat pane loads only the active workspace state through `/api/projects/:projectId/state`.
 - Older messages load incrementally through the `messageLimit` window instead of loading the full conversation at startup.
 - The chat surface renders one grouped turn:
@@ -71,6 +82,20 @@ The backend still keeps the Nest business modules for:
   - preview panel
 - New workspaces no longer auto-seed a placeholder `index.html`.
 - If no previewable entry exists yet, the preview panel stays empty instead of fabricating a page.
+- Chat history recovery now uses turn-safe grouping:
+  - user messages, workflow events, and final replies are grouped by `turnId` when available
+  - older historical messages without `turnId` fall back to the nearest visible unmatched user turn
+  - the frontend no longer groups turns by array index
+- Project state recovery now keeps message and event windows aligned:
+  - `/api/projects/:projectId/state` still returns a recent message window
+  - returned `workflowEvents` are now restricted to the visible message window turns instead of full-history replay
+- The chat surface no longer fabricates routing placeholder bubbles such as "main brain is deciding who should reply".
+- Waiting placeholders are now limited to turns with a real streaming reply, so completed history no longer shows empty running cards after refresh.
+- Streaming chat replies now keep a frontend handoff stage:
+  - `streaming` while SSE deltas are arriving
+  - `awaiting_commit` after SSE finishes but before the persisted message is reloaded
+  - the streamed reply bubble stays visible during `awaiting_commit`, so the chat does not show a blank gap between stream finish and persisted reply recovery
+  - the persisted final reply appears first, and only then does the process block auto-collapse
 
 ## Local Preview
 
@@ -165,6 +190,26 @@ Result:
 - `agentHubFrontend` TypeScript check passed
 - `agentHubFrontend` production build passed
 
+Real local service smoke also passed on 2026-06-01:
+
+- `GET http://127.0.0.1:8787/api/health` returned `ok: true` with PostgreSQL storage and real agents enabled.
+- `GET http://127.0.0.1:8790/api/health` returned `ok: true`.
+- `GET http://127.0.0.1:5173` returned `200`.
+- Agent CRUD smoke passed through `agentHubBackend`:
+  - create custom agent
+  - update provider and description
+  - reject deleting built-in agent
+  - delete custom agent
+- Workspace metadata smoke passed through `agentHubBackend`:
+  - update `pinned`
+  - update `archived`
+  - read filtered `status=archived`
+  - restore metadata cleanly
+- Real group-room message stream smoke passed through `POST /api/projects/:projectId/messages/stream`:
+  - explicit `@product-manager` message returned `speaker_direct`
+  - final visible reply sender was `product-manager`
+  - SSE stream completed and state reload reflected the persisted reply
+
 Recommended real-chain verification after starting local services:
 
 ```powershell
@@ -174,17 +219,27 @@ npx vitest run tests/real/agent-chain-probe.test.ts -t "keeps an unapproved plan
 npx vitest run tests/real/agent-chain-probe.test.ts -t "probes the approved main chain through engineer, reviewer, and synthesis" --reporter=verbose
 ```
 
+## Local Delivery Flow
+
+The current local frontend now exposes a first usable delivery flow inside the code workspace dialog:
+
+- save the current workspace repo into a source snapshot
+- build a delivery artifact from the latest saved version
+- publish that built artifact into the local `/deploy/*` route
+- open the latest built preview, deployed page, or source archive directly from the UI
+
+The backend also injects the latest source/build/deploy status back into the main chat history as stable system cards, so refreshes no longer lose the latest local delivery result.
+
 ## Current Limits
 
 The current local implementation still does not cover:
 
 - cloud deployment flow
-- deployment UI
 - one-click version diff and release UX
 - framework preview outside the first local phase, such as Angular
 - desktop and mobile clients
 
-`/deploy/*` is still only a backend artifact route and is not wired into the current frontend local flow.
+The current local deployment flow is still a backend-managed static publish step. It is not yet a true agent-driven cloud release workflow.
 
 ## Git Workflow
 

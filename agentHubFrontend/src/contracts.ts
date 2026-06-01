@@ -59,6 +59,8 @@ export type Workspace = {
   projectBrief: string
   agentHubPreviewUrl?: string
   agentHubZipUrl?: string
+  pinnedAt?: string
+  archivedAt?: string
   pinnedMessageIds: string[]
   createdAt: string
   updatedAt: string
@@ -85,6 +87,7 @@ export type Message = {
   id: string
   workspaceId: string
   conversationId: string
+  turnId?: string
   senderType: SenderType
   senderId: string
   content: string
