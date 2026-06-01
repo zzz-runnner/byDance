@@ -1,15 +1,43 @@
 # AgentHub Backend
 
-NestJS business backend for the AgentHub demo. This service does not replace the AgentHub runtime. It binds a business `projectId` to an AgentHub `workspaceId`, then handles product-version persistence, source zip snapshots, Docker build previews, and local deployment artifacts.
+`agentHubBackend` is now the unified Nest backend for local AgentHub work.
 
-## Responsibilities
+The current local live path is:
 
-- Create or bind business projects to AgentHub workspaces.
-- Proxy project chat messages to AgentHub SSE workflow streams.
-- Keep project metadata in local storage.
-- Save accepted workspace state as Git tags and source zip snapshots.
-- Build version artifacts with Docker and expose `/build-preview/...` static URLs.
-- Publish the latest build artifact to `/deploy/...`.
+`agentHubFrontend -> agentHubBackend -> agentHub runtime -> real agents`
+
+This backend keeps the Nest business modules from `origin/main`, and also carries the local adapter capabilities that the frontend needs for real local workspaces.
+
+The old `locateBackend` compatibility layer has been removed. Local startup and local API access now use `agentHubBackend` only.
+
+## Current Responsibilities
+
+- create and bind business projects to AgentHub workspaces
+- expose `/api/workbench` for paged workspace summaries
+- expose `/api/projects/:projectId/state` for one active workspace state page
+- proxy project message SSE to the runtime
+- proxy workspace zip, preview, file tree, file content, diff, and preview-target APIs
+- run local preview capability detection and local preview builds
+- keep project metadata in local storage or PostgreSQL
+- keep version, build, and deployment service modules available for later product flows
+
+## Local Preview Behavior
+
+The preview chain supports:
+
+- static HTML
+- browser-native module shell
+- Vite React
+- Vite Vue
+- Vite Svelte
+
+Preview build behavior:
+
+- source repo stays under `agentHub/data/workspaces/{workspaceId}/repo`
+- shared pnpm store stays under `agentHubBackend/data/pnpm-store`
+- build sandboxes stay under `agentHubBackend/data/build-sandboxes`
+- built preview outputs stay under `agentHubBackend/data/preview-outputs`
+- preview build does not write `node_modules`, `dist`, or runtime lockfiles back into the workspace repo
 
 ## Environment
 
@@ -20,57 +48,61 @@ PORT=8790
 CORS_ORIGIN=http://127.0.0.1:5173
 AGENTHUB_BASE_URL=http://127.0.0.1:8787
 AGENTHUB_RUNTIME_ROOT=../agentHub/data/workspaces
-APP_STORAGE_ROOT=storage
-```
-
-`AGENTHUB_RUNTIME_ROOT` must point at AgentHub's runtime workspace root. Each workspace repo is expected at:
-
-```text
-{AGENTHUB_RUNTIME_ROOT}/{workspaceId}/repo
-```
-
-Project metadata is stored in local JSON files by default:
-
-```text
+APP_STORAGE_ROOT=data
 APP_METADATA_STORE=local
 ```
 
-To use PostgreSQL for project metadata, set:
+Prefer `APP_STORAGE_ROOT` as the local runtime data root. `LOCATE_BACKEND_DATA_DIR` is no longer used.
+
+Optional PostgreSQL metadata storage:
 
 ```text
-APP_METADATA_STORE=postgres
 DATABASE_URL=postgres://agenthub:agenthub@127.0.0.1:5432/agenthub_business
 ```
-
-The backend creates the `business_projects` table automatically on startup. Source zips, build artifacts, deploy artifacts, and temporary build folders still stay on local disk under `APP_STORAGE_ROOT`.
 
 ## Commands
 
 ```bash
 npm install
 npm run dev
-npm run build
 npm run check
+npm run build
 ```
 
-Start AgentHub first, then start this backend.
+Start `agentHub` first, then start this backend.
 
-## Main API
+## Main Local API
 
 - `GET /api/health`
-- `POST /api/projects` creates a business project and AgentHub workspace, or binds an existing `workspaceId`.
+- `GET /api/agents`
+- `GET /api/workbench`
+- `POST /api/projects`
 - `GET /api/projects`
 - `GET /api/projects/:projectId`
-- `POST /api/projects/:projectId/messages/stream` proxies a message to AgentHub SSE.
-- `PUT /api/projects/:projectId/files` writes a manual edit back to the bound workspace repo.
-- `POST /api/projects/:projectId/versions` commits/tags the workspace repo and creates a source zip.
+- `GET /api/projects/:projectId/state`
+- `GET /api/projects/:projectId/files`
+- `GET /api/projects/:projectId/files/content`
+- `GET /api/projects/:projectId/diff`
+- `GET /api/projects/:projectId/preview-targets`
+- `GET /api/projects/:projectId/preview-capability`
+- `POST /api/projects/:projectId/preview-build`
+- `POST /api/projects/:projectId/messages/stream`
+- `GET /api/workspaces/:workspaceId/zip`
+- `GET /preview/runtime/*`
+- `GET /preview/*`
+- `GET /build-preview/*`
+
+Business-module endpoints still kept for later flows:
+
+- `POST /api/projects/:projectId/versions`
 - `GET /api/projects/:projectId/versions`
-- `GET /api/projects/:projectId/diff?v1=...&v2=...`
+- `GET /api/projects/:projectId/version-diff?v1=...&v2=...`
 - `GET /api/projects/:projectId/source.zip?versionId=...`
-- `POST /api/projects/:projectId/builds` builds a saved version.
-- `POST /api/projects/:projectId/deploy` publishes a built version.
+- `POST /api/projects/:projectId/builds`
+- `POST /api/projects/:projectId/deploy`
 
-Static artifact routes:
+## Current Limits
 
-- `/build-preview/{projectId}/{versionId}/index.html`
-- `/deploy/{projectId}/latest/index.html`
+- local frontend does not yet expose deployment UI
+- preview does not yet support Angular or broader framework matrix
+- local flow is focused on one active workbench window plus code/preview dialog, not multi-window desktop clients

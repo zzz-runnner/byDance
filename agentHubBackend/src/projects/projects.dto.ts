@@ -1,4 +1,77 @@
-import { IsBoolean, IsIn, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength } from 'class-validator'
+import { Transform, Type } from 'class-transformer'
+import {
+  IsArray,
+  IsBoolean,
+  IsIn,
+  IsInt,
+  IsNotEmpty,
+  IsObject,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+  ValidateNested,
+} from 'class-validator'
+
+export class ReplyReferenceDto {
+  @IsString()
+  @IsNotEmpty()
+  messageId!: string
+
+  @IsString()
+  @IsNotEmpty()
+  senderId!: string
+
+  @IsOptional()
+  @IsString()
+  senderName?: string
+
+  @IsString()
+  @IsNotEmpty()
+  excerpt!: string
+}
+
+export class CodeSelectionReferenceDto {
+  @IsString()
+  @IsNotEmpty()
+  filePath!: string
+
+  @IsString()
+  @IsNotEmpty()
+  selectedText!: string
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  startLine!: number
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  startColumn!: number
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  endLine!: number
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  endColumn!: number
+
+  @IsOptional()
+  @IsString()
+  language?: string
+
+  @IsOptional()
+  @IsString()
+  beforeContext?: string
+
+  @IsOptional()
+  @IsString()
+  afterContext?: string
+}
 
 export class CreateProjectDto {
   @IsString()
@@ -14,6 +87,15 @@ export class CreateProjectDto {
   @IsOptional()
   @IsIn(['dev', 'research', 'writing', 'chat'])
   workspaceType?: 'dev' | 'research' | 'writing' | 'chat'
+
+  @IsOptional()
+  @IsIn(['group', 'direct'])
+  conversationType?: 'group' | 'direct'
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  agentIds?: string[]
 
   @IsOptional()
   @IsString()
@@ -33,6 +115,20 @@ export class StreamProjectMessageDto {
   @IsOptional()
   @IsString()
   conversationId?: string
+
+  @IsOptional()
+  @IsString()
+  agentId?: string
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ReplyReferenceDto)
+  replyTo?: ReplyReferenceDto
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CodeSelectionReferenceDto)
+  codeSelection?: CodeSelectionReferenceDto
 }
 
 export class WriteWorkspaceFileDto {
@@ -52,4 +148,40 @@ export class UpdateProjectWorkflowDto {
   @IsOptional()
   @IsBoolean()
   accepted?: boolean
+}
+
+export class FileContentQueryDto {
+  @IsString()
+  @IsNotEmpty()
+  path!: string
+}
+
+export class ProjectStateQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  messageLimit?: number
+}
+
+export class WorkbenchQueryDto {
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  limit = 20
+
+  @IsOptional()
+  @IsString()
+  cursor?: string
+
+  @IsOptional()
+  @IsString()
+  q?: string
+}
+
+export class PreviewBuildQueryDto {
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => value === true || value === 'true')
+  @IsBoolean()
+  force?: boolean
 }

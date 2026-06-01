@@ -19,7 +19,7 @@ export class VersionsController {
     return this.versions.listVersions(projectId)
   }
 
-  @Get('diff')
+  @Get('version-diff')
   getDiff(
     @Param('projectId') projectId: string,
     @Query() query: DiffQueryDto,

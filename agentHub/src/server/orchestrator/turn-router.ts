@@ -1,8 +1,9 @@
 import { z } from 'zod'
 import { ExecutionReadinessSchema, WorkflowTaskStageSchema } from '@shared/contracts'
-import type { AgentDefinition, Conversation, ExecutionReadiness, WorkflowTaskStage, Workspace } from '@shared/contracts'
+import type { AgentDefinition, CodeSelectionReference, Conversation, ExecutionReadiness, ReplyReference, WorkflowTaskStage, Workspace } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import { createModelGateway } from '../model-gateway'
+import { buildReplyContextPayload, resolveReplyTargetAgentId } from './reply-context'
 
 export const InteractionModeSchema = z.enum(['chat', 'discussion', 'planning', 'awaiting_approval', 'execution'])
 export type InteractionMode = z.infer<typeof InteractionModeSchema>
@@ -68,6 +69,8 @@ type LocalRouteInput = {
   conversation?: Conversation
   workspace?: Workspace
   agent?: AgentDefinition
+  replyTo?: ReplyReference
+  codeSelection?: CodeSelectionReference
 }
 
 type ModelRouteInput = LocalRouteInput & {
@@ -83,10 +86,12 @@ const CAPABILITY_PATTERN = /^(你能做什么|你可以做什么|你会什么|�
 const DISCUSSION_ONLY_PATTERN =
   /不要改代码|别改代码|不要动代码|别动代码|不要改动任何代码|先别改|先不改|只分析|只讨论|只读|先聊聊|先讨论|我们聊聊|先确认|不执行|别执行|不要执行/i
 const PLANNING_PATTERN = /方案|计划|规划|设计一下|怎么改|怎么做|架构|实现思路|实施计划|plan|approach|architecture/i
+const SCOPE_REFINEMENT_PATTERN =
+  /只保留|只做|先做一个简单版|简化一点|跟之前一样|同用之前的技术栈|不用响应式|不需要响应式|去掉|去掉.*模块|keep only|just keep|same stack|no responsive|non-responsive|simplify the scope|simple demo/i
 const EXECUTION_APPROVAL_PATTERN =
   /开始实现|开始开发|开始执行|按.*(方案|计划|范围).*做|按.*实现|可以执行|可以开始|确认.*(执行|实现|开发)|直接实现|直接开发|不用再问|进入开发|go ahead|start implementation|start coding/i
 const EXECUTION_PATTERN =
-  /\/run|修改|修复|删除|提交|推送|部署|安装|运行|执行|重构|fix|delete|commit|push|deploy|install|run|execute|refactor|build/i
+  /\/run|修改|修复|删除|提交|推送|部署|安装|运行|执行|重构|fix|delete|commit|push|deploy|install|run|execute|refactor/i
 const HIGH_RISK_PATTERN = /删除|清空|覆盖|提交|推送|部署|安装|rm\s+-rf|git\s+push|git\s+reset|deploy|delete|remove|overwrite|commit|push|install/i
 
 /**
@@ -348,6 +353,25 @@ export function routeTurnLocally(input: LocalRouteInput): TurnRoute | undefined 
     })
   }
 
+  if (SCOPE_REFINEMENT_PATTERN.test(content)) {
+    return route({
+      interactionMode: 'planning',
+      toolPolicy: 'read_only',
+      source: 'local_rule',
+      reason: 'User is refining scope or simplifying the plan before approving implementation.',
+      size: content.length > 180 ? 'medium' : 'small',
+      risk: 'low',
+      needsModel: true,
+      needsCodebaseContext: false,
+      contextProfile: 'short',
+      modelProfile: 'router',
+      taskStage: 'planning',
+      executionReadiness: 'plan_ready',
+      needsUserConfirmation: true,
+      confidence: 0.92,
+    })
+  }
+
   if (EXECUTION_APPROVAL_PATTERN.test(content)) {
     return route({
       interactionMode: 'execution',
@@ -475,6 +499,7 @@ function buildRouterSystemPrompt(): string {
     '- Destructive, git mutation, deploy, install, delete, or push requests are high risk and should normally be awaiting_confirmation unless the user explicitly approved this exact action.',
     '- Phrases like build/create/generate/make an app, page, mini program, or platform are NOT automatically execution. Classify vague product requests as requirements_intake.',
     '- Only classify execution when the user explicitly approves implementation, uses /run, or asks for a concrete low-ambiguity change to an existing artifact.',
+    '- If replyContext shows that the user is replying to one child agent and the new message is short or ambiguous, keep that specialist as the likely visible speaker unless the new content clearly requires orchestration or another role.',
     '- Simple chat should use no_tools or read_only, router model, thinking disabled.',
     'JSON shape:',
     JSON.stringify({
@@ -513,6 +538,18 @@ function buildRouterUserPrompt(input: LocalRouteInput): string {
   return JSON.stringify(
     {
       userMessage: input.content,
+      replyContext: buildReplyContextPayload(input.replyTo, input.agent ? [input.agent] : []),
+      codeSelection: input.codeSelection
+        ? {
+            filePath: input.codeSelection.filePath,
+            language: input.codeSelection.language,
+            startLine: input.codeSelection.startLine,
+            startColumn: input.codeSelection.startColumn,
+            endLine: input.codeSelection.endLine,
+            endColumn: input.codeSelection.endColumn,
+            selectedText: input.codeSelection.selectedText.slice(0, 1_200),
+          }
+        : undefined,
       workspace: input.workspace
         ? {
             id: input.workspace.id,
@@ -560,9 +597,34 @@ function parseRouterResponse(content: string): TurnRoute {
  * Conservative fallback when the router model is unavailable.
  * Input: raw message. Output: safe route.
  */
-function fallbackRoute(content: string): TurnRoute {
+function fallbackRoute(content: string, replyTo?: ReplyReference): TurnRoute {
   const highRisk = HIGH_RISK_PATTERN.test(content)
   const explicitExecution = EXECUTION_PATTERN.test(content) || EXECUTION_APPROVAL_PATTERN.test(content)
+  const repliedAgentId =
+    replyTo && replyTo.senderId !== 'orchestrator' && replyTo.senderId !== 'user'
+      ? replyTo.senderId
+      : undefined
+
+  if (repliedAgentId && !explicitExecution && !highRisk) {
+    return route({
+      interactionMode: 'discussion',
+      toolPolicy: 'read_only',
+      source: 'fallback',
+      reason: 'Router model unavailable; preserved replied specialist context for a short discussion turn.',
+      size: content.length > 180 ? 'medium' : 'small',
+      risk: 'low',
+      needsModel: true,
+      needsThinking: false,
+      needsCodebaseContext: false,
+      contextProfile: 'short',
+      modelProfile: 'router',
+      taskStage: 'chat',
+      executionReadiness: 'not_a_task',
+      needsUserConfirmation: false,
+      confidence: 0.42,
+    })
+  }
+
   return route({
     interactionMode: explicitExecution && !highRisk ? 'execution' : highRisk ? 'awaiting_approval' : 'discussion',
     toolPolicy: explicitExecution && !highRisk ? 'auto_safe' : highRisk ? 'ask_before_write' : 'read_only',
@@ -615,7 +677,7 @@ export async function routeTurnWithModel(input: ModelRouteInput): Promise<Routed
     }
   } catch (error) {
     return {
-      route: fallbackRoute(input.content),
+      route: fallbackRoute(input.content, input.replyTo),
       elapsedMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error),
     }

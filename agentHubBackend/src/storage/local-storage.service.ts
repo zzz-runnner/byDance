@@ -9,7 +9,7 @@ export class LocalStorageService implements OnModuleInit {
   private readonly runtimeRoot: string
 
   constructor(private readonly config: ConfigService) {
-    this.storageRoot = path.resolve(process.cwd(), this.config.get<string>('APP_STORAGE_ROOT', 'storage'))
+    this.storageRoot = path.resolve(process.cwd(), this.config.get<string>('APP_STORAGE_ROOT', 'data'))
     this.runtimeRoot = path.resolve(process.cwd(), this.config.get<string>('AGENTHUB_RUNTIME_ROOT', '../agentHub/data/workspaces'))
   }
 

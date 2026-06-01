@@ -1,8 +1,8 @@
 # AgentHub Frontend
 
-AgentHub Web frontend is split out from `E:\byDance\agentHub` and keeps its own dependencies, lockfile, build output, and runtime commands.
+AgentHub Web frontend keeps its own dependencies, lockfile, build output, and runtime commands.
 
-This directory is not an npm workspace package and does not depend on the AgentHub runtime through `file:` links. The local API is expected to run separately from `E:\byDance\agentHub`.
+This directory is not an npm workspace package and does not depend on the AgentHub runtime through `file:` links. The frontend talks to the business backend, and the business backend owns the bridge to AgentHub Runtime.
 
 ## Commands
 
@@ -14,42 +14,77 @@ npm run check
 npm run preview
 ```
 
-## Runtime Link
+## Backend Link
 
 - Dev server: `http://127.0.0.1:5173`
-- Backend API proxy target: `http://127.0.0.1:8787`
-- API endpoints consumed by the frontend: `/api/state`, `/api/messages/stream`, `/api/workspaces`, `/api/conversations`
-- Preview assets are proxied through `/preview`
+- Business backend proxy target: `http://127.0.0.1:8790`
+- API endpoints consumed by the frontend:
+  - `/api/projects`
+  - `/api/agents`
+  - `/api/projects/:projectId/state`
+  - `/api/projects`
+  - `/api/projects/:projectId/messages/stream`
+- Preview and delivery assets are proxied through `/preview`, `/build-preview`, and `/deploy`
 
-If the AgentHub runtime API is unavailable, the frontend falls back to local demo data.
+The frontend is now `live-only`. If the business backend API is unavailable, the page shows a blocking error state instead of falling back to local demo data.
+
+## Current UI Status
+
+- One workspace maps to one chat window in the web workbench.
+- AI-authored replies, process summaries, and artifact text now render through one controlled Markdown pipeline based on `react-markdown + remark-gfm`.
+- Group workspaces support a WeChat-style `@` mention picker for child agents inside the composer.
+- Direct workspaces keep a fixed target agent and do not open the `@` picker.
+- Chat bubbles now support WeChat-style reply quotes:
+  - Clicking `引用` opens a quote bar above the composer instead of inserting template text into the textarea.
+  - Sent user messages persist a structured `replyTo` relationship, and the quote header still renders after refresh.
+  - The outgoing payload now sends `content + replyTo`, so backend routing and agent prompts can use the real quoted target.
+- Composer shortcut chips still exist as a fallback, and all insertions respect the current caret position.
+- One explicit group-chat `@agent` mention now routes to that child agent for the visible reply instead of always falling back to Orchestrator.
+- Non-mention specialist questions can route to one visible child agent through runtime routing metadata, so the final bubble can show the real specialist instead of a forced Orchestrator summary.
+- Refresh restores the last active workspace from `localStorage`.
+- Chat switches open at the latest message, keep follow-scroll during nearby streaming, and show a jump-to-bottom button when the user scrolls away from the bottom.
+- The chat list renders temporary routing and reply placeholders so the user sees waiting bubbles before the final streamed message arrives.
+- Each user turn renders as one chat block with the user message, a `本轮过程` section, inline artifact cards, and the final agent result.
+- `本轮过程` stays expanded while a turn is active, auto-collapses after completion, and stays open for failed or partial turns.
+- `本轮过程` now shows structured execution cards for routing, dispatch, progress, logs, validation, synthesis, and reply output, with readable log excerpts inside the chat stream.
+- Artifact cards inside the chat stream stay compact by default and surface only the key summary, while the full preview, diff, review, and long text remain in the artifact dialog.
+- Preview, diff, review, zip, and text artifacts live inside the main chat stream.
+- Preview dialogs now show `loading / slow / error` states before the iframe becomes ready.
+- The first page load now shows a blocking loading screen, and backend disconnection shows a blocking error screen with retry.
+- AI Markdown output is lightly normalized before rendering, so noisy separators, empty bullets, empty headings, incomplete fences, and conversational soft line breaks do not break the chat layout.
+- Fenced code blocks render inside a shared code shell with language labels and copy actions, while raw HTML remains disabled.
 
 ## Boundary
 
-- Frontend owns UI, local demo fixtures, browser state, and Vite build output.
-- `E:\byDance\agentHub` owns AgentHub runtime, local API, CLI, orchestration, adapters, workspace runtime, and storage.
-- Business backend is intentionally out of scope for this split.
+- Frontend owns UI, browser state, and Vite build output.
+- `E:\byDance\agentHubBackend` owns business projects, conversations, versions, builds, deployments, and the API contract consumed by the frontend.
+- `E:\byDance\agentHub` owns AgentHub Runtime, local API, CLI, orchestration, adapters, workspace runtime, and storage.
 
-## 当前状态
+## Current Notes
 
-- 背景动效已从 `tsParticles` 粒子层改为纯 CSS 彩色模糊流光遮罩，不再使用粒子点和连线。
-- `src/components/BackgroundCanvas.tsx` 保留原组件名，内部只渲染非交互式装饰层。
-- `src/styles/effects.css` 增加青蓝、洋红、紫色和暖金的慢速柔焦覆盖层，并保持 `pointer-events: none`，不影响工作台点击、输入和滚动。
-- 工作区列表已收紧卡片高度，避免左侧工作区卡片被网格拉伸出过多底部留白。
-- 聊天区正文、输入框和卡片辅助文字已提升字号，消息操作按钮常态显示。
-- 当前工作台背景图片使用 `src/asset/background/newBG.png`。
-- 后端 API 未运行时，页面仍会回退到本地 demo 数据；后端运行在 `127.0.0.1:8787` 后会通过 Vite proxy 进入 live 状态。
-- 当前目录已初始化为 Git 仓库，`main` 分支跟踪 `origin/main`，远程地址为 `git@github.com:zzz-runnner/agentHubFrontend.git`。
+- Background motion is implemented with CSS decorative layers instead of `tsParticles`.
+- The current workbench background image is `src/asset/background/newBG.png`.
+- The frontend is managed under the repository root `E:\byDance`, but keeps its own dependency and build configuration.
+- The old page-level mock/demo fallback path has been removed from the local operator flow.
+- Raw HTML is still disabled in the Markdown renderer; the current scope is safe Markdown plus GFM features.
+- In remote desktop or remote-control environments, animated blur layers plus React dev-mode double render can appear as page flicker. Verify this outside the remote session before classifying it as a frontend callback or state-loop bug.
 
-## 验证记录
+## Verification
 
-最近一次前端背景动效接入后已执行：
+Latest frontend verification for this checkpoint:
 
 ```bash
 npm run check
 npm run build
-Invoke-WebRequest http://127.0.0.1:5173/ -UseBasicParsing -TimeoutSec 5
 ```
 
-结论：TypeScript 类型检查通过，Vite 生产构建通过，开发服务首页返回 `HTTP 200`。
+Result:
 
-现在仓库已初始化，后续改动提交前应执行 `git diff --check`。
+- TypeScript type-check passed
+- Vite production build passed
+
+Before future commits, run:
+
+```bash
+git diff --check
+```

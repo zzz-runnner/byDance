@@ -9,7 +9,7 @@ import { AppModule } from './app.module'
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule)
   const config = app.get(ConfigService)
-  const storageRoot = path.resolve(process.cwd(), config.get<string>('APP_STORAGE_ROOT', 'storage'))
+  const storageRoot = path.resolve(process.cwd(), config.get<string>('APP_STORAGE_ROOT', 'data'))
 
   app.enableCors({
     origin: config.get<string>('CORS_ORIGIN', 'http://127.0.0.1:5173'),

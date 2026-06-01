@@ -1,10 +1,13 @@
-import type { AgentDefinition, Conversation, MainBrainTurn, RoutingTaskBrief } from '@shared/contracts'
+import type { AgentDefinition, CodeSelectionReference, Conversation, MainBrainTurn, ReplyReference, RoutingTaskBrief } from '@shared/contracts'
+import { resolveReplyTargetAgentId } from './reply-context'
 
 export type RoutingInput = {
   content: string
   conversation: Conversation
   agents: AgentDefinition[]
   targetAgentId?: string
+  replyTo?: ReplyReference
+  codeSelection?: CodeSelectionReference
 }
 
 /**
@@ -51,7 +54,10 @@ function taskBrief(agentId: string, task: string, expectedOutput: string): Routi
  * Input: user message, conversation, agents, and optional explicit target. Output: main-brain turn.
  */
 export function decideRouting(input: RoutingInput): MainBrainTurn {
-  const mentionedAgentId = input.targetAgentId ?? findMentionedAgent(input.content, input.agents)
+  const mentionedAgentId =
+    input.targetAgentId ??
+    findMentionedAgent(input.content, input.agents) ??
+    resolveReplyTargetAgentId(input.replyTo, input.agents)
   if (mentionedAgentId) {
     return {
       kind: 'dispatch_agents',
@@ -65,6 +71,26 @@ export function decideRouting(input: RoutingInput): MainBrainTurn {
           input.content,
           'Return a concise result for the selected direct agent task.',
         ),
+      ],
+    }
+  }
+
+  if (input.codeSelection && input.agents.some(agent => agent.id === 'engineer')) {
+    return {
+      kind: 'dispatch_agents',
+      targetAgents: ['engineer'],
+      execution: 'serial',
+      speakerAgentId: 'engineer',
+      finalizationMode: 'speaker_direct',
+      dispatches: [
+        {
+          ...taskBrief(
+            'engineer',
+            input.content,
+            'Use the supplied code selection context and return the concrete implementation result.',
+          ),
+          codeSelection: input.codeSelection,
+        },
       ],
     }
   }

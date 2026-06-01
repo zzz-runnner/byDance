@@ -24,6 +24,8 @@ export type DeliveryIssueSeverity = 'info' | 'warning' | 'blocking'
 export type ReviewVerdict = 'pass' | 'partial' | 'fail' | 'unknown'
 export type MainBrainSynthesisKind = 'final_answer' | 'continue_dispatch' | 'ask_clarification' | 'report_failure'
 export type MainBrainVerdict = 'success' | 'partial' | 'failed'
+export type MainBrainTurnKind = 'direct_answer' | 'dispatch_agents' | 'ask_clarification'
+export type TurnFinalizationMode = 'speaker_direct' | 'main_synthesis' | 'local_summary' | 'none'
 
 export type ChangedFile = {
   path: string
@@ -47,6 +49,7 @@ export type Artifact = {
 
 export type Workspace = {
   id: string
+  projectId?: string
   name: string
   goal: string
   workspaceType: WorkspaceType
@@ -54,6 +57,8 @@ export type Workspace = {
   runtimeType: RuntimeType
   runtimeStatus: RuntimeStatus
   projectBrief: string
+  agentHubPreviewUrl?: string
+  agentHubZipUrl?: string
   pinnedMessageIds: string[]
   createdAt: string
   updatedAt: string
@@ -69,6 +74,13 @@ export type Conversation = {
   updatedAt: string
 }
 
+export type ReplyReference = {
+  messageId: string
+  senderId: string
+  senderName?: string
+  excerpt: string
+}
+
 export type Message = {
   id: string
   workspaceId: string
@@ -76,6 +88,7 @@ export type Message = {
   senderType: SenderType
   senderId: string
   content: string
+  replyTo?: ReplyReference
   artifacts: Artifact[]
   createdAt: string
 }
@@ -95,6 +108,18 @@ export type RuntimePolicy = {
   allowNetwork: boolean
   allowShell: boolean
   maxRunSeconds: number
+}
+
+export type AgentSpeakerMode = 'direct_speaker' | 'worker_only' | 'either'
+
+export type AgentRoutingProfile = {
+  routingSummary: string
+  responsibilities: string[]
+  goodAt: string[]
+  notFor: string[]
+  preferredStages: WorkflowTaskStage[]
+  exampleRequests: string[]
+  speakerMode: AgentSpeakerMode
 }
 
 export type AgentDefinition = {
@@ -122,6 +147,7 @@ export type AgentDefinition = {
   outputSchema: string
   isolation: Isolation
   skills: string[]
+  routingProfile?: AgentRoutingProfile
   source: 'built-in' | 'workspace' | 'custom'
   createdAt: string
   updatedAt: string
@@ -234,7 +260,22 @@ export type WorkflowEvent =
   | (WorkflowEventBase & { type: 'turn_started'; content: string; activeAgentId?: string })
   | (WorkflowEventBase & { type: 'workflow_received'; content: string })
   | (WorkflowEventBase & { type: 'routing_started'; content: string })
-  | (WorkflowEventBase & { type: 'routing_finished'; source: string; mode: string; execution: string; targetAgents: string[] })
+  | (WorkflowEventBase & {
+      type: 'routing_finished'
+      source: string
+      provider?: string
+      model?: string
+      error?: string
+      speakerAgentId?: string
+      finalizationMode?: TurnFinalizationMode
+      taskStage?: WorkflowTaskStage
+      executionReadiness?: ExecutionReadiness
+      needsUserConfirmation?: boolean
+      mode: string
+      brainKind?: MainBrainTurnKind
+      execution: string
+      targetAgents: string[]
+    })
   | (WorkflowEventBase & {
       type: 'task_stage_updated'
       taskStage: WorkflowTaskStage

@@ -1,13 +1,17 @@
-import type { AgentDefinition, Conversation, MainBrainSynthesis, Workspace } from '@shared/contracts'
+import type { AgentDefinition, CodeSelectionReference, Conversation, MainBrainSynthesis, ReplyReference, Workspace } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import type { ModelGatewayRequest } from '../model-gateway'
 import { selectModelForRoute, type TurnRoute } from './turn-router'
+import { buildReplyContextPayload } from './reply-context'
 
 type MainBrainReplyInput = {
   env: ServerEnv
   workspace: Workspace
   conversation: Conversation
   userMessage: string
+  replyTo?: ReplyReference
+  codeSelection?: CodeSelectionReference
+  agents?: AgentDefinition[]
   route?: TurnRoute
   fallbackText?: string
 }
@@ -18,6 +22,8 @@ type AgentSessionReplyInput = {
   conversation: Conversation
   agent: AgentDefinition
   userMessage: string
+  replyTo?: ReplyReference
+  codeSelection?: CodeSelectionReference
   sessionContext: string
   route?: TurnRoute
   fallbackText?: string
@@ -41,6 +47,28 @@ function jsonBlock(input: unknown): string {
 }
 
 /**
+ * Compacts one browser-selected code reference for final-response prompts.
+ * Input: optional code selection. Output: compact prompt payload.
+ */
+function buildCodeSelectionPayload(selection: CodeSelectionReference | undefined): Record<string, unknown> | undefined {
+  if (!selection) {
+    return undefined
+  }
+
+  return {
+    filePath: selection.filePath,
+    language: selection.language,
+    startLine: selection.startLine,
+    startColumn: selection.startColumn,
+    endLine: selection.endLine,
+    endColumn: selection.endColumn,
+    selectedText: selection.selectedText.slice(0, 1_200),
+    beforeContext: selection.beforeContext?.slice(0, 600),
+    afterContext: selection.afterContext?.slice(0, 600),
+  }
+}
+
+/**
  * Builds the model request for a direct main-brain final answer.
  * Input: workspace, conversation, user message, route, and fallback text. Output: text-generation request.
  */
@@ -57,6 +85,8 @@ export function buildMainBrainReplyRequest(input: MainBrainReplyInput): ModelGat
     ].join('\n'),
     userPrompt: jsonBlock({
       userMessage: input.userMessage,
+      replyContext: buildReplyContextPayload(input.replyTo, input.agents ?? []),
+      codeSelection: buildCodeSelectionPayload(input.codeSelection),
       workspace: {
         id: input.workspace.id,
         name: input.workspace.name,
@@ -111,6 +141,8 @@ export function buildAgentSessionReplyRequest(input: AgentSessionReplyInput): Mo
     ].join('\n'),
     userPrompt: jsonBlock({
       userMessage: input.userMessage,
+      replyContext: buildReplyContextPayload(input.replyTo, [input.agent]),
+      codeSelection: buildCodeSelectionPayload(input.codeSelection),
       workspace: {
         id: input.workspace.id,
         name: input.workspace.name,

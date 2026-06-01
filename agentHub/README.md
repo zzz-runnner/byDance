@@ -1,5 +1,14 @@
 # AgentHub Local
 
+## 2026-05-29 Local Routing and Chat UX
+
+- Group chat can now choose one visible child agent without an explicit `@mention` when the current turn clearly belongs to a single specialist role.
+- Group chat quote follow-ups now preserve the quoted child agent as the visible speaker by default, using the same priority tier as a weak `@mention` when that agent is still a participant in the current conversation.
+- This local routing is metadata-driven through `routingProfile`, so built-in agents and future custom agents can participate without a hardcoded role table.
+- Requirement questions prefer `product-manager`, implementation questions prefer `engineer`, and review or testing questions prefer `reviewer` when the turn does not need multi-agent execution.
+- `routing_finished` now carries `speakerAgentId` and `finalizationMode`, and the final persisted conversation message keeps the real child-agent `senderId` when one child agent is the visible speaker.
+- Review-stage specialist questions are also allowed to use the same single-speaker routing path instead of forcing an Orchestrator reply.
+
 ## 2026-05-25 业务后端存储方案决策
 
 - `E:\byDance\docs\开发具体方案及技术栈.md` 已调整为本地磁盘存储方案：源码 zip、构建产物和部署产物保存在业务后端服务器本地，不使用阿里云 OSS 或其他对象存储。
@@ -21,6 +30,7 @@
 ```bash
 $env:AGENTHUB_RUN_REAL_TESTS='true'
 npm run test:real:chain
+npx vitest run tests/real/agent-chain-probe.test.ts -t "keeps quoted engineer follow-ups with engineer in a real group room" --reporter=verbose
 ```
 
 ## 2026-05-25 Bridge、交付校验与自动返工
@@ -376,6 +386,7 @@ npm run chat -- --once "@main 我主要想做一个候选人投票的小程序�
 
 - 前端只暴露“工作区”，不再展示独立会话列表；一个群聊工作区和一个单聊工作区都表现为一个可切换工作区。
 - 群聊工作区：默认由 Orchestrator 判断、拆解和调度；用户在群聊中 `@engineer`、`@reviewer` 等子 Agent 时，目标 Agent 在群聊上下文中定向回复。
+- 群聊工作区里如果用户明确 `@单个 Agent` 且当前回合不需要进入执行链路，该子 Agent 会直接成为可见回复者；只有多 Agent 调度或综合总结时才由 Orchestrator 出声。
 - 单聊工作区：固定发送给一个目标 Agent，适合明确任务、复查或一对一上下文沉淀。
 - 后端和数据库仍保留 `workspace + conversation`，前端通过 `WorkspaceRoom` 自动选择每个 workspace 的 primary internal conversation，并隐藏这层实现细节。
 

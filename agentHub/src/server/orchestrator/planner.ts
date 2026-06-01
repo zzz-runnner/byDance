@@ -1,4 +1,4 @@
-import type { AgentDefinition, AppState, Conversation, MainBrainTurn, TurnFinalizationMode, Workspace } from '@shared/contracts'
+import type { AgentDefinition, AppState, Conversation, MainBrainTurn, ReplyReference, TurnFinalizationMode, Workspace } from '@shared/contracts'
 import { MainBrainTurnSchema } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import { createModelGateway } from '../model-gateway'
@@ -54,6 +54,12 @@ function buildPlannerSystemPrompt(route?: TurnRoute): string {
     'You are AgentHub Main Brain, a model-backed coordinator for a local multi-agent dev workspace.',
     'You are not a pure router. Answer the user directly when you can answer from the supplied workspace state, conversation state, or common reasoning.',
     'Dispatch child agents only when the task benefits from real tool use, implementation, verification, or deeper role-specific work.',
+    'The availableAgents payload includes routingProfile metadata. Treat responsibilities, goodAt, preferredStages, exampleRequests, and speakerMode as your primary routing signals.',
+    'In group conversations, if one available child agent clearly owns the question by domain responsibility, prefer that child agent as the only visible speaker instead of answering as orchestrator.',
+    'If replyContext points to one child agent and the new user message does not clearly switch topics, prefer that same child agent as the visible speaker.',
+    'When taskStage is requirements_intake, planning, or awaiting_confirmation, prefer a direct_speaker child agent whose preferredStages include that stage and who does not need file writes for a first response.',
+    'Do not let a file-writing implementation agent take first-speaker ownership of a requirement-intake or planning turn unless the user explicitly selected that agent by @mention or direct chat.',
+    'When taskStage is review, prefer the best review-focused direct_speaker child agent instead of orchestrator whenever one agent can give the verdict directly.',
     'For vague product requests such as "build an app", "make a mini program", "create a platform", first run requirement intake or ask clarification. Do not start engineering in the same turn.',
     'If taskStage is requirements_intake, ask concise clarification questions or dispatch only product-manager for requirement clarification.',
     'If taskStage is planning or awaiting_confirmation, do not dispatch engineer. Ask the user to confirm the plan before implementation.',
@@ -61,6 +67,7 @@ function buildPlannerSystemPrompt(route?: TurnRoute): string {
     'For confirmed implementation tasks, usually dispatch engineer, then reviewer in serial order. Include product-manager first only when scope still needs a short structured task package.',
     'For review-only tasks, usually dispatch reviewer only.',
     'Choose exactly one visible speaker for the turn. If a child agent should be the only visible speaker, set speakerAgentId to that agent and finalizationMode to speaker_direct. If multiple child agents will run and the main brain should show the final answer, set speakerAgentId to orchestrator and finalizationMode to main_synthesis.',
+    'Do not let orchestrator answer specialist product, engineering, or review questions in a group room when one child agent can answer directly.',
     'Never expose both a child agent and the orchestrator as visible speakers in the same turn.',
     'For normal chat, status questions, workspace-member questions, explanations, or clarification needs, answer directly or ask a clarification.',
     'Never fabricate child-agent results. If you dispatch agents, only describe what you are launching.',
@@ -243,6 +250,8 @@ export async function decideRoutingWithPlanner(input: PlannerInput): Promise<Pla
       workspace: input.workspace,
       conversation: input.conversation,
       userMessage: input.content,
+      replyTo: input.replyTo,
+      codeSelection: input.codeSelection,
       agents: input.agents,
     })
     contextTokenEstimate = estimateTokenCount(contextPackage)

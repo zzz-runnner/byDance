@@ -2,26 +2,13 @@ import type {
   AgentDefinition,
   AppState,
   Conversation,
+  LiveWorkflowEvent,
   Message,
-  RuntimeEvent,
-  Workspace,
   WorkspaceSignal,
+  WorkspaceRoom,
   WorkflowEvent,
   WorkflowEventRecord,
 } from './types'
-
-export type WorkspaceRoomKind = 'group' | 'direct'
-
-export type WorkspaceRoom = {
-  id: string
-  kind: WorkspaceRoomKind
-  title: string
-  subtitle: string
-  workspace: Workspace
-  conversation: Conversation
-  targetAgentId?: string
-  participantAgentIds: string[]
-}
 
 const STAGE_LABELS: Record<string, string> = {
   chat: '自由对话',
@@ -100,7 +87,7 @@ export function workspaceRooms(state: AppState): WorkspaceRoom[] {
       const title = conversation.type === 'group' ? workspace.name : conversation.title
       const subtitle = conversation.type === 'group' ? workspace.goal : `${workspace.name} / ${workspace.goal}`
 
-      const room: WorkspaceRoom = {
+      return {
         id: workspace.id,
         kind: conversation.type,
         title,
@@ -108,10 +95,15 @@ export function workspaceRooms(state: AppState): WorkspaceRoom[] {
         workspace,
         conversation,
         participantAgentIds,
+        signal: {
+          runningAgents: 0,
+          latestEventLabel: '暂无新事件',
+          artifactCount: 0,
+          messageCount: 0,
+        },
+        lastActivityAt: conversation.updatedAt,
         ...(targetAgentId ? { targetAgentId } : {}),
-      }
-
-      return room
+      } satisfies WorkspaceRoom
     })
     .filter((room): room is WorkspaceRoom => Boolean(room))
     .sort((left, right) => right.conversation.updatedAt.localeCompare(left.conversation.updatedAt))
@@ -131,7 +123,7 @@ export function firstWorkspaceRoomId(state: AppState): string {
  * Input: room kind.
  * Output: localized room kind label.
  */
-export function workspaceRoomKindLabel(kind: WorkspaceRoomKind): string {
+export function workspaceRoomKindLabel(kind: WorkspaceRoom['kind']): string {
   return kind === 'group' ? '群聊工作区' : '单聊工作区'
 }
 
@@ -171,33 +163,84 @@ export function formatTime(value: string): string {
  */
 export function eventLabel(event: WorkflowEvent): string {
   switch (event.type) {
+    case 'turn_started':
+      return '用户发起新任务'
+    case 'workflow_received':
+      return '主流程已接收任务'
+    case 'routing_started':
+      return '开始判断任务路由'
+    case 'routing_finished':
+      return `路由完成，目标 ${event.targetAgents.join(', ')}`
     case 'task_stage_updated':
       return `阶段更新：${STAGE_LABELS[event.taskStage] ?? event.taskStage}`
+    case 'context_started':
+      return `开始整理 ${event.scope} 上下文`
+    case 'context_finished':
+      return `上下文完成，约 ${event.tokenEstimate} tokens`
+    case 'model_call_started':
+      return `开始调用 ${event.provider}`
+    case 'model_call_finished':
+      return `模型调用完成，耗时 ${Math.round(event.elapsedMs)}ms`
+    case 'model_call_failed':
+      return `模型调用失败：${event.error}`
+    case 'assistant_message_started':
+      return '开始流式回复'
+    case 'assistant_delta':
+      return '正在流式回复'
+    case 'assistant_message_finished':
+      return '回复完成'
+    case 'assistant_message_error':
+      return `回复失败：${event.error}`
+    case 'handoff_created':
+      return `创建任务包给 ${event.agentName}`
     case 'agent_task_dispatched':
       return `派发给 ${event.agentName}`
+    case 'handoff_updated':
+      return `${event.agentName} 状态更新为 ${event.status}`
     case 'agent_started':
       return `${event.agentName} 开始执行`
+    case 'agent_progress':
+      return `${event.agentName} 更新了执行进度`
+    case 'agent_output_started':
+      return `${event.agentName} 开始输出 ${event.stream}`
+    case 'agent_stdout_delta':
+    case 'agent_stderr_delta':
+      return `${event.agentName} 持续输出日志`
+    case 'agent_output_finished':
+      return `${event.agentName} 输出结束`
     case 'agent_finished':
-      return `${event.agentName} ${event.status === 'success' ? '完成' : '失败'}`
+      return `${event.agentName} ${event.status === 'success' ? '完成' : event.status === 'partial' ? '部分完成' : '失败'}`
+    case 'delivery_validation_finished':
+      return `交付验证 ${event.status}`
+    case 'review_verdict':
+      return `Reviewer 结论：${event.verdict}`
+    case 'artifact_created':
+      return `生成产物：${event.title}`
+    case 'change_set_created':
+      return '生成变更集'
     case 'preview_ready':
       return '预览已就绪'
     case 'zip_ready':
       return '源码包已生成'
-    case 'assistant_delta':
-      return '正在流式回复'
+    case 'agent_session_started':
+      return `${event.agentName} 会话开始`
+    case 'agent_session_finished':
+      return `${event.agentName} 会话结束`
+    case 'synthesis_started':
+      return '开始汇总 Agent 输出'
+    case 'synthesis_finished':
+      return `汇总完成：${event.synthesisKind}`
     case 'workflow_finished':
-      return '本轮工作流完成'
-    default:
-      return event.type.replaceAll('_', ' ')
+      return '工作流完成'
   }
 }
 
 /**
- * Converts workflow events into the recent runtime event model used by the UI.
- * Input: persisted workflow events and live runtime events.
- * Output: newest runtime events first.
+ * Converts workflow events into the recent live event model used by the UI.
+ * Input: persisted workflow events and live streamed workflow events.
+ * Output: newest workflow events first.
  */
-export function mergeRuntimeEvents(records: WorkflowEventRecord[], liveEvents: RuntimeEvent[]): RuntimeEvent[] {
+export function mergeWorkflowEvents(records: WorkflowEventRecord[], liveEvents: LiveWorkflowEvent[]): LiveWorkflowEvent[] {
   const persisted = records.map(record => ({
     ...record.event,
     receivedAt: record.createdAt,
@@ -208,10 +251,10 @@ export function mergeRuntimeEvents(records: WorkflowEventRecord[], liveEvents: R
 
 /**
  * Computes status signals for one workspace room.
- * Input: AppState, workspace room, and runtime events.
+ * Input: AppState, workspace room, and workflow events.
  * Output: summarized signal values for room cards and watchers.
  */
-export function workspaceRoomSignal(state: AppState, room: WorkspaceRoom, events: RuntimeEvent[]): WorkspaceSignal {
+export function workspaceRoomSignal(state: AppState, room: WorkspaceRoom, events: LiveWorkflowEvent[]): WorkspaceSignal {
   const runningAgents = state.agentRuns.filter(
     run => run.workspaceId === room.workspace.id && run.conversationId === room.conversation.id && run.status === 'running',
   ).length

@@ -1,3 +1,5 @@
+import type { ConversationType } from '../types'
+
 export interface ProjectWorkflowSummary {
   lastEventTypes: string[]
   latestChangeSetId?: string
@@ -37,6 +39,8 @@ export interface ProjectMetadata {
   goal: string
   workspaceId: string
   conversationId?: string
+  conversationType?: ConversationType
+  targetAgentId?: string
   agentHubPreviewUrl: string
   agentHubZipUrl: string
   currentVersionId?: string

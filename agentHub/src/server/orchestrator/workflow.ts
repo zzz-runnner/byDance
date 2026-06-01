@@ -31,6 +31,8 @@ import {
   sliceChangedFiles,
 } from './artifacts'
 import { decideRoutingWithPlanner, type PlannedRoutingDecision } from './planner'
+import { selectDynamicVisibleSpeaker } from './dynamic-speaker-selection'
+import { resolveReplyContinuationAgentId } from './reply-context'
 import { synthesizeLocally, synthesizeWithMainBrain, type PlannedSynthesis } from './synthesis'
 import { runAutomaticRepairIfNeeded, type TaskBriefRunResult } from './repair'
 import {
@@ -89,6 +91,14 @@ export type WorkflowServices = {
 type TaskRunSessionScope = {
   session: AgentSession
   handoff: TaskHandoff
+}
+
+/**
+ * Returns whether this stage should still go through the planner and handoff path.
+ * Input: current task stage. Output: true when direct child-speaker shortcut should be skipped.
+ */
+function shouldKeepPlannerDispatch(taskStage: TurnRoute['taskStage'] | undefined): boolean {
+  return taskStage === 'requirements_intake' || taskStage === 'planning' || taskStage === 'awaiting_confirmation'
 }
 
 /**
@@ -185,9 +195,40 @@ function applyTaskStageGuard(
   conversation: Conversation,
   routing: PlannedRoutingDecision,
   route?: TurnRoute,
+  userContent?: string,
 ): PlannedRoutingDecision {
   if (!route || routing.decision.kind !== 'dispatch_agents') {
-    return routing
+    if (!route || route.taskStage !== 'requirements_intake' && route.taskStage !== 'planning') {
+      return routing
+    }
+
+    if (!userContent?.trim()) {
+      return routing
+    }
+
+    emitWorkflowEvent(services, {
+      type: 'agent_progress',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      runId: `routing-${conversation.id}`,
+      agentId: 'orchestrator',
+      agentName: '项目协调 Agent',
+      message: `当前处于${route.taskStage === 'requirements_intake' ? '需求对接' : '方案规划'}阶段，已改为由产品经理先接管本轮澄清。`,
+    })
+
+    return {
+      ...routing,
+      decision: {
+        kind: 'dispatch_agents',
+        finalResponse: '我先让产品经理跟你对接这一轮，把需求、范围和验收标准收清楚。',
+        execution: 'serial',
+        dispatches: [buildProductClarificationBrief(userContent, route.taskStage)],
+        targetAgents: ['product-manager'],
+        speakerAgentId: 'product-manager',
+        finalizationMode: 'speaker_direct',
+        internalNote: 'Task-stage guard converted a non-dispatch turn into a product-manager clarification dispatch.',
+      },
+    }
   }
 
   if (route.taskStage === 'execution' || route.taskStage === 'review') {
@@ -261,6 +302,33 @@ function applyTaskStageGuard(
 }
 
 /**
+ * Builds the self-contained product-manager brief used before execution is approved.
+ * Input: raw user request and the current non-execution task stage.
+ * Output: product-manager dispatch brief.
+ */
+function buildProductClarificationBrief(
+  userContent: string,
+  taskStage: Extract<TurnRoute['taskStage'], 'requirements_intake' | 'planning'>,
+): RoutingTaskBrief {
+  return {
+    agentId: 'product-manager',
+    task:
+      taskStage === 'requirements_intake'
+        ? `Clarify the user's intent, scope, modules, constraints, and acceptance criteria before implementation.\nUser request:\n${userContent}`
+        : `Refine the current plan into a concise product-facing proposal with scope, user flow, risks, and acceptance criteria.\nUser request:\n${userContent}`,
+    requiredContext: [
+      'workspace goal',
+      'recent conversation messages',
+      'current task stage',
+    ],
+    expectedOutput:
+      taskStage === 'requirements_intake'
+        ? 'A concise clarification reply or a structured requirement package that the user can confirm.'
+        : 'A concise final plan that the user can confirm before implementation starts.',
+  }
+}
+
+/**
  * Builds a context snapshot for storage and later retrieval.
  * Input: workspace, conversation, run id, and assembled context package. Output: snapshot record.
  */
@@ -299,7 +367,7 @@ type ReviewEvidence = {
     summary: string
     files: ChangedFile[]
   }
-  previewUrl: string
+  previewUrl?: string
   zipUrl: string
   sourceFileSummaries: ReviewSourceFileSummary[]
 }
@@ -362,10 +430,48 @@ async function buildReviewerEvidence(
           files: trackedFiles,
         }
       : undefined,
-    previewUrl: `/preview/${workspace.id}/index.html`,
+    previewUrl: await services.runtime.getDefaultPreviewUrl(workspace.id),
     zipUrl: `/api/workspaces/${workspace.id}/zip`,
     sourceFileSummaries,
   }
+}
+
+/**
+ * Builds lowercase aliases that can match one leading @ mention for an agent.
+ * Input: agent definition.
+ * Output: normalized alias strings ordered later by the caller when needed.
+ */
+function agentMentionAliases(agent: AgentDefinition): string[] {
+  const name = agent.name?.trim() ?? ''
+  const shortName = name ? name.split(/\s+/)[0] : ''
+  return [...new Set([agent.id, name, shortName]
+    .map(alias => alias.trim().toLowerCase())
+    .filter(Boolean))]
+}
+
+/**
+ * Removes one leading self-mention before sending content into a direct agent turn.
+ * Input: raw user content and the target agent definition.
+ * Output: content without the leading @alias when it matches the target agent.
+ */
+function stripLeadingAgentMention(content: string, agent: AgentDefinition): string {
+  const trimmed = content.trim()
+
+  if (!trimmed.startsWith('@')) {
+    return trimmed
+  }
+
+  const body = trimmed.slice(1).trim()
+  const lowerBody = body.toLowerCase()
+  const matchedAlias = agentMentionAliases(agent)
+    .sort((left, right) => right.length - left.length)
+    .find(alias => lowerBody === alias || lowerBody.startsWith(`${alias} `))
+
+  if (!matchedAlias) {
+    return trimmed
+  }
+
+  return body.slice(matchedAlias.length).trim()
 }
 
 /**
@@ -441,7 +547,7 @@ function augmentContextAssemblyWithReviewEvidence(
   const inputContext = JSON.stringify(payload, null, 2)
   const summaryLines = [
     assembly.summary,
-    `reviewEvidence: preview=${reviewEvidence.previewUrl} zip=${reviewEvidence.zipUrl}`,
+    `reviewEvidence: preview=${reviewEvidence.previewUrl ?? 'none'} zip=${reviewEvidence.zipUrl}`,
     reviewEvidence.latestChangeSet ? `reviewChangeSet: ${reviewEvidence.latestChangeSet.summary}` : 'reviewChangeSet: none',
     `sourceFileSummaries: ${reviewEvidence.sourceFileSummaries.length}`,
   ]
@@ -452,7 +558,7 @@ function augmentContextAssemblyWithReviewEvidence(
     tokenEstimate: Math.max(1, Math.ceil(inputContext.length / 4)),
     sourceRefs: [
       ...assembly.sourceRefs,
-      `preview:${reviewEvidence.previewUrl}`,
+      ...(reviewEvidence.previewUrl ? [`preview:${reviewEvidence.previewUrl}`] : []),
       `zip:${reviewEvidence.zipUrl}`,
       ...(reviewEvidence.latestChangeSet ? [`changeSet:${reviewEvidence.latestChangeSet.id}`] : []),
       ...reviewEvidence.sourceFileSummaries.map(file => `source:${file.path}`),
@@ -681,6 +787,7 @@ async function runTaskBrief(
     task: brief.task,
     requiredContext: brief.requiredContext,
     expectedOutput: brief.expectedOutput,
+    codeSelection: brief.codeSelection,
     agentScope: {
       id: agent.id,
       name: agent.name,
@@ -842,7 +949,10 @@ async function runTaskBrief(
 
   const afterSnapshot = await readRepoSnapshot(services.runtime, runtime.repoPath)
   const { patch, changedFiles } = diffRepoSnapshots(beforeSnapshot, afterSnapshot)
-  const previewReady = agent.id === 'engineer' && Boolean(runtime.previewUrl)
+  const previewUrl = agent.id === 'engineer'
+    ? await services.runtime.getDefaultPreviewUrl(workspace.id)
+    : undefined
+  const previewReady = agent.id === 'engineer' && Boolean(previewUrl)
   const validation = await runDeliveryValidation(agent, runtime.repoPath, brief, changedFiles, previewReady)
   if (validation) {
     emitWorkflowEvent(services, {
@@ -913,7 +1023,7 @@ async function runTaskBrief(
     changedFiles,
     baseCommit,
     sessionScope,
-    runtime.previewUrl,
+    previewUrl,
     options?.publishConversationMessage ?? true,
   )
 
@@ -965,6 +1075,227 @@ async function runTaskBrief(
     review: assessment.review,
     summary,
   }
+}
+
+/**
+ * Runs one lightweight or task-based child-agent turn while writing the visible reply into the current conversation.
+ * Input: workflow services, current state, workspace, conversation, target agent id, and raw user content.
+ * Output: updated application state after the directed child-agent turn finishes.
+ */
+async function runDirectedAgentConversationTurn(
+  workflowServices: WorkflowServices,
+  state: AppState,
+  workspace: Workspace,
+  conversation: Conversation,
+  agentId: string,
+  rawContent: string,
+  replyTo?: SendMessageInput['replyTo'],
+  codeSelection?: SendMessageInput['codeSelection'],
+): Promise<AppState> {
+  const agent = requiredById(state.agents, agentId, 'Agent')
+  const normalizedContent = stripLeadingAgentMention(rawContent, agent) || rawContent.trim()
+  const session = await ensureAgentSession(workflowServices.store, workspace, agent)
+  const localRoutePreview = routeTurnLocally({
+    content: normalizedContent,
+    workspace,
+    conversation,
+    agent,
+    replyTo,
+    codeSelection,
+  })
+  const previewWillStreamFinalText =
+    localRoutePreview && !routeAllowsExecution(localRoutePreview) && localRoutePreview.modelProfile === 'router'
+
+  if (
+    !normalizedContent.trim().toLowerCase().startsWith('/run') &&
+    !localRoutePreview?.localResponse &&
+    !previewWillStreamFinalText
+  ) {
+    emitWorkflowEvent(workflowServices, {
+      type: 'context_started',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      scope: 'agent_session',
+      agentId: agent.id,
+      agentName: agent.name,
+      sessionId: session.id,
+    })
+    emitWorkflowEvent(workflowServices, {
+      type: 'model_call_started',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      scope: 'agent_session',
+      provider: workflowServices.env.AGENTHUB_ORCHESTRATOR_PROVIDER,
+      model: localRoutePreview?.modelProfile === 'router'
+        ? workflowServices.env.AGENTHUB_ROUTER_MODEL
+        : workflowServices.env.AGENTHUB_ORCHESTRATOR_MODEL,
+      agentId: agent.id,
+      agentName: agent.name,
+      sessionId: session.id,
+    })
+  }
+
+  emitWorkflowEvent(workflowServices, {
+    type: 'agent_session_started',
+    workspaceId: workspace.id,
+    conversationId: conversation.id,
+    sessionId: session.id,
+    agentId: agent.id,
+    agentName: agent.name,
+    content: normalizedContent,
+  })
+
+  const latestState = await workflowServices.store.read()
+  const plannedTurn = await runAgentSessionTurn({
+    services: {
+      ...workflowServices,
+      streamAgentReply: replyInput => streamAndPersistAgentReply(workflowServices, replyInput),
+    },
+    state: latestState,
+    workspace,
+    conversation,
+    agent,
+    session,
+    content: normalizedContent,
+    replyTo,
+    codeSelection,
+  })
+  logDiagnostic(workflowServices, {
+    level: plannedTurn.routeError ? 'warn' : 'info',
+    category: 'routing',
+    workspaceId: workspace.id,
+    conversationId: conversation.id,
+    sessionId: plannedTurn.session.id,
+    agentId: agent.id,
+    message: conversation.type === 'direct' ? 'Resolved direct-agent turn route.' : 'Resolved group-directed agent turn route.',
+    data: {
+      route: summarizeTurnRoute(plannedTurn.route),
+      routeProvider: plannedTurn.routeProvider,
+      routeModel: plannedTurn.routeModel,
+      routeElapsedMs: plannedTurn.routeElapsedMs,
+      routeError: plannedTurn.routeError,
+    },
+  })
+  emitTaskStageUpdated(workflowServices, workspace, conversation, plannedTurn.route)
+  if (plannedTurn.contextTokenEstimate !== undefined) {
+    emitWorkflowEvent(workflowServices, {
+      type: 'context_finished',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      scope: 'agent_session',
+      agentId: agent.id,
+      agentName: agent.name,
+      sessionId: plannedTurn.session.id,
+      tokenEstimate: plannedTurn.contextTokenEstimate,
+      summary: `${agent.name} private session context.`,
+    })
+  }
+  if (plannedTurn.source === 'model' && plannedTurn.modelElapsedMs !== undefined) {
+    emitWorkflowEvent(workflowServices, {
+      type: 'model_call_finished',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      scope: 'agent_session',
+      provider: plannedTurn.provider ?? workflowServices.env.AGENTHUB_ORCHESTRATOR_PROVIDER,
+      model: plannedTurn.model ?? workflowServices.env.AGENTHUB_ORCHESTRATOR_MODEL,
+      agentId: agent.id,
+      agentName: agent.name,
+      sessionId: plannedTurn.session.id,
+      elapsedMs: plannedTurn.modelElapsedMs ?? 0,
+    })
+  } else if (plannedTurn.source === 'local_fallback') {
+    emitWorkflowEvent(workflowServices, {
+      type: 'model_call_failed',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      scope: 'agent_session',
+      provider: plannedTurn.provider ?? workflowServices.env.AGENTHUB_ORCHESTRATOR_PROVIDER,
+      model: plannedTurn.model ?? workflowServices.env.AGENTHUB_ORCHESTRATOR_MODEL,
+      agentId: agent.id,
+      agentName: agent.name,
+      sessionId: plannedTurn.session.id,
+      elapsedMs: plannedTurn.modelElapsedMs ?? 0,
+      error: plannedTurn.error ?? 'Agent session model fell back locally.',
+    })
+  }
+
+  emitWorkflowEvent(workflowServices, {
+    type: 'agent_session_finished',
+    workspaceId: workspace.id,
+    conversationId: conversation.id,
+    sessionId: plannedTurn.session.id,
+    agentId: agent.id,
+    agentName: agent.name,
+    source: plannedTurn.source,
+    provider: plannedTurn.provider,
+    model: plannedTurn.model,
+    error: plannedTurn.error,
+    turnKind: plannedTurn.turn.kind,
+  })
+
+  if (plannedTurn.turn.kind === 'run_task' && plannedTurn.turn.taskBrief && plannedTurn.handoff) {
+    const handoff = plannedTurn.handoff
+    const taskBrief = plannedTurn.turn.taskBrief
+    emitWorkflowEvent(workflowServices, {
+      type: 'handoff_created',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      handoffId: handoff.id,
+      sessionId: plannedTurn.session.id,
+      agentId: agent.id,
+      agentName: agent.name,
+      source: handoff.source,
+      status: handoff.status,
+    })
+    emitAgentTaskDispatched(
+      workflowServices,
+      workspace,
+      conversation,
+      agent,
+      plannedTurn.session,
+      handoff,
+      taskBrief,
+    )
+    logDiagnostic(workflowServices, {
+      level: 'info',
+      category: 'handoff',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      sessionId: plannedTurn.session.id,
+      handoffId: handoff.id,
+      agentId: agent.id,
+      message: conversation.type === 'direct' ? 'Created direct-agent task handoff.' : 'Created group-directed task handoff.',
+      data: {
+        task: taskBrief.task,
+        expectedOutput: taskBrief.expectedOutput,
+      },
+    })
+    const runState = await workflowServices.store.read()
+    const runResult = await runTaskBrief(workflowServices, runState, workspace, conversation, taskBrief, {
+      session: plannedTurn.session,
+      handoff,
+    }, plannedTurn.route)
+    emitWorkflowEvent(workflowServices, {
+      type: 'workflow_finished',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      summary: runResult.summary,
+    })
+  } else {
+    emitWorkflowEvent(workflowServices, {
+      type: 'workflow_finished',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      summary: plannedTurn.turn.finalResponse ?? `${agent.name} session updated.`,
+    })
+  }
+
+  try {
+    await persistWorkflowEvents(workflowServices)
+  } catch (error) {
+    console.error(error)
+  }
+  return await workflowServices.store.read()
 }
 
 /**
@@ -1265,6 +1596,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     senderType: 'user',
     senderId: 'user',
     content: input.content,
+    replyTo: input.replyTo,
     artifacts: [],
   })
 
@@ -1299,6 +1631,17 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
   })
   const directAgentId = input.agentId && conversation.type === 'direct' ? input.agentId : undefined
   if (directAgentId) {
+    return await runDirectedAgentConversationTurn(
+      workflowServices,
+      state,
+      workspace,
+      conversation,
+      directAgentId,
+      input.content,
+      input.replyTo,
+      input.codeSelection,
+    )
+    /*
     const agent = requiredById(state.agents, directAgentId, 'Agent')
     const session = await ensureAgentSession(workflowServices.store, workspace, agent)
     const localRoutePreview = routeTurnLocally({
@@ -1494,6 +1837,29 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       console.error(error)
     }
     return await workflowServices.store.read()
+    */
+  }
+
+  const replyContinuationAgentId =
+    !input.agentId && conversation.type === 'group'
+      ? resolveReplyContinuationAgentId(input.replyTo, conversation, state.agents)
+      : undefined
+  const directedGroupAgentId = conversation.type === 'group'
+    ? input.agentId ?? replyContinuationAgentId
+    : undefined
+
+  if (replyContinuationAgentId) {
+    logDiagnostic(workflowServices, {
+      level: 'info',
+      category: 'routing',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      agentId: replyContinuationAgentId,
+      message: 'Preserved quoted child-agent continuity for the current group turn.',
+      data: {
+        replyTo: input.replyTo,
+      },
+    })
   }
 
   emitWorkflowEvent(workflowServices, {
@@ -1508,6 +1874,8 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     content: input.content,
     workspace,
     conversation,
+    replyTo: input.replyTo,
+    codeSelection: input.codeSelection,
   })
   logDiagnostic(workflowServices, {
     level: mainRoute.error ? 'warn' : 'info',
@@ -1524,6 +1892,88 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     },
   })
   emitTaskStageUpdated(workflowServices, workspace, conversation, mainRoute.route)
+
+  if (directedGroupAgentId && !routeAllowsExecution(mainRoute.route)) {
+    emitWorkflowEvent(workflowServices, {
+      type: 'routing_finished',
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      source: 'explicit_rule',
+      provider: mainRoute.provider,
+      model: mainRoute.model,
+      error: mainRoute.error,
+      taskStage: mainRoute.route.taskStage,
+      executionReadiness: mainRoute.route.executionReadiness,
+      needsUserConfirmation: mainRoute.route.needsUserConfirmation,
+      speakerAgentId: directedGroupAgentId,
+      finalizationMode: 'speaker_direct',
+      mode: 'single_agent',
+      brainKind: 'dispatch_agents',
+      execution: 'serial',
+      targetAgents: [directedGroupAgentId],
+    })
+    return await runDirectedAgentConversationTurn(
+      workflowServices,
+      state,
+      workspace,
+      conversation,
+      directedGroupAgentId,
+      input.content,
+      input.replyTo,
+      input.codeSelection,
+    )
+  }
+
+  const dynamicVisibleSpeaker = selectDynamicVisibleSpeaker({
+    content: input.content,
+    conversation,
+    agents: state.agents,
+    taskStage: mainRoute.route.taskStage,
+    replyTo: input.replyTo,
+  })
+  if (
+    dynamicVisibleSpeaker &&
+    !input.agentId &&
+    !routeAllowsExecution(mainRoute.route) &&
+    !shouldKeepPlannerDispatch(mainRoute.route.taskStage)
+  ) {
+    logDiagnostic(workflowServices, {
+      level: 'info',
+      category: 'routing',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      message: 'Selected one visible child agent for a group-chat turn.',
+      data: dynamicVisibleSpeaker,
+    })
+    emitWorkflowEvent(workflowServices, {
+      type: 'routing_finished',
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      source: 'explicit_rule',
+      provider: mainRoute.provider,
+      model: mainRoute.model,
+      error: mainRoute.error,
+      taskStage: mainRoute.route.taskStage,
+      executionReadiness: mainRoute.route.executionReadiness,
+      needsUserConfirmation: mainRoute.route.needsUserConfirmation,
+      speakerAgentId: dynamicVisibleSpeaker.agentId,
+      finalizationMode: 'speaker_direct',
+      mode: 'single_agent',
+      brainKind: 'dispatch_agents',
+      execution: 'serial',
+      targetAgents: [dynamicVisibleSpeaker.agentId],
+    })
+    return await runDirectedAgentConversationTurn(
+      workflowServices,
+      state,
+      workspace,
+      conversation,
+      dynamicVisibleSpeaker.agentId,
+      input.content,
+      input.replyTo,
+      input.codeSelection,
+    )
+  }
 
   if (mainRoute.route.needsModel && canStreamMainRouteDirectly(mainRoute.route)) {
     emitWorkflowEvent(workflowServices, {
@@ -1549,6 +1999,8 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       workspace,
       conversation,
       input.content,
+      input.replyTo,
+      input.codeSelection,
       mainRoute.route,
       mainRoute.route.localResponse,
     )
@@ -1646,7 +2098,9 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
         content: input.content,
         conversation,
         agents: state.agents,
-        targetAgentId: input.agentId,
+        targetAgentId: directedGroupAgentId,
+        replyTo: input.replyTo,
+        codeSelection: input.codeSelection,
         env: workflowServices.env,
         state,
         workspace,
@@ -1708,7 +2162,15 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       elapsedMs: plannedRouting.modelElapsedMs ?? 0,
     })
   }
-  const stageGuardedRouting = applyTaskStageGuard(workflowServices, state, workspace, conversation, plannedRouting, mainRoute.route)
+  const stageGuardedRouting = applyTaskStageGuard(
+    workflowServices,
+    state,
+    workspace,
+    conversation,
+    plannedRouting,
+    mainRoute.route,
+    input.content,
+  )
   const reviewGuardedRouting = applyReviewSafety(workflowServices, state, workspace, conversation, stageGuardedRouting)
   const routing = applyExecutionSafety(workflowServices, state, workspace, conversation, reviewGuardedRouting)
   const decision = routing.decision

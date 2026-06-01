@@ -1,7 +1,7 @@
 import { CheckCircle2, CircleDashed, CircleDot, TriangleAlert } from 'lucide-react'
 
 type StatusPillProps = {
-  status: 'ready' | 'running' | 'success' | 'failed' | 'demo'
+  status: 'ready' | 'running' | 'success' | 'failed' | 'muted'
   label: string
 }
 

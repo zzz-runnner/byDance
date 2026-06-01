@@ -10,6 +10,9 @@ out/
 # Logs
 *.log
 logs/
+agentHub/.agent-bridge*
+agentHub/.agenthub-live*
+agentHubFrontend/.agent-vite.*
 
 # Environment files
 .env
