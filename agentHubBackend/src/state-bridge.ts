@@ -31,6 +31,8 @@ export function toProjectResponse(project: {
   conversationId?: string
   conversationType?: ConversationType
   targetAgentId?: string
+  pinnedAt?: string
+  archivedAt?: string
   createdAt: string
   updatedAt: string
 }): ProjectResponse {
@@ -53,6 +55,8 @@ export function selectProjectState(
     projectId: string
     workspaceId: string
     conversationId?: string
+    pinnedAt?: string
+    archivedAt?: string
     currentVersionId?: string
     versions?: Array<{
       versionId: string
@@ -123,7 +127,7 @@ export function selectProjectState(
     state: {
       workspaces: state.workspaces
         .filter(workspace => workspace.id === workspaceId)
-        .map(workspace => attachProjectMetadata(workspace, project.projectId)),
+        .map(workspace => attachProjectMetadata(workspace, project)),
       conversations,
       messages: messagePage.messages,
       agents: state.agents,
@@ -208,7 +212,7 @@ export function buildWorkbenchOverview(
         kind: conversation.type,
         title: conversation.type === 'group' ? workspace.name : conversation.title,
         subtitle: conversation.type === 'group' ? workspace.goal : `${workspace.name} / ${workspace.goal}`,
-        workspace: attachProjectMetadata(workspace, project.projectId),
+        workspace: attachProjectMetadata(workspace, project),
         conversation,
         targetAgentId: conversation.type === 'direct' ? participantAgentIds[0] : project.targetAgentId,
         participantAgentIds,
@@ -254,7 +258,7 @@ export function buildWorkbenchOverviewPage(
 
     return [{
       ...room,
-      workspace: attachProjectMetadata(room.workspace, project.projectId),
+      workspace: attachProjectMetadata(room.workspace, project),
     }]
   })
 
@@ -334,12 +338,17 @@ export function zipUrlFor(workspaceId: string): string {
  * Input: runtime workspace and project id.
  * Output: augmented workspace object.
  */
-function attachProjectMetadata(workspace: RuntimeAppState['workspaces'][number], projectId: string): FrontendWorkspace {
+function attachProjectMetadata(
+  workspace: RuntimeAppState['workspaces'][number],
+  project: Pick<StoredProjectRecord, 'projectId' | 'pinnedAt' | 'archivedAt'>,
+): FrontendWorkspace {
   return {
     ...workspace,
-    projectId,
+    projectId: project.projectId,
     agentHubPreviewUrl: previewUrlFor(workspace.id),
     agentHubZipUrl: zipUrlFor(workspace.id),
+    pinnedAt: project.pinnedAt,
+    archivedAt: project.archivedAt,
   }
 }
 

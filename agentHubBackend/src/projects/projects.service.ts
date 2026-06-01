@@ -32,6 +32,7 @@ import {
   PreviewBuildQueryDto,
   ProjectStateQueryDto,
   StreamProjectMessageDto,
+  UpdateProjectMetadataDto,
   WorkbenchQueryDto,
   WriteWorkspaceFileDto,
 } from './projects.dto'
@@ -119,10 +120,15 @@ export class ProjectsService {
    * Output: room summaries plus agent definitions.
    */
   async getWorkbenchOverview(query: WorkbenchQueryDto): Promise<WorkbenchOverviewResponse> {
+    const limit = query.pageSize ?? query.limit
+    const searchQuery = query.query ?? query.q
     const projectPage = await this.projectStore.listProjectsPage({
-      limit: query.limit,
+      limit,
       cursor: query.cursor,
-      query: query.q,
+      query: searchQuery,
+      status: query.status,
+      sortBy: query.sortBy,
+      sortDirection: query.sortDirection,
     })
     const [agents, roomBatch] = await Promise.all([
       this.agentHub.fetchAgents(),
@@ -142,10 +148,14 @@ export class ProjectsService {
       projectPage.items.map(project => this.toStoredProject(project)),
       roomBatch.rooms,
       {
-        limit: query.limit,
+        limit,
         nextCursor: projectPage.nextCursor,
         hasMore: projectPage.hasMore,
         total: projectPage.total,
+        status: query.status,
+        sortBy: query.sortBy,
+        sortDirection: query.sortDirection,
+        query: searchQuery,
       },
     )
   }
@@ -266,6 +276,28 @@ export class ProjectsService {
     project.updatedAt = isoNow()
     await this.saveProject(project)
     return project
+  }
+
+  async updateProjectMetadata(
+    projectId: string,
+    input: UpdateProjectMetadataDto,
+  ): Promise<ProjectMetadata> {
+    return this.updateProject(projectId, project => {
+      if (input.pinned !== undefined) {
+        project.pinnedAt = input.pinned ? isoNow() : undefined
+      }
+      if (input.archived !== undefined) {
+        project.archivedAt = input.archived ? isoNow() : undefined
+      }
+    })
+  }
+
+  async setProjectPinned(projectId: string, pinned: boolean): Promise<ProjectMetadata> {
+    return this.updateProjectMetadata(projectId, { pinned })
+  }
+
+  async setProjectArchived(projectId: string, archived: boolean): Promise<ProjectMetadata> {
+    return this.updateProjectMetadata(projectId, { archived })
   }
 
   /**
@@ -623,6 +655,8 @@ export class ProjectsService {
       conversationId: project.conversationId ?? '',
       conversationType: project.conversationType,
       targetAgentId: project.targetAgentId,
+      pinnedAt: project.pinnedAt,
+      archivedAt: project.archivedAt,
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
     }

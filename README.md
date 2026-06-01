@@ -20,9 +20,18 @@ The current local chain covers:
 
 - `GET /api/health`
 - `GET /api/agents`
+- `GET /api/agents/:agentId`
+- `POST /api/agents`
+- `PATCH /api/agents/:agentId`
+- `DELETE /api/agents/:agentId`
 - `GET /api/workbench`
 - `GET /api/projects`
 - `GET /api/projects/:projectId`
+- `PATCH /api/projects/:projectId/metadata`
+- `PUT /api/projects/:projectId/pin`
+- `DELETE /api/projects/:projectId/pin`
+- `PUT /api/projects/:projectId/archive`
+- `DELETE /api/projects/:projectId/archive`
 - `GET /api/projects/:projectId/state`
 - `GET /api/projects/:projectId/files`
 - `GET /api/projects/:projectId/files/content`
@@ -53,7 +62,9 @@ The backend still keeps the Nest business modules for:
   - code selection, which defaults to `engineer` when no explicit target is given
 - Direct rooms stay fixed to one agent and do not show the mention picker.
 - Visible speaker identity comes from runtime routing and is no longer flattened to Orchestrator.
+- Built-in and custom child agents can now be viewed, created, edited, provider-switched, and deleted from the frontend through the business backend API.
 - The left workspace rail uses server-backed paging through `/api/workbench`.
+- The left workspace rail also supports backend-backed search, status filtering, sorting, pinning, and archiving.
 - The right chat pane loads only the active workspace state through `/api/projects/:projectId/state`.
 - Older messages load incrementally through the `messageLimit` window instead of loading the full conversation at startup.
 - The chat surface renders one grouped turn:
@@ -177,6 +188,26 @@ Result:
 - `agentHubBackend` Nest build passed
 - `agentHubFrontend` TypeScript check passed
 - `agentHubFrontend` production build passed
+
+Real local service smoke also passed on 2026-06-01:
+
+- `GET http://127.0.0.1:8787/api/health` returned `ok: true` with PostgreSQL storage and real agents enabled.
+- `GET http://127.0.0.1:8790/api/health` returned `ok: true`.
+- `GET http://127.0.0.1:5173` returned `200`.
+- Agent CRUD smoke passed through `agentHubBackend`:
+  - create custom agent
+  - update provider and description
+  - reject deleting built-in agent
+  - delete custom agent
+- Workspace metadata smoke passed through `agentHubBackend`:
+  - update `pinned`
+  - update `archived`
+  - read filtered `status=archived`
+  - restore metadata cleanly
+- Real group-room message stream smoke passed through `POST /api/projects/:projectId/messages/stream`:
+  - explicit `@product-manager` message returned `speaker_direct`
+  - final visible reply sender was `product-manager`
+  - SSE stream completed and state reload reflected the persisted reply
 
 Recommended real-chain verification after starting local services:
 

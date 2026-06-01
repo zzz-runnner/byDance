@@ -59,6 +59,8 @@ export type Workspace = {
   projectBrief: string
   agentHubPreviewUrl?: string
   agentHubZipUrl?: string
+  pinnedAt?: string
+  archivedAt?: string
   pinnedMessageIds: string[]
   createdAt: string
   updatedAt: string

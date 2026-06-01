@@ -1,4 +1,4 @@
-import type { AppState } from '@shared/contracts'
+import type { AgentDefinition, AppState } from '@shared/contracts'
 
 export type StorageMode = 'memory' | 'postgres'
 
@@ -8,6 +8,12 @@ export type StateStore = {
   mode: StorageMode
   read(): Promise<AppState>
   update<T>(mutator: StateMutator<T>): Promise<T>
+  createAgent?(agent: AgentDefinition): Promise<AgentDefinition>
+  updateAgent?(
+    agentId: string,
+    updater: (agent: AgentDefinition) => AgentDefinition,
+  ): Promise<AgentDefinition | undefined>
+  deleteAgent?(agentId: string): Promise<boolean>
 }
 
 /**

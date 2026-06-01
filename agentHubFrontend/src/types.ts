@@ -1,5 +1,6 @@
 import type {
   AgentDefinition,
+  AgentProvider,
   AgentRun,
   AgentSession,
   AgentSessionMessage,
@@ -20,6 +21,7 @@ import type {
 
 export type {
   AgentDefinition,
+  AgentProvider,
   AgentRun,
   AgentSession,
   AgentSessionMessage,
@@ -39,6 +41,9 @@ export type {
 }
 
 export type ConnectionStatus = 'connecting' | 'live' | 'error'
+export type WorkspaceListStatus = 'active' | 'archived' | 'all'
+export type WorkspaceSortField = 'updatedAt' | 'createdAt' | 'name'
+export type SortDirection = 'asc' | 'desc'
 
 export type WorkspaceSignal = {
   runningAgents: number
@@ -65,6 +70,10 @@ export type WorkbenchPage = {
   nextCursor?: string
   hasMore: boolean
   total: number
+  status?: WorkspaceListStatus
+  sortBy?: WorkspaceSortField
+  sortDirection?: SortDirection
+  query?: string
 }
 
 export type WorkbenchOverview = {

@@ -22,11 +22,6 @@ export class AppController {
     }
   }
 
-  @Get('agents')
-  listAgents() {
-    return this.projects.listAgents()
-  }
-
   @Get('workbench')
   getWorkbenchOverview(@Query() query: WorkbenchQueryDto) {
     return this.projects.getWorkbenchOverview(query)

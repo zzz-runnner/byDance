@@ -1,4 +1,4 @@
-import { AppStateSchema, type AppState } from '@shared/contracts'
+import { AgentDefinitionSchema, AppStateSchema, type AgentDefinition, type AppState } from '@shared/contracts'
 import { cloneState, type StateMutator, type StateStore } from './types'
 
 export class MemoryStateStore implements StateStore {
@@ -30,6 +30,40 @@ export class MemoryStateStore implements StateStore {
       () => undefined,
     )
     return operation
+  }
+
+  async createAgent(agent: AgentDefinition): Promise<AgentDefinition> {
+    return this.update(state => {
+      if (state.agents.some(item => item.id === agent.id)) {
+        throw new Error(`Agent already exists: ${agent.id}`)
+      }
+      const parsed = AgentDefinitionSchema.parse(agent)
+      state.agents.push(parsed)
+      return parsed
+    })
+  }
+
+  async updateAgent(
+    agentId: string,
+    updater: (agent: AgentDefinition) => AgentDefinition,
+  ): Promise<AgentDefinition | undefined> {
+    return this.update(state => {
+      const index = state.agents.findIndex(agent => agent.id === agentId)
+      if (index === -1) {
+        return undefined
+      }
+      const updated = AgentDefinitionSchema.parse(updater(state.agents[index]))
+      state.agents[index] = updated
+      return updated
+    })
+  }
+
+  async deleteAgent(agentId: string): Promise<boolean> {
+    return this.update(state => {
+      const previousLength = state.agents.length
+      state.agents = state.agents.filter(agent => agent.id !== agentId)
+      return state.agents.length !== previousLength
+    })
   }
 
   /**

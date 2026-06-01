@@ -43,6 +43,8 @@ export interface ProjectMetadata {
   targetAgentId?: string
   agentHubPreviewUrl: string
   agentHubZipUrl: string
+  pinnedAt?: string
+  archivedAt?: string
   currentVersionId?: string
   latestWorkflow?: ProjectWorkflowSummary
   versions: VersionMetadata[]

@@ -1,5 +1,6 @@
 import { Pool } from 'pg'
 import {
+  AgentDefinitionSchema,
   AppStateSchema,
   type AppState,
   type AgentDefinition,
@@ -162,6 +163,86 @@ function toAgent(row: Record<string, unknown>): AgentDefinition {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
+}
+
+function agentParams(agent: AgentDefinition): unknown[] {
+  return [
+    agent.id,
+    agent.name,
+    agent.role,
+    agent.description,
+    agent.whenToUse,
+    agent.systemPrompt,
+    agent.modelProvider,
+    agent.model ?? null,
+    toJsonParam(agent.contextPolicy),
+    toJsonParam(agent.tools),
+    toJsonParam(agent.permissions),
+    toJsonParam(agent.disallowedTools),
+    agent.permissionMode,
+    toJsonParam(agent.runtimePolicy),
+    agent.outputSchema,
+    agent.isolation,
+    toJsonParam(agent.skills),
+    toJsonParam(agent.routingProfile),
+    agent.source,
+    agent.createdAt,
+    agent.updatedAt,
+  ]
+}
+
+async function insertAgentToClient(client: QueryClient, agent: AgentDefinition): Promise<AgentDefinition> {
+  const parsed = AgentDefinitionSchema.parse(agent)
+  const result = await client.query(
+      `
+        insert into ${TABLES.agents} (
+          id, name, role, description, when_to_use, system_prompt, model_provider, model,
+          context_policy, tools, permissions, disallowed_tools, permission_mode, runtime_policy,
+          output_schema, isolation, skills, routing_profile, source, created_at, updated_at
+        ) values (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14::jsonb,
+          $15,$16,$17::jsonb,$18::jsonb,$19,$20,$21
+        )
+        returning *
+      `,
+      agentParams(parsed),
+  )
+  return toAgent(result.rows[0] as Record<string, unknown>)
+}
+
+async function updateAgentInClient(client: QueryClient, agent: AgentDefinition): Promise<AgentDefinition> {
+  const parsed = AgentDefinitionSchema.parse(agent)
+  const params = agentParams(parsed)
+  const result = await client.query(
+      `
+        update ${TABLES.agents}
+        set
+          name = $2,
+          role = $3,
+          description = $4,
+          when_to_use = $5,
+          system_prompt = $6,
+          model_provider = $7,
+          model = $8,
+          context_policy = $9::jsonb,
+          tools = $10::jsonb,
+          permissions = $11::jsonb,
+          disallowed_tools = $12::jsonb,
+          permission_mode = $13,
+          runtime_policy = $14::jsonb,
+          output_schema = $15,
+          isolation = $16,
+          skills = $17::jsonb,
+          routing_profile = $18::jsonb,
+          source = $19,
+          created_at = $20,
+          updated_at = $21
+        where id = $1
+        returning *
+      `,
+      params,
+  )
+  return toAgent(result.rows[0] as Record<string, unknown>)
 }
 
 /**
@@ -683,41 +764,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
   }
 
   for (const agent of state.agents) {
-    await client.query(
-        `
-          insert into ${TABLES.agents} (
-            id, name, role, description, when_to_use, system_prompt, model_provider, model,
-            context_policy, tools, permissions, disallowed_tools, permission_mode, runtime_policy,
-            output_schema, isolation, skills, routing_profile, source, created_at, updated_at
-          ) values (
-            $1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14::jsonb,
-            $15,$16,$17::jsonb,$18::jsonb,$19,$20,$21
-          )
-        `,
-        [
-          agent.id,
-          agent.name,
-          agent.role,
-          agent.description,
-          agent.whenToUse,
-          agent.systemPrompt,
-          agent.modelProvider,
-          agent.model ?? null,
-          toJsonParam(agent.contextPolicy),
-          toJsonParam(agent.tools),
-          toJsonParam(agent.permissions),
-          toJsonParam(agent.disallowedTools),
-          agent.permissionMode,
-          toJsonParam(agent.runtimePolicy),
-          agent.outputSchema,
-          agent.isolation,
-          toJsonParam(agent.skills),
-          toJsonParam(agent.routingProfile),
-          agent.source,
-          agent.createdAt,
-          agent.updatedAt,
-        ],
-    )
+    await insertAgentToClient(client, agent)
   }
 
   for (const session of state.agentSessions) {
@@ -989,7 +1036,26 @@ export class PostgresStateStore implements StateStore {
    * Input: mutation callback. Output: callback return value.
    */
   async update<T>(mutator: StateMutator<T>): Promise<T> {
-    const operation = this.updateQueue.then(() => this.applyUpdate(mutator), () => this.applyUpdate(mutator))
+    return this.enqueueUpdate(() => this.applyUpdate(mutator))
+  }
+
+  async createAgent(agent: AgentDefinition): Promise<AgentDefinition> {
+    return this.enqueueUpdate(() => this.applyCreateAgent(agent))
+  }
+
+  async updateAgent(
+    agentId: string,
+    updater: (agent: AgentDefinition) => AgentDefinition,
+  ): Promise<AgentDefinition | undefined> {
+    return this.enqueueUpdate(() => this.applyAgentUpdate(agentId, updater))
+  }
+
+  async deleteAgent(agentId: string): Promise<boolean> {
+    return this.enqueueUpdate(() => this.applyAgentDelete(agentId))
+  }
+
+  private enqueueUpdate<T>(operationFactory: () => Promise<T>): Promise<T> {
+    const operation = this.updateQueue.then(operationFactory, operationFactory)
     this.updateQueue = operation.then(
       () => undefined,
       () => undefined,
@@ -1013,6 +1079,67 @@ export class PostgresStateStore implements StateStore {
       await writeStateToClient(client, next)
       await client.query('commit')
       return value
+    } catch (error) {
+      await client.query('rollback')
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  private async applyCreateAgent(agent: AgentDefinition): Promise<AgentDefinition> {
+    const client = await this.pool.connect()
+    try {
+      await client.query('begin')
+      await client.query('select pg_advisory_xact_lock($1)', [STATE_LOCK_ID])
+      const existing = await client.query(`select id from ${TABLES.agents} where id = $1`, [agent.id])
+      if (existing.rowCount && existing.rowCount > 0) {
+        throw new Error(`Agent already exists: ${agent.id}`)
+      }
+      const created = await insertAgentToClient(client, agent)
+      await client.query('commit')
+      return created
+    } catch (error) {
+      await client.query('rollback')
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  private async applyAgentUpdate(
+    agentId: string,
+    updater: (agent: AgentDefinition) => AgentDefinition,
+  ): Promise<AgentDefinition | undefined> {
+    const client = await this.pool.connect()
+    try {
+      await client.query('begin')
+      await client.query('select pg_advisory_xact_lock($1)', [STATE_LOCK_ID])
+      const existing = await client.query(`select * from ${TABLES.agents} where id = $1`, [agentId])
+      const current = existing.rows[0] ? toAgent(existing.rows[0] as Record<string, unknown>) : undefined
+      if (!current) {
+        await client.query('commit')
+        return undefined
+      }
+      const updated = await updateAgentInClient(client, updater(current))
+      await client.query('commit')
+      return updated
+    } catch (error) {
+      await client.query('rollback')
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  private async applyAgentDelete(agentId: string): Promise<boolean> {
+    const client = await this.pool.connect()
+    try {
+      await client.query('begin')
+      await client.query('select pg_advisory_xact_lock($1)', [STATE_LOCK_ID])
+      const result = await client.query(`delete from ${TABLES.agents} where id = $1`, [agentId])
+      await client.query('commit')
+      return Boolean(result.rowCount && result.rowCount > 0)
     } catch (error) {
       await client.query('rollback')
       throw error
