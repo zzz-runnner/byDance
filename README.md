@@ -174,17 +174,27 @@ npx vitest run tests/real/agent-chain-probe.test.ts -t "keeps an unapproved plan
 npx vitest run tests/real/agent-chain-probe.test.ts -t "probes the approved main chain through engineer, reviewer, and synthesis" --reporter=verbose
 ```
 
+## Local Delivery Flow
+
+The current local frontend now exposes a first usable delivery flow inside the code workspace dialog:
+
+- save the current workspace repo into a source snapshot
+- build a delivery artifact from the latest saved version
+- publish that built artifact into the local `/deploy/*` route
+- open the latest built preview, deployed page, or source archive directly from the UI
+
+The backend also injects the latest source/build/deploy status back into the main chat history as stable system cards, so refreshes no longer lose the latest local delivery result.
+
 ## Current Limits
 
 The current local implementation still does not cover:
 
 - cloud deployment flow
-- deployment UI
 - one-click version diff and release UX
 - framework preview outside the first local phase, such as Angular
 - desktop and mobile clients
 
-`/deploy/*` is still only a backend artifact route and is not wired into the current frontend local flow.
+The current local deployment flow is still a backend-managed static publish step. It is not yet a true agent-driven cloud release workflow.
 
 ## Git Workflow
 

@@ -937,6 +937,7 @@ export function App() {
         workspaceName={activeRoom?.workspace.name}
         onClose={() => setCodeDialogOpen(false)}
         onQuoteSelection={handleQuoteCodeSelection}
+        onProjectDeliveryUpdated={() => reloadWorkbench(activeWorkspaceId, 'refresh')}
       />
     </main>
   )

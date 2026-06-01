@@ -9,7 +9,7 @@ import type {
 
 export type ChatProcessTone = 'neutral' | 'running' | 'success' | 'warning' | 'danger'
 export type ChatTurnStatus = 'running' | 'completed' | 'partial' | 'failed'
-export type ChatTurnArtifactKind = 'preview' | 'diff' | 'review' | 'zip' | 'text' | 'artifact'
+export type ChatTurnArtifactKind = 'preview' | 'diff' | 'review' | 'zip' | 'deploy' | 'text' | 'artifact'
 export type ChatProcessKind =
   | 'route'
   | 'stage'
@@ -423,6 +423,8 @@ function artifactToChatArtifact(artifact: Artifact): ChatTurnArtifact {
     ? 'preview'
     : artifact.type === 'zip'
       ? 'zip'
+      : artifact.type === 'deploy-status'
+        ? 'deploy'
       : artifact.type === 'text'
         ? 'text'
         : 'artifact'
@@ -475,8 +477,9 @@ function sortArtifacts(artifacts: ChatTurnArtifact[]): void {
     diff: 1,
     review: 2,
     zip: 3,
-    text: 4,
-    artifact: 5,
+    deploy: 4,
+    text: 5,
+    artifact: 6,
   }
 
   artifacts.sort((left, right) => {

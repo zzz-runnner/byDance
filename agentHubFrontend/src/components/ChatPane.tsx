@@ -817,8 +817,18 @@ type InlineArtifactCardProps = {
  * Output: one inline artifact card.
  */
 function InlineArtifactCard({ artifact }: InlineArtifactCardProps) {
-  const Icon = artifact.type === 'zip' ? FileArchive : artifact.type === 'web-preview' ? Globe2 : Braces
-  const actionLabel = artifact.type === 'web-preview' ? '打开预览' : artifact.type === 'zip' ? '下载' : '查看'
+  const Icon = artifact.type === 'zip'
+    ? FileArchive
+    : artifact.type === 'web-preview' || artifact.type === 'deploy-status'
+      ? Globe2
+      : Braces
+  const actionLabel = artifact.type === 'web-preview'
+    ? '打开预览'
+    : artifact.type === 'zip'
+      ? '下载'
+      : artifact.type === 'deploy-status'
+        ? '打开部署'
+        : '查看'
   const summary = buildInlineArtifactCardSummary(artifact)
   const content = (
     <>
@@ -865,8 +875,10 @@ function TurnArtifactCard({ artifact, agentName, onOpenArtifact }: TurnArtifactC
     ? '下载源码'
     : artifact.kind === 'preview'
       ? '打开预览'
+      : artifact.kind === 'deploy'
+        ? '打开部署'
       : '查看详情'
-  const isExternalOnly = artifact.kind === 'zip' && Boolean(artifact.url)
+  const isExternalOnly = (artifact.kind === 'zip' || artifact.kind === 'deploy') && Boolean(artifact.url)
 
   const content = (
     <>
@@ -956,10 +968,14 @@ function buildInlineArtifactCardSummary(artifact: Artifact): ArtifactCardPreview
   const isFullTextVisible = shouldShowFullArtifactText(fullContent)
   const fileCount = readArtifactMetadataNumber(artifact.metadata, 'fileCount')
   const byteLength = readArtifactMetadataNumber(artifact.metadata, 'byteLength')
+  const artifactStatus = readArtifactMetadataString(artifact.metadata, 'status')
+  const versionId = readArtifactMetadataString(artifact.metadata, 'versionId')
   const metaItems = [
     artifact.type === 'web-preview' ? (artifact.url ? 'preview ready' : 'preview unavailable') : undefined,
     artifact.type === 'zip' && fileCount !== undefined ? `${fileCount} files` : undefined,
     artifact.type === 'zip' && byteLength !== undefined ? formatArtifactByteLength(byteLength) : undefined,
+    artifact.type === 'deploy-status' && artifactStatus ? artifactStatus : undefined,
+    artifact.type === 'deploy-status' && versionId ? versionId : undefined,
     !isFullTextVisible && fullContent ? 'summary only' : undefined,
   ].filter(Boolean) as string[]
 
@@ -1020,6 +1036,14 @@ function buildTurnArtifactCardPreview(artifact: ChatTurnArtifact): ArtifactCardP
         artifact.url ? 'download ready' : undefined,
       ].filter(Boolean) as string[],
       peekItems: [],
+    }
+  }
+
+  if (artifact.kind === 'deploy') {
+    return {
+      summary: buildArtifactExcerpt(artifact.summary, 180) || 'Local deployment ready.',
+      metaItems: [artifact.url ? 'open ready' : 'status only'],
+      peekItems: artifact.url ? ['Open the card to inspect the deployed page.'] : [],
     }
   }
 
@@ -1202,7 +1226,7 @@ function ArtifactDialog({ artifact, onClose }: ArtifactDialogProps) {
             </div>
           ) : null}
 
-          {(artifact.kind === 'text' || artifact.kind === 'artifact') ? (
+          {(artifact.kind === 'text' || artifact.kind === 'artifact' || artifact.kind === 'deploy') ? (
             <div className="artifact-detail-stack">
               <MarkdownRenderer content={artifact.summary} mode="panel" className="markdown-content--panel" />
               {artifact.detailText ? (
@@ -1596,6 +1620,9 @@ function artifactIcon(kind: ChatTurnArtifact['kind']) {
   if (kind === 'zip') {
     return FileArchive
   }
+  if (kind === 'deploy') {
+    return Globe2
+  }
   return FileText
 }
 
@@ -1781,6 +1808,19 @@ function readArtifactMetadataNumber(
 ): number | undefined {
   const value = metadata?.[key]
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * Reads one string artifact metadata field when it exists on a runtime artifact.
+ * Input: generic artifact metadata and the desired key.
+ * Output: string metadata value or undefined.
+ */
+function readArtifactMetadataString(
+  metadata: Artifact['metadata'] | undefined,
+  key: string,
+): string | undefined {
+  const value = metadata?.[key]
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined
 }
 
 /**

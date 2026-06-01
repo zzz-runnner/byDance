@@ -38,6 +38,11 @@ export class ProjectsController {
     return this.projects.getProjectState(projectId, query)
   }
 
+  @Get(':projectId/delivery')
+  getProjectDelivery(@Param('projectId') projectId: string) {
+    return this.projects.getProjectDeliverySummary(projectId)
+  }
+
   @Get(':projectId/files')
   getProjectFiles(@Param('projectId') projectId: string) {
     return this.projects.getProjectFiles(projectId)
