@@ -94,7 +94,8 @@ The backend still keeps the Nest business modules for:
 - Streaming chat replies now keep a frontend handoff stage:
   - `streaming` while SSE deltas are arriving
   - `awaiting_commit` after SSE finishes but before the persisted message is reloaded
-  - the process block auto-collapses only after a visible reply has appeared, which avoids collapsing the process block before the reply bubble is visible
+  - the streamed reply bubble stays visible during `awaiting_commit`, so the chat does not show a blank gap between stream finish and persisted reply recovery
+  - the persisted final reply appears first, and only then does the process block auto-collapse
 
 ## Local Preview
 

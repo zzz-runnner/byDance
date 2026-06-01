@@ -9,7 +9,7 @@ import type {
 } from './types'
 
 export type ChatProcessTone = 'neutral' | 'running' | 'success' | 'warning' | 'danger'
-export type ChatTurnStatus = 'running' | 'completed' | 'partial' | 'failed'
+export type ChatTurnStatus = 'running' | 'awaiting_commit' | 'completed' | 'partial' | 'failed'
 export type ChatTurnArtifactKind = 'preview' | 'diff' | 'review' | 'zip' | 'deploy' | 'text' | 'artifact'
 export type ChatProcessKind =
   | 'route'
@@ -392,7 +392,11 @@ export function buildChatTimeline(input: BuildChatTimelineInput): ChatTimelineIt
 
     if (turn.streamingMessage) {
       turn.status = 'running'
-    } else if (turn.settlingMessage) {
+    } else if (turn.settlingMessage && !turn.finalMessage) {
+      if (turn.status !== 'failed' && turn.status !== 'partial') {
+        turn.status = 'awaiting_commit'
+      }
+    } else if (turn.finalMessage && turn.status === 'running') {
       turn.status = 'completed'
     } else if (!turn.finalMessage && turn.status === 'running') {
       turn.status = turn.processEntries.length > 0 ? 'running' : 'completed'
@@ -1439,6 +1443,7 @@ function turnToReadonly(turn: MutableTurn): ChatTurn {
     userMessage: turn.userMessage,
     finalMessage: turn.finalMessage,
     streamingMessage: turn.streamingMessage,
+    settlingMessage: turn.settlingMessage,
     processEntries: turn.processEntries.slice().sort((left, right) => left.time.localeCompare(right.time)),
     artifacts: turn.artifacts.slice(),
     startedAt: turn.startedAt,

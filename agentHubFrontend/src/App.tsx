@@ -537,6 +537,37 @@ export function App() {
   }, [committedConversationMessages])
 
   useEffect(() => {
+    const committedTurnIds = new Set(
+      committedConversationMessages
+        .filter(message => message.senderType === 'agent' && typeof message.turnId === 'string')
+        .map(message => message.turnId as string),
+    )
+
+    if (committedTurnIds.size === 0) {
+      return
+    }
+
+    setLiveWorkflowEvents(previous => {
+      const nextEvents = previous.filter(event => {
+        if (event.conversationId !== activeConversationId) {
+          return true
+        }
+
+        if (!event.turnId || !committedTurnIds.has(event.turnId)) {
+          return true
+        }
+
+        return event.type !== 'assistant_message_started' &&
+          event.type !== 'assistant_delta' &&
+          event.type !== 'assistant_message_finished' &&
+          event.type !== 'workflow_finished'
+      })
+
+      return nextEvents.length === previous.length ? previous : nextEvents
+    })
+  }, [activeConversationId, committedConversationMessages])
+
+  useEffect(() => {
     if (!workbenchReadyRef.current) {
       return
     }
@@ -738,9 +769,7 @@ export function App() {
       )
 
       await reloadWorkbench(activeWorkspace.id, 'refresh')
-      setLiveWorkflowEvents([])
       setOptimisticMessages([])
-      setStreamingMessages({})
     } catch (error) {
       const message = errorMessageOf(error)
       setConnectionStatus('error')

@@ -1275,6 +1275,13 @@ a {
   opacity: 0.55;
 }
 
+.message-status-note {
+  margin-top: 8px;
+  color: #6b778b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .turn-process {
   display: grid;
   gap: 10px;
@@ -1288,6 +1295,10 @@ a {
 
 .turn-process--running {
   border-color: rgba(59, 130, 246, 0.26);
+}
+
+.turn-process--awaiting_commit {
+  border-color: rgba(56, 189, 248, 0.24);
 }
 
 .turn-process--partial {

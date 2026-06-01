@@ -89,7 +89,7 @@ type TurnLifecycleSnapshot = {
   finalMessageId?: string
 }
 
-const TURN_PROCESS_AUTO_COLLAPSE_DELAY_MS = 360
+const TURN_PROCESS_AUTO_COLLAPSE_DELAY_MS = 960
 
 /**
  * Clips one quoted message into a single-line excerpt for reply previews.
@@ -236,7 +236,7 @@ function findActiveMention(value: string, selectionStart: number | null, selecti
  */
 function shouldDefaultExpandTurn(turn: ChatTurn): boolean {
   return (
-    ((turn.status === 'running' || Boolean(turn.settlingMessage)) && turn.processEntries.length > 0) ||
+    ((turn.status === 'running' || turn.status === 'awaiting_commit') && turn.processEntries.length > 0) ||
     turn.status === 'failed' ||
     turn.status === 'partial'
   )
@@ -253,6 +253,9 @@ function processStatusLabel(turn: ChatTurn): string {
   }
   if (turn.status === 'partial') {
     return '部分完成'
+  }
+  if (turn.status === 'awaiting_commit') {
+    return '整理结果中'
   }
   if (turn.status === 'completed') {
     return '已完成'
@@ -412,7 +415,7 @@ export function ChatPane({
       const previous = turnLifecycleRef.current[turn.id]
       const nextVisibleReplyId = turn.finalMessage?.id ?? turn.settlingMessage?.id
       const nextFinalMessageId = turn.finalMessage?.id
-      const justReceivedVisibleReply = Boolean(previous && nextVisibleReplyId && previous.visibleReplyId !== nextVisibleReplyId)
+      const justReceivedCommittedReply = Boolean(previous && nextFinalMessageId && previous.finalMessageId !== nextFinalMessageId)
 
       turnLifecycleRef.current[turn.id] = {
         status: turn.status,
@@ -420,7 +423,7 @@ export function ChatPane({
         finalMessageId: nextFinalMessageId,
       }
 
-      if (!justReceivedVisibleReply || (!turn.finalMessage && !turn.settlingMessage)) {
+      if (!justReceivedCommittedReply || !turn.finalMessage) {
         return
       }
 
@@ -460,13 +463,13 @@ export function ChatPane({
    */
   function shouldKeepTurnOpenForFreshCompletion(turn: ChatTurn): boolean {
     const previous = turnLifecycleRef.current[turn.id]
-    const nextVisibleReplyId = turn.finalMessage?.id ?? turn.settlingMessage?.id
+    const nextFinalMessageId = turn.finalMessage?.id
 
-    if (!previous || (!turn.finalMessage && !turn.settlingMessage) || !nextVisibleReplyId) {
+    if (!previous || !nextFinalMessageId) {
       return false
     }
 
-    return previous.visibleReplyId !== nextVisibleReplyId
+    return previous.finalMessageId !== nextFinalMessageId
   }
 
   /**
@@ -707,7 +710,7 @@ function TurnBlock({
         onCopy={onCopy}
       />
 
-      {(turn.processEntries.length > 0 || (turn.status === 'running' && turn.streamingMessage) || Boolean(turn.settlingMessage)) ? (
+      {(turn.processEntries.length > 0 || (turn.status === 'running' && turn.streamingMessage) || turn.status === 'awaiting_commit' || Boolean(turn.settlingMessage)) ? (
         <section className={`turn-process turn-process--${turn.status}`}>
           <button className="turn-process__header" type="button" onClick={onToggle} aria-expanded={expanded}>
             <span className="turn-process__title">
@@ -740,7 +743,7 @@ function TurnBlock({
               ) : (
                 <div className="turn-process__empty">
                   <LoaderCircle size={15} />
-                  <span>正在等待更多过程事件...</span>
+                  <span>{turn.status === 'awaiting_commit' ? '正在写入最终结果...' : '正在等待更多过程事件...'}</span>
                 </div>
               )}
               </div>
@@ -777,6 +780,7 @@ function TurnBlock({
           onReply={onReply}
           onCopy={onCopy}
           renderArtifacts={false}
+          statusNote="正在整理最终结果..."
         />
       ) : streamingMessage ? (
         <MessageBubble
@@ -883,6 +887,7 @@ type MessageBubbleProps = {
   onCopy: (content: string) => void
   renderArtifacts?: boolean
   forceStreaming?: boolean
+  statusNote?: string
 }
 
 /**
@@ -897,6 +902,7 @@ function MessageBubble({
   onCopy,
   renderArtifacts = true,
   forceStreaming = false,
+  statusNote,
 }: MessageBubbleProps) {
   const isUser = message.senderType === 'user'
   const isStreamingPlaceholder = forceStreaming || (!isUser && message.content.trim().length === 0)
@@ -957,6 +963,9 @@ function MessageBubble({
               <span />
               <span />
             </div>
+          ) : null}
+          {statusNote ? (
+            <div className="message-status-note">{statusNote}</div>
           ) : null}
           {renderArtifacts && message.artifacts.length > 0 ? (
             <div className="artifact-grid">
