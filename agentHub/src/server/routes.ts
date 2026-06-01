@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { z } from 'zod'
 import {
+  AgentRoutingProfileSchema,
   AgentProviderSchema,
   CreateWorkspaceInputSchema,
   IsolationSchema,
@@ -39,6 +40,36 @@ const WorkspaceOverviewBatchInputSchema = z.object({
     conversationType: z.enum(['group', 'direct']).optional(),
     targetAgentId: z.string().optional(),
   })).max(100),
+})
+
+const AgentParamsSchema = z.object({
+  agentId: z.string().min(1),
+})
+
+const AgentContextPolicyInputSchema = z.object({
+  includeProjectBrief: z.boolean(),
+  includePinnedMessages: z.boolean(),
+  recentMessageLimit: z.number().int().nonnegative(),
+  includeSameConversationOnly: z.boolean(),
+  includeArtifacts: z.boolean(),
+  includeFileSummaries: z.boolean(),
+  allowReadFilesOnDemand: z.boolean(),
+})
+
+const AgentPermissionsInputSchema = z.object({
+  fileRead: z.boolean(),
+  fileWrite: z.boolean(),
+  shell: z.boolean(),
+  webSearch: z.boolean(),
+  webFetch: z.boolean(),
+  deploy: z.boolean(),
+})
+
+const AgentRuntimePolicyInputSchema = z.object({
+  workspaceOnly: z.boolean(),
+  allowNetwork: z.boolean(),
+  allowShell: z.boolean(),
+  maxRunSeconds: z.number().int().positive(),
 })
 
 const CreateAgentInputSchema = z.object({
@@ -107,6 +138,52 @@ const CreateAgentInputSchema = z.object({
   skills: z.array(z.string()).default([]),
 })
 
+const UpdateAgentInputSchema = z.object({
+  name: z.string().min(1).optional(),
+  role: z.string().min(1).optional(),
+  description: z.string().min(1).optional(),
+  whenToUse: z.string().min(1).optional(),
+  systemPrompt: z.string().min(1).optional(),
+  modelProvider: AgentProviderSchema.optional(),
+  model: z.string().min(1).optional(),
+  contextPolicy: AgentContextPolicyInputSchema.optional(),
+  tools: z.array(z.string()).optional(),
+  permissions: AgentPermissionsInputSchema.optional(),
+  disallowedTools: z.array(z.string()).optional(),
+  permissionMode: PermissionModeSchema.optional(),
+  runtimePolicy: AgentRuntimePolicyInputSchema.optional(),
+  outputSchema: z.string().min(1).optional(),
+  isolation: IsolationSchema.optional(),
+  skills: z.array(z.string()).optional(),
+  routingProfile: AgentRoutingProfileSchema.optional(),
+})
+
+type UpdateAgentInput = z.infer<typeof UpdateAgentInputSchema>
+
+const BUILT_IN_AGENT_UPDATE_FIELDS = [
+  'name',
+  'role',
+  'description',
+  'whenToUse',
+  'systemPrompt',
+  'modelProvider',
+  'model',
+  'contextPolicy',
+  'runtimePolicy',
+  'outputSchema',
+  'skills',
+  'routingProfile',
+] satisfies Array<keyof UpdateAgentInput>
+
+const CUSTOM_AGENT_UPDATE_FIELDS = [
+  ...BUILT_IN_AGENT_UPDATE_FIELDS,
+  'tools',
+  'permissions',
+  'disallowedTools',
+  'permissionMode',
+  'isolation',
+] satisfies Array<keyof UpdateAgentInput>
+
 /**
  * Creates a workspace record plus its default group conversation.
  * Input: workspace creation payload. Output: workspace and conversation records.
@@ -157,6 +234,24 @@ function createCustomAgent(input: z.infer<typeof CreateAgentInputSchema>): Agent
     createdAt: now,
     updatedAt: now,
   }
+}
+
+/**
+ * Applies one editable-field patch without changing ids, source, or timestamps outside updatedAt.
+ * Input: existing agent definition and validated update payload.
+ * Output: the same agent object after applying allowed fields.
+ */
+function updateAgentDefinition(agent: AgentDefinition, input: UpdateAgentInput): AgentDefinition {
+  const allowedFields = agent.source === 'built-in' ? BUILT_IN_AGENT_UPDATE_FIELDS : CUSTOM_AGENT_UPDATE_FIELDS
+  const mutableAgent = agent as unknown as Record<string, unknown>
+  for (const field of allowedFields) {
+    const value = input[field]
+    if (value !== undefined) {
+      mutableAgent[field] = value
+    }
+  }
+  agent.updatedAt = isoNow()
+  return agent
 }
 
 /**
@@ -358,6 +453,17 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
     return state.agents
   })
 
+  app.get('/api/agents/:agentId', async (request, reply) => {
+    const params = AgentParamsSchema.parse(request.params)
+    const state = await services.store.read()
+    const agent = state.agents.find(item => item.id === params.agentId)
+    if (!agent) {
+      reply.status(404)
+      return reply.send({ error: `Agent not found: ${params.agentId}` })
+    }
+    return agent
+  })
+
   app.post('/api/workspaces/overview-batch', async request => {
     const input = WorkspaceOverviewBatchInputSchema.parse(request.body)
     const state = await services.store.read()
@@ -466,10 +572,63 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
   app.post('/api/agents', async request => {
     const input = CreateAgentInputSchema.parse(request.body)
     const agent = createCustomAgent(input)
+    if (services.store.createAgent) {
+      return services.store.createAgent(agent)
+    }
     await services.store.update(state => {
+      if (state.agents.some(item => item.id === agent.id)) {
+        throw new Error(`Agent already exists: ${agent.id}`)
+      }
       state.agents.push(agent)
     })
-    return services.store.read()
+    return agent
+  })
+
+  app.patch('/api/agents/:agentId', async (request, reply) => {
+    const params = AgentParamsSchema.parse(request.params)
+    const input = UpdateAgentInputSchema.parse(request.body)
+    const updated = services.store.updateAgent
+      ? await services.store.updateAgent(
+          params.agentId,
+          agent => updateAgentDefinition(agent, input),
+        )
+      : await services.store.update(state => {
+          const agent = state.agents.find(item => item.id === params.agentId)
+          if (!agent) {
+            return undefined
+          }
+          return updateAgentDefinition(agent, input)
+        })
+    if (!updated) {
+      reply.status(404)
+      return reply.send({ error: `Agent not found: ${params.agentId}` })
+    }
+    return updated
+  })
+
+  app.delete('/api/agents/:agentId', async (request, reply) => {
+    const params = AgentParamsSchema.parse(request.params)
+    const current = (await services.store.read()).agents.find(item => item.id === params.agentId)
+    if (!current) {
+      reply.status(404)
+      return reply.send({ error: `Agent not found: ${params.agentId}` })
+    }
+    if (current.source === 'built-in') {
+      reply.status(400)
+      return reply.send({ error: `Built-in agent cannot be deleted: ${params.agentId}` })
+    }
+
+    if (services.store.deleteAgent) {
+      await services.store.deleteAgent(params.agentId)
+    } else {
+      await services.store.update(state => {
+        state.agents = state.agents.filter(agent => agent.id !== params.agentId)
+      })
+    }
+    return {
+      deleted: true,
+      agentId: params.agentId,
+    }
   })
 
   app.post('/api/messages', async request => {

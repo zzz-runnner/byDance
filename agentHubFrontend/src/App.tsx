@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Braces, LayoutDashboard, LoaderCircle, PlugZap, RefreshCcw, ServerCrash, Wifi } from 'lucide-react'
+import { Bot, Braces, LayoutDashboard, LoaderCircle, PlugZap, RefreshCcw, ServerCrash, Wifi } from 'lucide-react'
 import {
+  createBusinessAgent,
   createBusinessWorkspace,
   createEmptyWorkbenchState,
+  deleteBusinessAgent,
   fetchBusinessProjectState,
   fetchBusinessWorkbenchOverview,
   streamBusinessProjectMessage,
+  updateBusinessAgent,
+  updateBusinessWorkspaceMetadata,
+  type CreateBusinessAgentInput,
+  type UpdateBusinessAgentInput,
 } from './api/businessBackend'
 import {
   directAgentId,
@@ -15,6 +21,7 @@ import {
 import backgroundImage from './asset/background/newBG.png'
 import { BackgroundCanvas } from './components/BackgroundCanvas'
 import { ChatPane } from './components/ChatPane'
+import { AgentManagementDialog } from './components/AgentManagementDialog'
 import { CodeWorkspaceDialog } from './components/CodeWorkspaceDialog'
 import { CreateWorkspaceDialog, type CreateWorkspaceInput } from './components/CreateWorkspaceDialog'
 import { GlassPanel } from './components/GlassPanel'
@@ -29,8 +36,11 @@ import type {
   Message,
   ProjectStatePage,
   ReplyReference,
+  SortDirection,
   WorkbenchOverview,
+  WorkspaceListStatus,
   WorkspaceRoom,
+  WorkspaceSortField,
   WorkflowEvent,
 } from './types'
 
@@ -216,10 +226,18 @@ export function App() {
   const [messageLimitByWorkspace, setMessageLimitByWorkspace] = useState<Record<string, number>>({})
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [appliedWorkspaceQuery, setAppliedWorkspaceQuery] = useState('')
+  const [workspaceStatusFilter, setWorkspaceStatusFilter] = useState<WorkspaceListStatus>('active')
+  const [workspaceSortBy, setWorkspaceSortBy] = useState<WorkspaceSortField>('updatedAt')
+  const [workspaceSortDirection, setWorkspaceSortDirection] = useState<SortDirection>('desc')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [agentDialogOpen, setAgentDialogOpen] = useState(false)
   const [codeDialogOpen, setCodeDialogOpen] = useState(false)
   const [creatingWorkspace, setCreatingWorkspace] = useState(false)
   const [createWorkspaceError, setCreateWorkspaceError] = useState('')
+  const [agentMutationSaving, setAgentMutationSaving] = useState(false)
+  const [agentMutationError, setAgentMutationError] = useState('')
+  const [deletingAgentId, setDeletingAgentId] = useState<string>()
+  const [metadataUpdatingWorkspaceId, setMetadataUpdatingWorkspaceId] = useState<string>()
   const overviewRequestRef = useRef(0)
   const detailRequestRef = useRef(0)
   const overviewRef = useRef<WorkbenchOverview>(emptyWorkbenchOverview())
@@ -275,6 +293,9 @@ export function App() {
     limit?: number
     cursor?: string
     query?: string
+    status?: WorkspaceListStatus
+    sortBy?: WorkspaceSortField
+    sortDirection?: SortDirection
     merge?: boolean
   }): Promise<WorkbenchOverview | undefined> {
     const requestId = ++overviewRequestRef.current
@@ -282,6 +303,9 @@ export function App() {
       limit: input?.limit,
       cursor: input?.cursor,
       query: input?.query,
+      status: input?.status ?? workspaceStatusFilter,
+      sortBy: input?.sortBy ?? workspaceSortBy,
+      sortDirection: input?.sortDirection ?? workspaceSortDirection,
     })
 
     if (requestId !== overviewRequestRef.current) {
@@ -376,6 +400,9 @@ export function App() {
     options?: {
       query?: string
       limit?: number
+      status?: WorkspaceListStatus
+      sortBy?: WorkspaceSortField
+      sortDirection?: SortDirection
     },
   ) {
     setLoadingState(true)
@@ -387,6 +414,9 @@ export function App() {
           ? INITIAL_WORKSPACE_PAGE_LIMIT
           : Math.max(loadedWorkspaceCountRef.current, INITIAL_WORKSPACE_PAGE_LIMIT)),
         query: options?.query ?? appliedWorkspaceQuery,
+        status: options?.status ?? workspaceStatusFilter,
+        sortBy: options?.sortBy ?? workspaceSortBy,
+        sortDirection: options?.sortDirection ?? workspaceSortDirection,
       })
       if (!nextOverview) {
         return
@@ -449,6 +479,9 @@ export function App() {
     void reloadWorkbench(activeWorkspaceId, 'initial', {
       limit: INITIAL_WORKSPACE_PAGE_LIMIT,
       query: appliedWorkspaceQuery,
+      status: workspaceStatusFilter,
+      sortBy: workspaceSortBy,
+      sortDirection: workspaceSortDirection,
     })
   }, [])
 
@@ -490,8 +523,11 @@ export function App() {
     void reloadWorkbench(activeWorkspaceId, 'refresh', {
       limit: INITIAL_WORKSPACE_PAGE_LIMIT,
       query: appliedWorkspaceQuery,
+      status: workspaceStatusFilter,
+      sortBy: workspaceSortBy,
+      sortDirection: workspaceSortDirection,
     })
-  }, [appliedWorkspaceQuery])
+  }, [appliedWorkspaceQuery, workspaceSortBy, workspaceSortDirection, workspaceStatusFilter])
 
   /**
    * Switches the active workspace room.
@@ -550,6 +586,9 @@ export function App() {
       await reloadWorkbench(project.workspaceId ?? activeWorkspaceId, 'refresh', {
         limit: INITIAL_WORKSPACE_PAGE_LIMIT,
         query: '',
+        status: workspaceStatusFilter,
+        sortBy: workspaceSortBy,
+        sortDirection: workspaceSortDirection,
       })
       setCreateDialogOpen(false)
     } catch (error) {
@@ -729,6 +768,9 @@ export function App() {
         limit: WORKSPACE_PAGE_STEP,
         cursor: overview.page.nextCursor,
         query: appliedWorkspaceQuery,
+        status: workspaceStatusFilter,
+        sortBy: workspaceSortBy,
+        sortDirection: workspaceSortDirection,
         merge: true,
       })
     } catch (error) {
@@ -736,6 +778,82 @@ export function App() {
       setConnectionErrorMessage(errorMessageOf(error))
     } finally {
       setLoadingMoreWorkspaces(false)
+    }
+  }
+
+  async function handleToggleWorkspacePin(room: WorkspaceRoom) {
+    const projectId = room.workspace.projectId ?? room.workspace.id
+    setMetadataUpdatingWorkspaceId(room.id)
+    try {
+      await updateBusinessWorkspaceMetadata(projectId, {
+        pinned: !room.workspace.pinnedAt,
+      })
+      await reloadWorkbench(activeWorkspaceId, 'refresh')
+    } catch (error) {
+      setConnectionStatus('error')
+      setConnectionErrorMessage(errorMessageOf(error))
+    } finally {
+      setMetadataUpdatingWorkspaceId(undefined)
+    }
+  }
+
+  async function handleToggleWorkspaceArchive(room: WorkspaceRoom) {
+    const projectId = room.workspace.projectId ?? room.workspace.id
+    const nextArchived = !room.workspace.archivedAt
+    setMetadataUpdatingWorkspaceId(room.id)
+    try {
+      await updateBusinessWorkspaceMetadata(projectId, {
+        archived: nextArchived,
+      })
+      await reloadWorkbench(nextArchived && room.id === activeWorkspaceId ? '' : activeWorkspaceId, 'refresh')
+    } catch (error) {
+      setConnectionStatus('error')
+      setConnectionErrorMessage(errorMessageOf(error))
+    } finally {
+      setMetadataUpdatingWorkspaceId(undefined)
+    }
+  }
+
+  async function handleCreateAgent(input: CreateBusinessAgentInput) {
+    setAgentMutationError('')
+    setAgentMutationSaving(true)
+    try {
+      const agent = await createBusinessAgent(input)
+      await reloadWorkbench(activeWorkspaceId, 'refresh')
+      return agent
+    } catch (error) {
+      setAgentMutationError(errorMessageOf(error))
+      return undefined
+    } finally {
+      setAgentMutationSaving(false)
+    }
+  }
+
+  async function handleUpdateAgent(agentId: string, input: UpdateBusinessAgentInput) {
+    setAgentMutationError('')
+    setAgentMutationSaving(true)
+    try {
+      const agent = await updateBusinessAgent(agentId, input)
+      await reloadWorkbench(activeWorkspaceId, 'refresh')
+      return agent
+    } catch (error) {
+      setAgentMutationError(errorMessageOf(error))
+      return undefined
+    } finally {
+      setAgentMutationSaving(false)
+    }
+  }
+
+  async function handleDeleteAgent(agentId: string) {
+    setAgentMutationError('')
+    setDeletingAgentId(agentId)
+    try {
+      await deleteBusinessAgent(agentId)
+      await reloadWorkbench(activeWorkspaceId, 'refresh')
+    } catch (error) {
+      setAgentMutationError(errorMessageOf(error))
+    } finally {
+      setDeletingAgentId(undefined)
     }
   }
 
@@ -839,6 +957,18 @@ export function App() {
               {overview.agents.length || state.agents.length} Agents
             </GlassPanel>
             <button
+              className="secondary-button topbar-agent-button"
+              type="button"
+              onClick={() => {
+                setAgentMutationError('')
+                setAgentDialogOpen(true)
+              }}
+              disabled={loadingState || creatingWorkspace}
+            >
+              <Bot size={15} />
+              Agents
+            </button>
+            <button
               className="secondary-button topbar-code-button"
               type="button"
               onClick={() => setCodeDialogOpen(true)}
@@ -886,8 +1016,17 @@ export function App() {
               total={overview.page.total}
               visibleCount={rooms.length}
               createDisabled={!canCreateWorkspace}
+              statusFilter={workspaceStatusFilter}
+              sortBy={workspaceSortBy}
+              sortDirection={workspaceSortDirection}
+              updatingWorkspaceId={metadataUpdatingWorkspaceId}
               onSelectWorkspace={workspaceId => void handleSelectWorkspace(workspaceId)}
               onQueryChange={setWorkspaceQuery}
+              onStatusFilterChange={setWorkspaceStatusFilter}
+              onSortByChange={setWorkspaceSortBy}
+              onSortDirectionChange={setWorkspaceSortDirection}
+              onTogglePin={room => void handleToggleWorkspacePin(room)}
+              onToggleArchive={room => void handleToggleWorkspaceArchive(room)}
               onLoadMore={() => void handleLoadMoreWorkspaces()}
               onCreateWorkspace={() => setCreateDialogOpen(true)}
             />
@@ -930,6 +1069,21 @@ export function App() {
           }
         }}
         onSubmit={handleCreateWorkspace}
+      />
+      <AgentManagementDialog
+        open={agentDialogOpen}
+        agents={overview.agents.length > 0 ? overview.agents : state.agents}
+        saving={agentMutationSaving}
+        deletingAgentId={deletingAgentId}
+        errorMessage={agentMutationError}
+        onClose={() => {
+          if (!agentMutationSaving && !deletingAgentId) {
+            setAgentDialogOpen(false)
+          }
+        }}
+        onCreate={handleCreateAgent}
+        onUpdate={handleUpdateAgent}
+        onDelete={handleDeleteAgent}
       />
       <CodeWorkspaceDialog
         open={codeDialogOpen}

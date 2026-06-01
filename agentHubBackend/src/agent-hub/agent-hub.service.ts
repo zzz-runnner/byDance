@@ -1,4 +1,4 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common'
+import { HttpException, Injectable, ServiceUnavailableException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import {
   AgentHubAgent,
@@ -66,6 +66,22 @@ export class AgentHubClientService {
    */
   async fetchAgents(): Promise<AgentHubAgent[]> {
     return this.getJson('/api/agents')
+  }
+
+  async fetchAgent(agentId: string): Promise<AgentHubAgent> {
+    return this.getJson(`/api/agents/${encodeURIComponent(agentId)}`)
+  }
+
+  async createAgent(input: unknown): Promise<AgentHubAgent> {
+    return this.postJson('/api/agents', input)
+  }
+
+  async updateAgent(agentId: string, input: unknown): Promise<AgentHubAgent> {
+    return this.patchJson(`/api/agents/${encodeURIComponent(agentId)}`, input)
+  }
+
+  async deleteAgent(agentId: string): Promise<{ deleted: boolean; agentId: string }> {
+    return this.deleteJson(`/api/agents/${encodeURIComponent(agentId)}`)
   }
 
   /**
@@ -158,6 +174,9 @@ export class AgentHubClientService {
       const response = await fetch(this.url(pathname))
       return this.parseJsonResponse<T>(response)
     } catch (error) {
+      if (error instanceof HttpException) {
+        throw error
+      }
       throw new ServiceUnavailableException(`AgentHub request failed: ${this.errorMessage(error)}`)
     }
   }
@@ -171,13 +190,47 @@ export class AgentHubClientService {
       })
       return this.parseJsonResponse<T>(response)
     } catch (error) {
+      if (error instanceof HttpException) {
+        throw error
+      }
+      throw new ServiceUnavailableException(`AgentHub request failed: ${this.errorMessage(error)}`)
+    }
+  }
+
+  private async patchJson<T>(pathname: string, body: unknown): Promise<T> {
+    try {
+      const response = await fetch(this.url(pathname), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      return this.parseJsonResponse<T>(response)
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error
+      }
+      throw new ServiceUnavailableException(`AgentHub request failed: ${this.errorMessage(error)}`)
+    }
+  }
+
+  private async deleteJson<T>(pathname: string): Promise<T> {
+    try {
+      const response = await fetch(this.url(pathname), {
+        method: 'DELETE',
+      })
+      return this.parseJsonResponse<T>(response)
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error
+      }
       throw new ServiceUnavailableException(`AgentHub request failed: ${this.errorMessage(error)}`)
     }
   }
 
   private async parseJsonResponse<T>(response: Response): Promise<T> {
     if (!response.ok) {
-      throw new ServiceUnavailableException(`AgentHub returned ${response.status}: ${await response.text()}`)
+      const text = await response.text()
+      throw new HttpException(parseErrorBody(text), response.status)
     }
     return response.json() as Promise<T>
   }
@@ -188,5 +241,19 @@ export class AgentHubClientService {
 
   private errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error)
+  }
+}
+
+function parseErrorBody(text: string): string | Record<string, unknown> {
+  if (!text) {
+    return { message: 'AgentHub request failed' }
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown
+    return parsed && typeof parsed === 'object'
+      ? parsed as Record<string, unknown>
+      : String(parsed)
+  } catch {
+    return { message: text }
   }
 }

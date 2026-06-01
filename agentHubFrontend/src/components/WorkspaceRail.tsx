@@ -1,6 +1,6 @@
-import { LoaderCircle, MessagesSquare, Plus, RadioTower, Search, UserRound } from 'lucide-react'
+import { Archive, ArchiveRestore, LoaderCircle, MessagesSquare, Pin, PinOff, Plus, RadioTower, Search, UserRound } from 'lucide-react'
 import { workspaceRoomKindLabel } from '../appModel'
-import type { WorkspaceRoom } from '../types'
+import type { SortDirection, WorkspaceListStatus, WorkspaceRoom, WorkspaceSortField } from '../types'
 import { AgentAvatar } from './AgentAvatar'
 import { GlassPanel } from './GlassPanel'
 import { StatusPill } from './StatusPill'
@@ -15,8 +15,17 @@ type WorkspaceRailProps = {
   total: number
   visibleCount: number
   createDisabled: boolean
+  statusFilter: WorkspaceListStatus
+  sortBy: WorkspaceSortField
+  sortDirection: SortDirection
+  updatingWorkspaceId?: string
   onSelectWorkspace: (workspaceId: string) => void
   onQueryChange: (value: string) => void
+  onStatusFilterChange: (value: WorkspaceListStatus) => void
+  onSortByChange: (value: WorkspaceSortField) => void
+  onSortDirectionChange: (value: SortDirection) => void
+  onTogglePin: (room: WorkspaceRoom) => void
+  onToggleArchive: (room: WorkspaceRoom) => void
   onLoadMore: () => void
   onCreateWorkspace: () => void
 }
@@ -36,8 +45,17 @@ export function WorkspaceRail({
   total,
   visibleCount,
   createDisabled,
+  statusFilter,
+  sortBy,
+  sortDirection,
+  updatingWorkspaceId,
   onSelectWorkspace,
   onQueryChange,
+  onStatusFilterChange,
+  onSortByChange,
+  onSortDirectionChange,
+  onTogglePin,
+  onToggleArchive,
   onLoadMore,
   onCreateWorkspace,
 }: WorkspaceRailProps) {
@@ -71,6 +89,35 @@ export function WorkspaceRail({
         />
       </label>
 
+      <div className="workspace-controls">
+        <select
+          aria-label="Workspace status filter"
+          value={statusFilter}
+          onChange={event => onStatusFilterChange(event.currentTarget.value as WorkspaceListStatus)}
+        >
+          <option value="active">Active</option>
+          <option value="archived">Archived</option>
+          <option value="all">All</option>
+        </select>
+        <select
+          aria-label="Workspace sort field"
+          value={sortBy}
+          onChange={event => onSortByChange(event.currentTarget.value as WorkspaceSortField)}
+        >
+          <option value="updatedAt">Updated</option>
+          <option value="createdAt">Created</option>
+          <option value="name">Name</option>
+        </select>
+        <select
+          aria-label="Workspace sort direction"
+          value={sortDirection}
+          onChange={event => onSortDirectionChange(event.currentTarget.value as SortDirection)}
+        >
+          <option value="desc">Desc</option>
+          <option value="asc">Asc</option>
+        </select>
+      </div>
+
       <div className="workspace-list">
         {rooms.length > 0 ? (
           rooms.map(room => (
@@ -78,7 +125,10 @@ export function WorkspaceRail({
               key={room.id}
               room={room}
               active={room.id === activeWorkspaceId}
+              updating={updatingWorkspaceId === room.id}
               onSelectWorkspace={onSelectWorkspace}
+              onTogglePin={onTogglePin}
+              onToggleArchive={onToggleArchive}
             />
           ))
         ) : (
@@ -124,7 +174,10 @@ export function WorkspaceRail({
 type WorkspaceButtonProps = {
   room: WorkspaceRoom
   active: boolean
+  updating: boolean
   onSelectWorkspace: (workspaceId: string) => void
+  onTogglePin: (room: WorkspaceRoom) => void
+  onToggleArchive: (room: WorkspaceRoom) => void
 }
 
 /**
@@ -132,14 +185,24 @@ type WorkspaceButtonProps = {
  * Input: workspace room, active flag, and select callback.
  * Output: a button for switching workspaces.
  */
-function WorkspaceButton({ room, active, onSelectWorkspace }: WorkspaceButtonProps) {
+function WorkspaceButton({
+  room,
+  active,
+  updating,
+  onSelectWorkspace,
+  onTogglePin,
+  onToggleArchive,
+}: WorkspaceButtonProps) {
   const signal = room.signal
   const status = signal.runningAgents > 0 ? 'running' : room.workspace.runtimeStatus === 'ready' ? 'ready' : 'failed'
   const Icon = room.kind === 'group' ? MessagesSquare : UserRound
+  const pinned = Boolean(room.workspace.pinnedAt)
+  const archived = Boolean(room.workspace.archivedAt)
 
   return (
-    <button
-      className={`workspace-button ${active ? 'is-active' : ''}`}
+    <div className={`workspace-row ${active ? 'is-active' : ''}`}>
+      <button
+      className="workspace-button"
       type="button"
       onClick={() => onSelectWorkspace(room.id)}
     >
@@ -163,12 +226,35 @@ function WorkspaceButton({ room, active, onSelectWorkspace }: WorkspaceButtonPro
         <span className="workspace-meta">
           <StatusPill status="muted" label={workspaceRoomKindLabel(room.kind)} />
           <StatusPill status={status} label={signal.runningAgents > 0 ? `${signal.runningAgents} running` : 'ready'} />
+          {pinned ? <StatusPill status="success" label="pinned" /> : null}
+          {archived ? <StatusPill status="muted" label="archived" /> : null}
           <span>
             {signal.artifactCount} 产物 / {signal.messageCount} 消息
           </span>
         </span>
       </span>
-    </button>
+      </button>
+      <div className="workspace-actions">
+        <button
+          className="icon-button"
+          type="button"
+          onClick={() => onTogglePin(room)}
+          disabled={updating}
+          title={pinned ? 'Unpin workspace' : 'Pin workspace'}
+        >
+          {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+        </button>
+        <button
+          className="icon-button"
+          type="button"
+          onClick={() => onToggleArchive(room)}
+          disabled={updating}
+          title={archived ? 'Unarchive workspace' : 'Archive workspace'}
+        >
+          {archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+        </button>
+      </div>
+    </div>
   )
 }
 

@@ -1,5 +1,8 @@
 export type WorkspaceType = 'dev' | 'research' | 'writing' | 'chat'
 export type ConversationType = 'group' | 'direct'
+export type WorkspaceListStatus = 'active' | 'archived' | 'all'
+export type WorkspaceSortField = 'updatedAt' | 'createdAt' | 'name'
+export type SortDirection = 'asc' | 'desc'
 
 export interface StoredProjectRecord {
   projectId: string
@@ -9,6 +12,8 @@ export interface StoredProjectRecord {
   conversationId: string
   conversationType?: ConversationType
   targetAgentId?: string
+  pinnedAt?: string
+  archivedAt?: string
   createdAt: string
   updatedAt: string
 }
@@ -36,6 +41,10 @@ export interface WorkbenchPage {
   nextCursor?: string
   hasMore: boolean
   total: number
+  status?: WorkspaceListStatus
+  sortBy?: WorkspaceSortField
+  sortDirection?: SortDirection
+  query?: string
 }
 
 export interface WorkbenchRoomSummary {
@@ -175,6 +184,8 @@ export interface FrontendWorkspace extends RuntimeWorkspace {
   projectId: string
   agentHubPreviewUrl: string
   agentHubZipUrl: string
+  pinnedAt?: string
+  archivedAt?: string
 }
 
 export interface RuntimeConversation extends Record<string, unknown> {

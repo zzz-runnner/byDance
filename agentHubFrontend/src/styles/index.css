@@ -297,6 +297,7 @@ a {
   font-weight: 700;
 }
 
+.topbar-agent-button,
 .topbar-code-button {
   display: inline-flex;
   align-items: center;
@@ -441,6 +442,25 @@ a {
   color: var(--ink);
 }
 
+.workspace-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.8fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.workspace-controls select {
+  min-width: 0;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, 0.66);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.26);
+  color: #44536a;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .workspace-list,
 .handoff-list,
 .event-list,
@@ -500,6 +520,20 @@ a {
   line-height: 1.4;
 }
 
+.workspace-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: stretch;
+  border: 1px solid transparent;
+  border-radius: 14px;
+}
+
+.workspace-row.is-active {
+  border-color: rgba(59, 130, 246, 0.48);
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.5), rgba(237, 244, 255, 0.36));
+}
+
 .workspace-button {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -514,9 +548,22 @@ a {
   text-align: left;
 }
 
-.workspace-button.is-active {
-  border-color: rgba(59, 130, 246, 0.48);
-  background: linear-gradient(140deg, rgba(255, 255, 255, 0.5), rgba(237, 244, 255, 0.36));
+.workspace-row.is-active .workspace-button {
+  border-color: transparent;
+  background: transparent;
+}
+
+.workspace-actions {
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding-right: 3px;
+}
+
+.workspace-actions .icon-button {
+  width: 27px;
+  height: 27px;
+  border-radius: 9px;
 }
 
 .workspace-copy,
@@ -2931,8 +2978,17 @@ a {
   width: min(100%, 560px);
 }
 
+.agent-dialog-shell {
+  width: min(100%, 920px);
+}
+
 .dialog-card {
   padding: 16px;
+}
+
+.agent-dialog {
+  max-height: min(86vh, 780px);
+  overflow: hidden;
 }
 
 .dialog-header,
@@ -2949,6 +3005,74 @@ a {
 
 .dialog-form {
   display: grid;
+  gap: 12px;
+}
+
+.agent-dialog__body {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+}
+
+.agent-dialog__list {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-height: 0;
+  max-height: 620px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.agent-list-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.22);
+  color: #334155;
+  text-align: left;
+}
+
+.agent-list-item.is-active,
+.agent-list-item:hover {
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.agent-list-item span,
+.agent-list-item strong,
+.agent-list-item small {
+  min-width: 0;
+}
+
+.agent-list-item strong,
+.agent-list-item small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-list-item small {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.agent-dialog__form {
+  max-height: 620px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.agent-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -3012,7 +3136,12 @@ a {
 
 .segmented-control button,
 .primary-button,
-.secondary-button {
+.secondary-button,
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 34px;
   padding: 0 12px;
   border: 1px solid rgba(255, 255, 255, 0.64);
@@ -3041,8 +3170,14 @@ a {
   background: rgba(255, 255, 255, 0.4);
 }
 
+.danger-button {
+  background: rgba(217, 83, 79, 0.12);
+  color: var(--danger);
+}
+
 .primary-button:disabled,
 .secondary-button:disabled,
+.danger-button:disabled,
 .segmented-control button:disabled {
   cursor: not-allowed;
   opacity: 0.6;
@@ -3106,6 +3241,16 @@ a {
   }
   .topbar-code-button {
     justify-content: center;
+  }
+  .topbar-agent-button {
+    justify-content: center;
+  }
+  .agent-dialog__body,
+  .agent-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .agent-dialog__list {
+    max-height: 180px;
   }
   .brand-block h1,
   .chat-title-block h1 {

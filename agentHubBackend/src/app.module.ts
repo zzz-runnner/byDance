@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common'
 import { ConfigModule } from '@nestjs/config'
 import { AgentHubModule } from './agent-hub/agent-hub.module'
+import { AgentsModule } from './agents/agents.module'
 import { BuildsModule } from './builds/builds.module'
 import { DeploymentsModule } from './deployments/deployments.module'
 import { validateEnv } from './config/env.schema'
@@ -18,6 +19,7 @@ import { VersionsModule } from './versions/versions.module'
     }),
     StorageModule,
     AgentHubModule,
+    AgentsModule,
     ProjectsModule,
     VersionsModule,
     BuildsModule,
