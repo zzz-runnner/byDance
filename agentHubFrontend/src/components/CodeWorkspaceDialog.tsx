@@ -94,6 +94,11 @@ type MonacoDisposable = import('monaco-editor').IDisposable
 
 const CODE_EDITOR_THEME = 'agenthub-dark'
 const DIALOG_ANIMATION_MS = 220
+const CODE_DIALOG_PREVIEW_SURFACE_EVENT = 'agenthub:open-code-preview-surface'
+
+type CodeDialogPreviewSurfaceDetail = {
+  mode: Exclude<PreviewSurfaceMode, 'workspace'>
+}
 
 const CODE_EDITOR_THEME_DATA: MonacoThemeData = {
   base: 'vs-dark',
@@ -520,6 +525,20 @@ function previewSurfaceEmptyMessage(mode: PreviewSurfaceMode): string {
  * Input: open state, project identity, and quote callback.
  * Output: file tree, read-only code browser, and static preview panel.
  */
+/**
+ * Broadcasts one request to focus a preview surface inside the code dialog.
+ * Input: build or deployment preview mode.
+ * Output: one browser event consumed by the active dialog instance.
+ */
+function dispatchCodeDialogPreviewSurface(mode: Exclude<PreviewSurfaceMode, 'workspace'>) {
+  window.dispatchEvent(new CustomEvent<CodeDialogPreviewSurfaceDetail>(
+    CODE_DIALOG_PREVIEW_SURFACE_EVENT,
+    {
+      detail: { mode },
+    },
+  ))
+}
+
 export function CodeWorkspaceDialog({
   open,
   projectId,
@@ -530,6 +549,7 @@ export function CodeWorkspaceDialog({
 }: CodeWorkspaceDialogProps) {
   const editorRef = useRef<MonacoEditorInstance | null>(null)
   const editorShellRef = useRef<HTMLDivElement | null>(null)
+  const workspaceLayoutRef = useRef<HTMLDivElement | null>(null)
   const activeFilePathRef = useRef<string | undefined>(undefined)
   const activeLanguageRef = useRef<string | undefined>(undefined)
   const editorDisposablesRef = useRef<MonacoDisposable[]>([])
@@ -1123,6 +1143,32 @@ export function CodeWorkspaceDialog({
   }, [activePreviewOption, open, previewSurfaceMode])
 
   useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const handlePreviewSurfaceRequest = (event: Event) => {
+      const detail = (event as CustomEvent<CodeDialogPreviewSurfaceDetail>).detail
+      if (!detail || (detail.mode !== 'build' && detail.mode !== 'deployment')) {
+        return
+      }
+      openPreviewSurface(detail.mode)
+    }
+
+    window.addEventListener(
+      CODE_DIALOG_PREVIEW_SURFACE_EVENT,
+      handlePreviewSurfaceRequest as EventListener,
+    )
+
+    return () => {
+      window.removeEventListener(
+        CODE_DIALOG_PREVIEW_SURFACE_EVENT,
+        handlePreviewSurfaceRequest as EventListener,
+      )
+    }
+  }, [open])
+
+  useEffect(() => {
     if (!open || panelMode !== 'code') {
       return
     }
@@ -1446,6 +1492,23 @@ export function CodeWorkspaceDialog({
    */
   async function handleRefresh() {
     await refreshWorkspaceSurfaces(activeFilePath, selectedPreviewPath)
+  }
+
+  /**
+   * Opens one preview surface inside the main code workspace area.
+   * Input: target preview surface mode.
+   * Output: dialog scrolls to the code area and switches to preview.
+   */
+  function openPreviewSurface(mode: PreviewSurfaceMode) {
+    setPanelMode('preview')
+    setPreviewSurfaceMode(mode)
+    setPreviewAttempt(0)
+    window.requestAnimationFrame(() => {
+      workspaceLayoutRef.current?.scrollIntoView({
+        block: 'start',
+        behavior: 'smooth',
+      })
+    })
   }
 
   /**
@@ -1811,7 +1874,7 @@ export function CodeWorkspaceDialog({
             </div>
           </section>
 
-          <div className="code-dialog__layout">
+          <div className="code-dialog__layout" ref={workspaceLayoutRef}>
             <aside className="code-sidebar">
               <label className="search-box">
                 <Search size={15} />
@@ -2228,6 +2291,9 @@ type DeliveryStatusCardProps = {
   onAction: () => void
   linkLabel?: string
   linkUrl?: string
+  secondaryActionLabel?: string
+  onSecondaryAction?: () => void
+  secondaryActionDisabled?: boolean
 }
 
 /**
@@ -2245,8 +2311,16 @@ function DeliveryStatusCard({
   onAction,
   linkLabel,
   linkUrl,
+  secondaryActionLabel,
+  onSecondaryAction,
+  secondaryActionDisabled,
 }: DeliveryStatusCardProps) {
   const logExcerpt = clipDeliveryLog(asset?.log)
+  const inlinePreviewMode = linkLabel === '打开产物'
+    ? 'build'
+    : linkLabel === '打开部署'
+      ? 'deployment'
+      : undefined
 
   return (
     <div className={`code-delivery-card ${busy ? 'is-busy' : ''} ${asset?.status === 'failed' ? 'is-failed' : asset?.status === 'ready' ? 'is-ready' : ''}`}>
@@ -2262,7 +2336,26 @@ function DeliveryStatusCard({
           {actionBusy ? <LoaderCircle className="icon-spin" size={14} /> : null}
           {actionLabel}
         </button>
-        {linkUrl && linkLabel ? (
+        {secondaryActionLabel && onSecondaryAction ? (
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={onSecondaryAction}
+            disabled={secondaryActionDisabled}
+          >
+            {secondaryActionLabel}
+            <Globe2 size={14} />
+          </button>
+        ) : inlinePreviewMode && linkUrl ? (
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => dispatchCodeDialogPreviewSurface(inlinePreviewMode)}
+          >
+            {inlinePreviewMode === 'build' ? '查看产物' : '查看部署'}
+            <Globe2 size={14} />
+          </button>
+        ) : linkUrl && linkLabel ? (
           <a className="secondary-button" href={linkUrl} target="_blank" rel="noreferrer">
             {linkLabel}
             <ExternalLink size={14} />
