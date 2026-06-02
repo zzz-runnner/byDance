@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import {
+  applyBusinessProjectChangeSet,
   buildBusinessProjectVersion,
   createBusinessProjectVersion,
   deployBusinessProjectVersion,
@@ -25,6 +26,7 @@ import {
   fetchBusinessProjectPreviewCapability,
   fetchBusinessProjectDiff,
   fetchBusinessProjectFileContent,
+  fetchBusinessProjectFilePreview,
   fetchBusinessProjectFiles,
   restoreBusinessProjectVersion,
   triggerBusinessProjectPreviewBuild,
@@ -37,6 +39,7 @@ import type {
   WorkspaceDeliveryAsset,
   WorkspaceDeliverySurface,
   WorkspaceDeliverySummary,
+  WorkspaceDocumentPreview,
   WorkspacePreviewCapability,
   WorkspacePreviewTarget,
   WorkspaceDiffSnapshot,
@@ -64,6 +67,12 @@ type CodeWorkspaceDialogProps = {
 type FileCacheEntry = {
   loading: boolean
   content?: WorkspaceFileContent
+  error?: string
+}
+
+type DocumentPreviewCacheEntry = {
+  loading: boolean
+  preview?: WorkspaceDocumentPreview
   error?: string
 }
 
@@ -198,6 +207,18 @@ function firstTextFilePath(nodes: WorkspaceFileNode[]): string | undefined {
     }
   }
   return undefined
+}
+
+/**
+ * Returns whether one file path can use the document preview MVP instead of the text editor.
+ * Input: repo-relative file path.
+ * Output: true for PDF, DOCX, and PPTX files.
+ */
+function isDocumentPreviewableFile(filePath: string | undefined): boolean {
+  if (!filePath) {
+    return false
+  }
+  return /\.(pdf|docx|pptx)$/i.test(filePath)
 }
 
 /**
@@ -560,7 +581,10 @@ export function CodeWorkspaceDialog({
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({})
   const [activeFilePath, setActiveFilePath] = useState<string>()
   const [fileCache, setFileCache] = useState<Record<string, FileCacheEntry>>({})
+  const [documentPreviewCache, setDocumentPreviewCache] = useState<Record<string, DocumentPreviewCacheEntry>>({})
   const [diffSnapshot, setDiffSnapshot] = useState<WorkspaceDiffSnapshot>()
+  const [applyingChangeSet, setApplyingChangeSet] = useState(false)
+  const [changeSetNotice, setChangeSetNotice] = useState('')
   const [selectionState, setSelectionState] = useState<EditorSelectionState | undefined>(undefined)
   const [treeRootLabel, setTreeRootLabel] = useState('')
   const [wrapMode, setWrapMode] = useState<CodeWrapMode>('on')
@@ -599,6 +623,9 @@ export function CodeWorkspaceDialog({
   )
   const activeFileEntry = activeFilePath ? fileCache[activeFilePath] : undefined
   const activeFileContent = activeFileEntry?.content
+  const activeDocumentPreviewEntry = activeFilePath ? documentPreviewCache[activeFilePath] : undefined
+  const activeDocumentPreview = activeDocumentPreviewEntry?.preview
+  const activeFileIsDocumentPreview = isDocumentPreviewableFile(activeFilePath)
   const changedFileCount = countChangedFiles(diffSnapshot?.status)
   const canMountEditor = Boolean(activeFileContent && editorViewport.width >= 240 && editorViewport.height >= 220)
   const previewTargets = previewCapability?.targets ?? []
@@ -767,7 +794,10 @@ export function CodeWorkspaceDialog({
     setExpandedPaths({})
     setActiveFilePath(undefined)
     setFileCache({})
+    setDocumentPreviewCache({})
     setDiffSnapshot(undefined)
+    setApplyingChangeSet(false)
+    setChangeSetNotice('')
     setSelectionState(undefined)
     setTreeRootLabel('')
     setWrapMode('on')
@@ -827,6 +857,45 @@ export function CodeWorkspaceDialog({
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load file content.'
       setFileCache(previous => ({
+        ...previous,
+        [filePath]: {
+          loading: false,
+          error: message,
+        },
+      }))
+      throw new Error(message)
+    }
+  }
+
+  /**
+   * Loads one document preview payload into the local cache for supported binary files.
+   * Input: project id and repo-relative file path.
+   * Output: resolved document preview cached under the file path.
+   */
+  async function loadDocumentPreviewIntoCache(
+    currentProjectId: string,
+    filePath: string,
+  ): Promise<WorkspaceDocumentPreview> {
+    setDocumentPreviewCache(previous => ({
+      ...previous,
+      [filePath]: {
+        loading: true,
+      },
+    }))
+
+    try {
+      const preview = await fetchBusinessProjectFilePreview(currentProjectId, filePath)
+      setDocumentPreviewCache(previous => ({
+        ...previous,
+        [filePath]: {
+          loading: false,
+          preview,
+        },
+      }))
+      return preview
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load document preview.'
+      setDocumentPreviewCache(previous => ({
         ...previous,
         [filePath]: {
           loading: false,
@@ -1066,6 +1135,29 @@ export function CodeWorkspaceDialog({
     await onProjectDeliveryUpdated?.()
   }
 
+  /**
+   * Applies the currently focused change set onto the workspace repo and refreshes visible surfaces.
+   * Input: none.
+   * Output: diff, file tree, preview, and delivery panels reloaded after the patch mutation.
+   */
+  async function handleApplyCurrentChangeSet() {
+    if (!projectId || !turnDiff?.changeSetId || applyingChangeSet) {
+      return
+    }
+
+    setApplyingChangeSet(true)
+    setChangeSetNotice('')
+    try {
+      const result = await applyBusinessProjectChangeSet(projectId, turnDiff.changeSetId)
+      setChangeSetNotice(result.summary)
+      await refreshWorkspaceSurfaces(activeFilePath, selectedPreviewPath)
+    } catch (error) {
+      setChangeSetNotice(error instanceof Error ? error.message : 'Apply diff failed.')
+    } finally {
+      setApplyingChangeSet(false)
+    }
+  }
+
   useEffect(() => {
     clearDialogCloseTimer()
 
@@ -1188,14 +1280,44 @@ export function CodeWorkspaceDialog({
     if (!open || !projectId || !activeFilePath) {
       return
     }
-    const cachedEntry = fileCache[activeFilePath]
-    if (cachedEntry?.loading || cachedEntry?.content || cachedEntry?.error) {
-      return
-    }
 
     let cancelled = false
     const currentProjectId = projectId
     const currentFilePath = activeFilePath
+
+    if (isDocumentPreviewableFile(currentFilePath)) {
+      const cachedPreview = documentPreviewCache[currentFilePath]
+      if (cachedPreview?.loading || cachedPreview?.preview || cachedPreview?.error) {
+        return
+      }
+
+      async function loadDocumentPreview() {
+        try {
+          await loadDocumentPreviewIntoCache(currentProjectId, currentFilePath)
+        } catch (error) {
+          if (cancelled) {
+            return
+          }
+          setDocumentPreviewCache(previous => ({
+            ...previous,
+            [currentFilePath]: {
+              loading: false,
+              error: error instanceof Error ? error.message : 'Failed to load document preview.',
+            },
+          }))
+        }
+      }
+
+      void loadDocumentPreview()
+      return () => {
+        cancelled = true
+      }
+    }
+
+    const cachedEntry = fileCache[currentFilePath]
+    if (cachedEntry?.loading || cachedEntry?.content || cachedEntry?.error) {
+      return
+    }
 
     async function loadFileContent() {
       try {
@@ -1219,7 +1341,7 @@ export function CodeWorkspaceDialog({
     return () => {
       cancelled = true
     }
-  }, [activeFilePath, open, projectId])
+  }, [activeFilePath, documentPreviewCache, fileCache, open, projectId])
 
   useEffect(() => {
     clearSelectionCommitTimer()
@@ -1793,6 +1915,23 @@ export function CodeWorkspaceDialog({
                       <span>{diffSummary || turnResultContext?.summary || diffStatusSummary || '这里会展示当前本轮或当前工作区的代码差异。'}</span>
                     </div>
                     <div className="code-editor-toolbar__actions code-editor-toolbar__actions--preview">
+                      {turnDiff?.changeSetId ? (
+                        <button
+                          className="primary-button code-preview-build-button"
+                          type="button"
+                          onClick={() => void handleApplyCurrentChangeSet()}
+                          disabled={applyingChangeSet}
+                        >
+                          {applyingChangeSet ? (
+                            <>
+                              <LoaderCircle className="icon-spin" size={14} />
+                              正在应用 Diff...
+                            </>
+                          ) : (
+                            '一键应用 Diff'
+                          )}
+                        </button>
+                      ) : null}
                       {turnResultContext?.sourceArchiveUrl ? (
                         <a
                           className="secondary-button code-preview-open"
@@ -2106,6 +2245,36 @@ export function CodeWorkspaceDialog({
                     </div>
                   ) : activeFileEntry?.error ? (
                     <div className="code-editor-empty code-editor-empty--error">{activeFileEntry.error}</div>
+                  ) : activeFileIsDocumentPreview && activeDocumentPreviewEntry?.loading ? (
+                    <div className="code-editor-empty">
+                      <LoaderCircle className="icon-spin" size={18} />
+                      正在加载文档预览...
+                    </div>
+                  ) : activeFileIsDocumentPreview && activeDocumentPreviewEntry?.error ? (
+                    <div className="code-editor-empty code-editor-empty--error">{activeDocumentPreviewEntry.error}</div>
+                  ) : activeDocumentPreview?.kind === 'pdf' ? (
+                    <div className="code-document-preview">
+                      <iframe
+                        className="code-document-preview__frame"
+                        src={activeDocumentPreview.sourceUrl}
+                        title={activeDocumentPreview.path}
+                      />
+                    </div>
+                  ) : activeDocumentPreview ? (
+                    <article className="code-document-preview code-document-preview--text">
+                      <header className="code-document-preview__header">
+                        <strong>{activeDocumentPreview.name}</strong>
+                        <span>{activeDocumentPreview.summary}</span>
+                      </header>
+                      <div className="code-document-preview__body">
+                        {(activeDocumentPreview.sections ?? []).map(section => (
+                          <section className="code-document-preview__section" key={`${activeDocumentPreview.path}-${section.title}`}>
+                            <h4>{section.title}</h4>
+                            <p>{section.content}</p>
+                          </section>
+                        ))}
+                      </div>
+                    </article>
                   ) : activeFileContent && canMountEditor ? (
                     <Editor
                       height="100%"
@@ -2209,6 +2378,13 @@ export function CodeWorkspaceDialog({
                           ))}
                         </ul>
                       ) : null}
+                    </div>
+                  ) : null}
+
+                  {changeSetNotice ? (
+                    <div className="code-diff-review">
+                      <strong>Diff 应用结果</strong>
+                      <p>{changeSetNotice}</p>
                     </div>
                   ) : null}
 
@@ -2502,7 +2678,7 @@ function FileTreeNode({
   onSelectFile,
 }: FileTreeNodeProps) {
   const isDirectory = node.kind === 'directory'
-  const isBinaryFile = node.kind === 'file' && !node.isText
+  const isBinaryFile = node.kind === 'file' && !node.isText && !isDocumentPreviewableFile(node.path)
   const isExpanded = forceExpanded || expandedPaths[node.path] || depth === 0
 
   return (

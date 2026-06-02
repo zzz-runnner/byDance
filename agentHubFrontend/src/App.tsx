@@ -7,7 +7,9 @@ import {
   deleteBusinessProjectAgent,
   fetchBusinessProjectState,
   fetchBusinessWorkbenchOverview,
+  pinBusinessProjectMessage,
   streamBusinessProjectMessage,
+  unpinBusinessProjectMessage,
   updateBusinessProjectAgent,
   updateBusinessWorkspaceMetadata,
   type CreateBusinessAgentInput,
@@ -972,6 +974,33 @@ export function App() {
   }
 
   /**
+   * Toggles one workspace message in or out of the pinned long-term context list.
+   * Input: persisted message id and current pinned state.
+   * Output: refreshes the active workspace detail after the mutation succeeds.
+   */
+  async function handleToggleMessagePin(messageId: string, pinned: boolean) {
+    if (!activeRoom?.workspace.projectId) {
+      return
+    }
+
+    try {
+      if (pinned) {
+        await unpinBusinessProjectMessage(activeRoom.workspace.projectId, messageId)
+      } else {
+        await pinBusinessProjectMessage(activeRoom.workspace.projectId, messageId)
+      }
+      await loadProjectRoomState(
+        activeRoom,
+        messageLimitByWorkspace[activeRoom.id] ?? messagePage.limit ?? INITIAL_MESSAGE_PAGE_LIMIT,
+        'refresh',
+      )
+    } catch (error) {
+      setConnectionStatus('error')
+      setConnectionErrorMessage(errorMessageOf(error))
+    }
+  }
+
+  /**
    * Stores one quoted message reference for the next outgoing user message.
    * Input: reply reference from the selected message bubble.
    * Output: updates the quote bar state in the composer.
@@ -1146,6 +1175,7 @@ export function App() {
               onCancelReply={() => setPendingReplyTo(undefined)}
               onCancelCodeSelection={() => setPendingCodeSelection(undefined)}
               onCopyMessage={content => void handleCopyMessage(content)}
+              onToggleMessagePin={(messageId, pinned) => void handleToggleMessagePin(messageId, pinned)}
               onOpenCodeDialog={request => handleOpenCodeDialog(request)}
               onSend={handleSend}
             />

@@ -177,6 +177,32 @@ export class AgentHubClientService {
   }
 
   /**
+   * Pins one message into the workspace-level long-term context list.
+   * Input: workspace id and message id.
+   * Output: updated workspace pin payload from AgentHub.
+   */
+  async pinWorkspaceMessage(workspaceId: string, messageId: string): Promise<{
+    workspaceId: string
+    messageId: string
+    pinnedMessageIds: string[]
+  }> {
+    return this.putJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/messages/${encodeURIComponent(messageId)}/pin`)
+  }
+
+  /**
+   * Removes one message from the workspace-level pinned context list.
+   * Input: workspace id and message id.
+   * Output: updated workspace pin payload from AgentHub.
+   */
+  async unpinWorkspaceMessage(workspaceId: string, messageId: string): Promise<{
+    workspaceId: string
+    messageId: string
+    pinnedMessageIds: string[]
+  }> {
+    return this.deleteJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/messages/${encodeURIComponent(messageId)}/pin`)
+  }
+
+  /**
    * Proxies one arbitrary runtime request without JSON decoding.
    * Input: runtime-relative pathname and optional fetch init.
    * Output: raw upstream HTTP response.
@@ -237,6 +263,22 @@ export class AgentHubClientService {
     try {
       const response = await fetch(this.url(pathname), {
         method: 'DELETE',
+      })
+      return this.parseJsonResponse<T>(response)
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error
+      }
+      throw new ServiceUnavailableException(`AgentHub request failed: ${this.errorMessage(error)}`)
+    }
+  }
+
+  private async putJson<T>(pathname: string, body?: unknown): Promise<T> {
+    try {
+      const response = await fetch(this.url(pathname), {
+        method: 'PUT',
+        headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       })
       return this.parseJsonResponse<T>(response)
     } catch (error) {

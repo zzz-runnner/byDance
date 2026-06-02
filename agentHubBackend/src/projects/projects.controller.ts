@@ -124,9 +124,25 @@ export class ProjectsController {
     return this.projects.getProjectFileContent(projectId, query)
   }
 
+  @Get(':projectId/files/preview')
+  getProjectFilePreview(
+    @Param('projectId') projectId: string,
+    @Query() query: FileContentQueryDto,
+  ) {
+    return this.projects.getProjectFilePreview(projectId, query)
+  }
+
   @Get(':projectId/diff')
   getProjectDiff(@Param('projectId') projectId: string) {
     return this.projects.getProjectDiff(projectId)
+  }
+
+  @Post(':projectId/change-sets/:changeSetId/apply')
+  applyProjectChangeSet(
+    @Param('projectId') projectId: string,
+    @Param('changeSetId') changeSetId: string,
+  ) {
+    return this.projects.applyProjectChangeSet(projectId, changeSetId)
   }
 
   @Get(':projectId/preview-targets')
@@ -153,6 +169,22 @@ export class ProjectsController {
     @Body() input: WriteWorkspaceFileDto,
   ) {
     return this.projects.writeWorkspaceFile(projectId, input)
+  }
+
+  @Put(':projectId/messages/:messageId/pin')
+  pinProjectMessage(
+    @Param('projectId') projectId: string,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.projects.pinProjectMessage(projectId, messageId)
+  }
+
+  @Delete(':projectId/messages/:messageId/pin')
+  unpinProjectMessage(
+    @Param('projectId') projectId: string,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.projects.unpinProjectMessage(projectId, messageId)
   }
 
   @Post(':projectId/messages/stream')

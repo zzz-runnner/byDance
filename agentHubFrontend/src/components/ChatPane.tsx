@@ -14,6 +14,7 @@ import {
   Globe2,
   LoaderCircle,
   MessageSquareReply,
+  Pin,
   RefreshCcw,
   ShieldCheck,
   TerminalSquare,
@@ -77,6 +78,7 @@ type ChatPaneProps = {
   onCancelReply: () => void
   onCancelCodeSelection: () => void
   onCopyMessage: (content: string) => void
+  onToggleMessagePin: (messageId: string, pinned: boolean) => void
   onOpenCodeDialog?: (request?: CodeWorkspaceDialogRequest) => void
   onSend: (content: string, replyTo?: ReplyReference, codeSelection?: CodeSelectionReference) => void
 }
@@ -290,6 +292,7 @@ function buildTurnResultBundle(artifacts: ChatTurnArtifact[]): TurnResultBundle 
       url: latestPreview.url,
     } : undefined,
     diff: latestDiff ? {
+      changeSetId: latestDiff.id,
       title: latestDiff.title,
       summary: latestDiff.summary,
       patch: latestDiff.patch,
@@ -441,12 +444,17 @@ export function ChatPane({
   onCancelReply,
   onCancelCodeSelection,
   onCopyMessage,
+  onToggleMessagePin,
   onOpenCodeDialog,
   onSend,
 }: ChatPaneProps) {
   const agentMap = buildAgentMap(state)
   const activeAgent = room?.targetAgentId ? agentMap.get(room.targetAgentId) : undefined
   const activeAgentName = agentDisplayName(activeAgent, room?.targetAgentId)
+  const pinnedMessageIds =
+    state.workspaces.find(workspace => workspace.id === room?.workspace.id)?.pinnedMessageIds ??
+    room?.workspace.pinnedMessageIds ??
+    []
   const mentionOptions = groupMentionOptions(room, agentMap)
   const timelineItems = useMemo(
     () =>
@@ -775,6 +783,8 @@ export function ChatPane({
                   : undefined}
                 onReply={onReplyToMessage}
                 onCopy={onCopyMessage}
+                isPinned={pinnedMessageIds.includes(item.message.id)}
+                onTogglePin={onToggleMessagePin}
                 onOpenCodeDialog={onOpenCodeDialog}
               />
             ) : (
@@ -786,6 +796,8 @@ export function ChatPane({
                 onToggle={() => toggleTurn(item.turn)}
                 onReply={onReplyToMessage}
                 onCopy={onCopyMessage}
+                pinnedMessageIds={pinnedMessageIds}
+                onTogglePin={onToggleMessagePin}
                 onOpenCodeDialog={onOpenCodeDialog}
               />
             ),
@@ -824,6 +836,8 @@ type TurnBlockProps = {
   onToggle: () => void
   onReply: (replyTo: ReplyReference) => void
   onCopy: (content: string) => void
+  pinnedMessageIds: string[]
+  onTogglePin: (messageId: string, pinned: boolean) => void
   onOpenCodeDialog?: (request?: CodeWorkspaceDialogRequest) => void
 }
 
@@ -839,6 +853,8 @@ function TurnBlock({
   onToggle,
   onReply,
   onCopy,
+  pinnedMessageIds,
+  onTogglePin,
   onOpenCodeDialog,
 }: TurnBlockProps) {
   const finalMessage = turn.finalMessage
@@ -861,6 +877,8 @@ function TurnBlock({
         message={turn.userMessage}
         onReply={onReply}
         onCopy={onCopy}
+        isPinned={pinnedMessageIds.includes(turn.userMessage.id)}
+        onTogglePin={onTogglePin}
         onOpenCodeDialog={onOpenCodeDialog}
       />
 
@@ -918,6 +936,8 @@ function TurnBlock({
           senderName={finalSpeakerName}
           onReply={onReply}
           onCopy={onCopy}
+          isPinned={pinnedMessageIds.includes(finalMessage.id)}
+          onTogglePin={onTogglePin}
           onOpenCodeDialog={onOpenCodeDialog}
           renderArtifacts={false}
         />
@@ -927,6 +947,8 @@ function TurnBlock({
           senderName={settlingSpeakerName}
           onReply={onReply}
           onCopy={onCopy}
+          isPinned={pinnedMessageIds.includes(settlingMessage.id)}
+          onTogglePin={onTogglePin}
           onOpenCodeDialog={onOpenCodeDialog}
           renderArtifacts={false}
           statusNote="正在整理最终结果..."
@@ -937,6 +959,8 @@ function TurnBlock({
           senderName={streamingSpeakerName}
           onReply={onReply}
           onCopy={onCopy}
+          isPinned={false}
+          onTogglePin={onTogglePin}
           onOpenCodeDialog={onOpenCodeDialog}
           renderArtifacts={false}
           forceStreaming
@@ -1035,6 +1059,8 @@ type MessageBubbleProps = {
   senderName?: string
   onReply: (replyTo: ReplyReference) => void
   onCopy: (content: string) => void
+  isPinned: boolean
+  onTogglePin: (messageId: string, pinned: boolean) => void
   onOpenCodeDialog?: (request?: CodeWorkspaceDialogRequest) => void
   renderArtifacts?: boolean
   forceStreaming?: boolean
@@ -1051,6 +1077,8 @@ function MessageBubble({
   senderName,
   onReply,
   onCopy,
+  isPinned,
+  onTogglePin,
   onOpenCodeDialog,
   renderArtifacts = true,
   forceStreaming = false,
@@ -1060,6 +1088,7 @@ function MessageBubble({
   const isStreamingPlaceholder = forceStreaming || (!isUser && message.content.trim().length === 0)
   const senderLabel = messageSenderLabel(message, senderName)
   const canReply = message.content.trim().length > 0
+  const canPin = !isStreamingPlaceholder && !message.id.startsWith('temp-')
   const wasStreamingRef = useRef(isStreamingPlaceholder)
   const [isSettling, setIsSettling] = useState(false)
 
@@ -1089,6 +1118,7 @@ function MessageBubble({
       <div className="message-stack">
         <div className="message-meta">
           <strong>{senderLabel}</strong>
+          {isPinned ? <span className="message-pin-badge">Pinned</span> : null}
           <time>{formatTime(message.createdAt)}</time>
         </div>
         <div
@@ -1131,6 +1161,12 @@ function MessageBubble({
             </div>
           ) : null}
           <div className="message-actions">
+            {canPin ? (
+              <button type="button" onClick={() => onTogglePin(message.id, isPinned)}>
+                <Pin size={14} />
+                {isPinned ? '取消置顶' : '置顶记忆'}
+              </button>
+            ) : null}
             {canReply ? (
               <button type="button" onClick={() => onReply(buildMessageReplyReference(message, senderName))}>
                 <MessageSquareReply size={14} />

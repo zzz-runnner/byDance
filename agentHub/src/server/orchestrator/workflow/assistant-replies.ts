@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentSessionMessage, CodeSelectionReference, Conversation, MainBrainSynthesis, Message, WorkflowEvent, WorkflowEventRecord, Workspace } from '@shared/contracts'
 import { isoNow } from '@shared/contracts'
+import type { LocalToolGateway } from '../../tool-gateway'
 import type { ServerEnv } from '../../env'
 import { createModelGateway, type ModelGatewayRequest } from '../../model-gateway'
 import type { StateStore } from '../../store/types'
@@ -16,10 +17,14 @@ import {
 import type { TurnRoute } from '../turn-router'
 import { emitWorkflowEvent } from './workflow-events'
 import { requiredById } from './workflow-utils'
+import { streamAgentModelResponse } from '../agent-model'
+import type { WorkspaceRuntimeManager } from '../../runtime/workspace'
 
 type AssistantReplyServices = {
   env: ServerEnv
   store: StateStore
+  runtime: WorkspaceRuntimeManager
+  toolGateway: LocalToolGateway
   turnId?: string
   workflowEventLog?: WorkflowEventRecord[]
   eventSink?: (event: WorkflowEvent) => void
@@ -39,6 +44,7 @@ type StreamAssistantContentInput = {
   agentId?: string
   agentName?: string
   sessionId?: string
+  agentDefinition?: AgentReplyPersistenceInput['agent']
 }
 
 /**
@@ -129,7 +135,7 @@ async function streamAssistantContent(
   }
 
   const startedAt = Date.now()
-  const provider = services.env.AGENTHUB_ORCHESTRATOR_PROVIDER
+  const provider = input.agentDefinition?.modelProvider ?? services.env.AGENTHUB_ORCHESTRATOR_PROVIDER
   let assistantFinished = false
   emitWorkflowEvent(services, {
     type: 'model_call_started',
@@ -144,20 +150,44 @@ async function streamAssistantContent(
   })
 
   try {
-    const gateway = createModelGateway(services.env)
-    const response = await gateway.streamText(request, {
-      onDelta: delta => {
-        content += delta
-        emitWorkflowEvent(services, {
-          type: 'assistant_delta',
-          workspaceId: workspace.id,
-          conversationId: conversation.id,
-          scope: input.scope,
-          messageId,
-          delta,
+    const response = input.agentDefinition
+      ? await streamAgentModelResponse(
+          {
+            env: services.env,
+            runtime: services.runtime,
+            toolGateway: services.toolGateway,
+            workspace,
+            conversation,
+            agent: input.agentDefinition,
+            request,
+          },
+          {
+            onDelta: delta => {
+              content += delta
+              emitWorkflowEvent(services, {
+                type: 'assistant_delta',
+                workspaceId: workspace.id,
+                conversationId: conversation.id,
+                scope: input.scope,
+                messageId,
+                delta,
+              })
+            },
+          },
+        )
+      : await createModelGateway(services.env).streamText(request, {
+          onDelta: delta => {
+            content += delta
+            emitWorkflowEvent(services, {
+              type: 'assistant_delta',
+              workspaceId: workspace.id,
+              conversationId: conversation.id,
+              scope: input.scope,
+              messageId,
+              delta,
+            })
+          },
         })
-      },
-    })
 
     if (!content && response.content) {
       content = emitStaticAssistantText(services, workspace, conversation, input.scope, messageId, response.content)
@@ -412,6 +442,7 @@ export async function streamAndPersistAgentReply(
     agentId: input.agent.id,
     agentName: input.agent.name,
     sessionId: input.session.id,
+    agentDefinition: input.agent,
   })
 
   const now = isoNow()

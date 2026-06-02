@@ -132,6 +132,21 @@ export type WorkspaceFileContent = {
   lineCount: number
 }
 
+export type WorkspaceDocumentPreview = {
+  kind: 'pdf' | 'docx' | 'pptx'
+  path: string
+  name: string
+  byteLength: number
+  updatedAt: string
+  sourceUrl: string
+  summary: string
+  textContent?: string
+  sections?: Array<{
+    title: string
+    content: string
+  }>
+}
+
 export type WorkspaceDiffSnapshot = {
   baseCommit: string
   status: string
@@ -147,6 +162,7 @@ export type CodeWorkspaceDialogTurnPreview = {
 }
 
 export type CodeWorkspaceDialogTurnDiff = {
+  changeSetId?: string
   title: string
   summary: string
   patch?: string

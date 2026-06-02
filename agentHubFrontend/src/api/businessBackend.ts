@@ -11,6 +11,7 @@ import type {
   WorkspaceDiffSnapshot,
   WorkspaceDeliverySummary,
   WorkspaceDeploymentRecord,
+  WorkspaceDocumentPreview,
   WorkspaceFileContent,
   WorkspaceListStatus,
   WorkspacePreviewCapability,
@@ -410,6 +411,20 @@ export async function fetchBusinessProjectFileContent(projectId: string, filePat
 }
 
 /**
+ * Loads one local document preview payload for PDF, Word, or PowerPoint files.
+ * Input: project id and repo-relative file path.
+ * Output: lightweight document preview data for the workspace dialog.
+ */
+export async function fetchBusinessProjectFilePreview(
+  projectId: string,
+  filePath: string,
+): Promise<WorkspaceDocumentPreview> {
+  const query = new URLSearchParams({ path: filePath })
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files/preview?${query.toString()}`)
+  return readJson<WorkspaceDocumentPreview>(response, 'Load business project file preview')
+}
+
+/**
  * Loads the current diff snapshot for one project workspace.
  * Input: project id.
  * Output: git status summary and unified patch text.
@@ -417,6 +432,54 @@ export async function fetchBusinessProjectFileContent(projectId: string, filePat
 export async function fetchBusinessProjectDiff(projectId: string): Promise<WorkspaceDiffSnapshot> {
   const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/diff`)
   return readJson<WorkspaceDiffSnapshot>(response, 'Load business project diff')
+}
+
+/**
+ * Applies one recorded AgentHub change set onto the current workspace repo.
+ * Input: project id and change-set id.
+ * Output: apply status plus a short backend summary.
+ */
+export async function applyBusinessProjectChangeSet(
+  projectId: string,
+  changeSetId: string,
+): Promise<{ status: 'applied' | 'already_applied'; changeSetId: string; summary: string }> {
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/change-sets/${encodeURIComponent(changeSetId)}/apply`,
+    {
+      method: 'POST',
+    },
+  )
+  return readJson(response, 'Apply business project change set')
+}
+
+/**
+ * Pins one persisted chat message into the workspace-level long-term context list.
+ * Input: project id and runtime message id.
+ * Output: updated pin payload from the backend.
+ */
+export async function pinBusinessProjectMessage(
+  projectId: string,
+  messageId: string,
+): Promise<{ workspaceId: string; messageId: string; pinnedMessageIds: string[] }> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/messages/${encodeURIComponent(messageId)}/pin`, {
+    method: 'PUT',
+  })
+  return readJson(response, 'Pin business project message')
+}
+
+/**
+ * Removes one persisted chat message from the workspace-level pinned list.
+ * Input: project id and runtime message id.
+ * Output: updated pin payload from the backend.
+ */
+export async function unpinBusinessProjectMessage(
+  projectId: string,
+  messageId: string,
+): Promise<{ workspaceId: string; messageId: string; pinnedMessageIds: string[] }> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/messages/${encodeURIComponent(messageId)}/pin`, {
+    method: 'DELETE',
+  })
+  return readJson(response, 'Unpin business project message')
 }
 
 /**

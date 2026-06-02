@@ -3,6 +3,7 @@ import type { ServerEnv } from '../env'
 import type { ModelGatewayRequest } from '../model-gateway'
 import { selectModelForRoute, type TurnRoute } from './turn-router'
 import { buildReplyContextPayload } from './reply-context'
+import { resolveAgentConfiguredModel } from './agent-model'
 
 type MainBrainReplyInput = {
   env: ServerEnv
@@ -171,7 +172,7 @@ export function buildAgentSessionReplyRequest(input: AgentSessionReplyInput): Mo
       sessionContext: input.sessionContext,
       fallbackText: input.fallbackText,
     }),
-    model: modelSelection.model ?? input.env.AGENTHUB_ROUTER_MODEL,
+    model: resolveAgentConfiguredModel(input.agent, modelSelection.model ?? input.env.AGENTHUB_ROUTER_MODEL),
     thinking: modelSelection.thinking ?? 'disabled',
     timeoutMs: input.env.AGENTHUB_ROUTER_TIMEOUT_MS,
     maxTokens: Math.max(input.env.AGENTHUB_ROUTER_MAX_TOKENS, 700),

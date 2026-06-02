@@ -279,6 +279,12 @@ function previewContentType(filePath: string): string {
       return 'image/webp'
     case '.ico':
       return 'image/x-icon'
+    case '.pdf':
+      return 'application/pdf'
+    case '.docx':
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    case '.pptx':
+      return 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
     case '.txt':
     case '.map':
     case '.md':

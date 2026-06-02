@@ -37,12 +37,16 @@ The current local chain covers:
 - `PATCH /api/projects/:projectId/metadata`
 - `PUT /api/projects/:projectId/pin`
 - `DELETE /api/projects/:projectId/pin`
+- `PUT /api/projects/:projectId/messages/:messageId/pin`
+- `DELETE /api/projects/:projectId/messages/:messageId/pin`
 - `PUT /api/projects/:projectId/archive`
 - `DELETE /api/projects/:projectId/archive`
 - `GET /api/projects/:projectId/state`
 - `GET /api/projects/:projectId/files`
 - `GET /api/projects/:projectId/files/content`
+- `GET /api/projects/:projectId/files/preview`
 - `GET /api/projects/:projectId/diff`
+- `POST /api/projects/:projectId/change-sets/:changeSetId/apply`
 - `GET /api/projects/:projectId/delivery`
 - `GET /api/projects/:projectId/preview-targets`
 - `GET /api/projects/:projectId/preview-capability`
@@ -144,6 +148,14 @@ The backend still keeps the Nest business modules for:
   - `awaiting_commit` after SSE finishes but before the persisted message is reloaded
   - the streamed reply bubble stays visible during `awaiting_commit`, so the chat does not show a blank gap between stream finish and persisted reply recovery
   - the persisted final reply appears first, and only then does the process block auto-collapse
+- Workspace messages can now be pinned and unpinned through the business backend, and the runtime pinned context list stays in sync with the current workspace.
+- The code dialog diff tab can now apply the current turn change-set directly through `/api/projects/:projectId/change-sets/:changeSetId/apply`.
+- The code dialog document preview now supports `pdf`, `docx`, and `pptx`:
+  - PDF previews keep the original file URL for iframe display
+  - DOCX previews extract paragraph text from `word/document.xml`
+  - PPTX previews extract slide text from `ppt/slides/slide*.xml`
+- Lightweight child-agent replies now use each agent's configured provider and model instead of always falling back to the global main-brain model path.
+- Windows-created Office archives are now normalized during local preview loading, so `Compress-Archive` generated `.docx` and `.pptx` files preview correctly.
 
 ## Local Preview
 
@@ -286,6 +298,29 @@ Additional local preview smoke passed on 2026-06-02:
 - `GET http://127.0.0.1:8790/build-preview/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/47280d926db374ad/index.html` returned `200`.
 - `POST http://127.0.0.1:8790/api/projects/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/builds` rebuilt delivery version `v20260602_135651` successfully.
 - `GET http://127.0.0.1:8790/build-preview/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/v20260602_135651/index.html` returned `200`.
+
+Focused feature verification also passed on 2026-06-03:
+
+- Type checks and builds re-ran successfully after the final fixes:
+  - `cd E:\byDance\agentHub && npm run check`
+  - `cd E:\byDance\agentHubBackend && npm run check && npm run build`
+- Message pin and unpin passed through the live backend:
+  - `PUT /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/messages/msg-adf54d9d-8f4a-4445-b6b5-bf93cfd632bd/pin`
+  - runtime workspace `ws-2a8c2774-669a-4d1e-8199-fd28fb0cf8b5` immediately reflected the pinned message id
+  - `DELETE` on the same route restored the pinned list to empty
+- Lightweight child-agent provider routing passed with real live events:
+  - `POST /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/messages/stream` with `@PM-Workspace-A ...` emitted the expected `agent_session` reply through `provider=mock` and `model=workspace-pm-model`
+  - `POST /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/messages/stream` with `agentId=engineer` emitted the expected `agent_session` reply through `provider=codex`
+  - the `codex` reply path was re-verified after a model-fallback fix, and `model_call_started` / `model_call_finished` both reported `deepseek-v4-flash`
+- Change-set apply passed through the live backend:
+  - `POST /api/projects/proj-a5bcf10b-9cc9-4441-a159-c1842158f59b/change-sets/changeset-3e9a90f6-d731-4dd7-85d6-32e46692d081/apply`
+  - returned `status: already_applied`
+  - this path now uses a temporary patch file on Windows so `already_applied` detection works reliably on larger change-sets
+- Document preview passed through the live backend:
+  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.pdf` returned a PDF preview payload with a runtime `sourceUrl`
+  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.docx` returned `kind: docx`, two extracted sections, and combined text content
+  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.pptx` returned `kind: pptx`, one extracted slide section, and combined text content
+  - all temporary preview fixtures were removed after validation, and the validation workspace diff returned empty again
   - final visible reply sender was `product-manager`
   - SSE stream completed and state reload reflected the persisted reply
 

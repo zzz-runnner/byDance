@@ -19,6 +19,7 @@
     "class-validator": "^0.14.2",
     "express": "^5.1.0",
     "extract-zip": "^2.0.1",
+    "fflate": "^0.8.3",
     "fs-extra": "^11.3.0",
     "pg": "^8.21.0",
     "reflect-metadata": "^0.2.2",

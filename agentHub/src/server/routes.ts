@@ -65,6 +65,11 @@ const WorkspaceAgentParamsSchema = z.object({
   agentId: z.string().min(1),
 })
 
+const WorkspaceMessageParamsSchema = z.object({
+  workspaceId: z.string().min(1),
+  messageId: z.string().min(1),
+})
+
 const AgentContextPolicyInputSchema = z.object({
   includeProjectBrief: z.boolean(),
   includePinnedMessages: z.boolean(),
@@ -666,6 +671,60 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
       return reply.send({ error: `Agent not found in workspace: ${params.agentId}` })
     }
     return agent
+  })
+
+  app.put('/api/workspaces/:workspaceId/messages/:messageId/pin', async (request, reply) => {
+    const params = WorkspaceMessageParamsSchema.parse(request.params)
+    const currentState = await services.store.read()
+    const workspace = currentState.workspaces.find(item => item.id === params.workspaceId)
+    if (!workspace) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+    if (!currentState.messages.some(message => message.workspaceId === params.workspaceId && message.id === params.messageId)) {
+      reply.status(404)
+      return reply.send({ error: `Message not found in workspace: ${params.messageId}` })
+    }
+
+    return services.store.update(state => {
+      const targetWorkspace = state.workspaces.find(item => item.id === params.workspaceId)
+      if (!targetWorkspace) {
+        throw new Error(`Workspace not found: ${params.workspaceId}`)
+      }
+      if (!targetWorkspace.pinnedMessageIds.includes(params.messageId)) {
+        targetWorkspace.pinnedMessageIds.push(params.messageId)
+      }
+      targetWorkspace.updatedAt = isoNow()
+      return {
+        workspaceId: targetWorkspace.id,
+        messageId: params.messageId,
+        pinnedMessageIds: [...targetWorkspace.pinnedMessageIds],
+      }
+    })
+  })
+
+  app.delete('/api/workspaces/:workspaceId/messages/:messageId/pin', async (request, reply) => {
+    const params = WorkspaceMessageParamsSchema.parse(request.params)
+    const currentState = await services.store.read()
+    const workspace = currentState.workspaces.find(item => item.id === params.workspaceId)
+    if (!workspace) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+
+    return services.store.update(state => {
+      const targetWorkspace = state.workspaces.find(item => item.id === params.workspaceId)
+      if (!targetWorkspace) {
+        throw new Error(`Workspace not found: ${params.workspaceId}`)
+      }
+      targetWorkspace.pinnedMessageIds = targetWorkspace.pinnedMessageIds.filter(messageId => messageId !== params.messageId)
+      targetWorkspace.updatedAt = isoNow()
+      return {
+        workspaceId: targetWorkspace.id,
+        messageId: params.messageId,
+        pinnedMessageIds: [...targetWorkspace.pinnedMessageIds],
+      }
+    })
   })
 
   app.post('/api/conversations', async request => {

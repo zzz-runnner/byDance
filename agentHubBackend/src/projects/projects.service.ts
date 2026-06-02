@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
+import { unlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Response as ExpressResponse } from 'express'
 import fs from 'fs-extra'
@@ -39,6 +42,7 @@ import {
   WriteWorkspaceFileDto,
 } from './projects.dto'
 import { ProjectMetadata, ProjectWorkflowSummary } from './project.types'
+import { readWorkspaceDocumentPreview } from './workspace-document-preview'
 
 interface SseParseResult {
   events: Record<string, unknown>[]
@@ -352,6 +356,20 @@ export class ProjectsService {
   }
 
   /**
+   * Loads one local document preview payload for PDF, Word, or PowerPoint workspace files.
+   * Input: project id and repo-relative file path.
+   * Output: lightweight preview data for the code dialog.
+   */
+  async getProjectFilePreview(projectId: string, query: FileContentQueryDto) {
+    const project = await this.getProject(projectId)
+    return readWorkspaceDocumentPreview(
+      this.storage.workspaceFilePath(project.workspaceId, query.path),
+      query.path,
+      `/preview/runtime/${encodeURIComponent(project.projectId)}/${query.path.replace(/\\/g, '/')}`,
+    )
+  }
+
+  /**
    * Loads the current git diff snapshot for the selected workspace repo.
    * Input: project id.
    * Output: repo status summary and unified patch.
@@ -359,6 +377,39 @@ export class ProjectsService {
   async getProjectDiff(projectId: string): Promise<ProjectWorkspaceDiff> {
     const project = await this.getProject(projectId)
     return this.agentHub.fetchWorkspaceDiff(project.workspaceId)
+  }
+
+  /**
+   * Applies one recorded AgentHub change-set patch onto the current workspace repo.
+   * Input: project id and runtime change-set id.
+   * Output: apply status plus a concise user-facing summary.
+   */
+  async applyProjectChangeSet(
+    projectId: string,
+    changeSetId: string,
+  ): Promise<{ status: 'applied' | 'already_applied'; changeSetId: string; summary: string }> {
+    const project = await this.getProject(projectId)
+    const state = await this.agentHub.fetchState()
+    const changeSet = state.changeSets.find(item => item.workspaceId === project.workspaceId && item.id === changeSetId)
+    if (!changeSet) {
+      throw new NotFoundException(`Change set not found in project workspace: ${changeSetId}`)
+    }
+
+    const patch = typeof changeSet.patch === 'string' ? changeSet.patch.trim() : ''
+    if (!patch) {
+      throw new BadRequestException('This change set does not include an applyable text patch.')
+    }
+
+    const result = await applyWorkspacePatchFromFile(this.storage.workspaceRepoPath(project.workspaceId), patch)
+    if (result.status === 'applied') {
+      await this.updateProject(projectId, () => undefined)
+    }
+
+    return {
+      status: result.status,
+      changeSetId,
+      summary: result.summary,
+    }
   }
 
   /**
@@ -495,6 +546,26 @@ export class ProjectsService {
       filePath: input.filePath,
       absolutePath: targetPath,
     }
+  }
+
+  /**
+   * Pins one project message so AgentHub will always include it in workspace context.
+   * Input: project id and persisted runtime message id.
+   * Output: updated workspace pin payload.
+   */
+  async pinProjectMessage(projectId: string, messageId: string) {
+    const project = await this.getProject(projectId)
+    return this.agentHub.pinWorkspaceMessage(project.workspaceId, messageId)
+  }
+
+  /**
+   * Removes one project message from the workspace pinned-context list.
+   * Input: project id and persisted runtime message id.
+   * Output: updated workspace pin payload.
+   */
+  async unpinProjectMessage(projectId: string, messageId: string) {
+    const project = await this.getProject(projectId)
+    return this.agentHub.unpinWorkspaceMessage(project.workspaceId, messageId)
   }
 
   /**
@@ -801,6 +872,139 @@ const BLOCKED_FORWARD_HEADERS = new Set([
   'keep-alive',
   'transfer-encoding',
 ])
+
+type GitPatchCommandResult = {
+  code: number
+  stdout: string
+  stderr: string
+}
+
+/**
+ * Shortens git command output so API errors stay readable.
+ * Input: stdout and stderr text from one git process.
+ * Output: bounded diagnostic text for thrown HTTP errors.
+ */
+function summarizeGitOutput(stdout: string, stderr: string): string {
+  const normalized = [stderr, stdout]
+    .filter(Boolean)
+    .join('\n')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return normalized ? normalized.slice(0, 500) : 'git apply returned no diagnostic output.'
+}
+
+/**
+ * Runs one git command in the workspace repo.
+ * Input: repo path and git arguments.
+ * Output: exit code plus captured stdout and stderr text.
+ */
+async function runGitPatchCommand(
+  repoPath: string,
+  args: string[],
+  _patch?: string,
+): Promise<GitPatchCommandResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', args, {
+      cwd: repoPath,
+      shell: process.platform === 'win32',
+      windowsHide: true,
+    })
+    let stdout = ''
+    let stderr = ''
+
+    child.stdout.on('data', chunk => {
+      stdout += String(chunk)
+    })
+    child.stderr.on('data', chunk => {
+      stderr += String(chunk)
+    })
+    child.on('error', reject)
+    child.on('close', code => {
+      resolve({
+        code: code ?? 1,
+        stdout,
+        stderr,
+      })
+    })
+
+  })
+}
+
+/**
+ * Applies one unified patch to the workspace repo or reports when it is already present.
+ * Input: repo path and unified patch text.
+ * Output: apply status and a concise summary for the frontend.
+ */
+async function applyWorkspacePatch(
+  repoPath: string,
+  patch: string,
+): Promise<{ status: 'applied' | 'already_applied'; summary: string }> {
+  const check = await runGitPatchCommand(repoPath, ['apply', '--check', '--whitespace=nowarn', '-'], patch)
+  if (check.code === 0) {
+    const apply = await runGitPatchCommand(repoPath, ['apply', '--whitespace=nowarn', '-'], patch)
+    if (apply.code !== 0) {
+      throw new BadRequestException(`Change set apply failed: ${summarizeGitOutput(apply.stdout, apply.stderr)}`)
+    }
+    return {
+      status: 'applied',
+      summary: '已将该轮 Diff 应用到当前工作区。',
+    }
+  }
+
+  const reverseCheck = await runGitPatchCommand(repoPath, ['apply', '--reverse', '--check', '--whitespace=nowarn', '-'], patch)
+  if (reverseCheck.code === 0) {
+    return {
+      status: 'already_applied',
+      summary: '该轮 Diff 已经在当前工作区生效，无需重复应用。',
+    }
+  }
+
+  throw new BadRequestException(`Change set patch cannot be applied: ${summarizeGitOutput(check.stdout, check.stderr)}`)
+}
+
+/**
+ * Applies one unified patch using a temporary patch file so Windows git can
+ * reliably distinguish "applied" from "already applied" on large change-sets.
+ * Input: repo path and unified patch text.
+ * Output: apply status and a concise summary for the frontend.
+ */
+async function applyWorkspacePatchFromFile(
+  repoPath: string,
+  patch: string,
+): Promise<{ status: 'applied' | 'already_applied'; summary: string }> {
+  const normalizedPatch = patch.endsWith('\n') ? patch : `${patch}\n`
+  const patchFilePath = path.join(tmpdir(), `agenthub-changeset-${randomUUID()}.patch`)
+  await writeFile(patchFilePath, normalizedPatch, 'utf8')
+
+  try {
+    const check = await runGitPatchCommand(repoPath, ['apply', '--check', '--whitespace=nowarn', patchFilePath])
+    if (check.code === 0) {
+      const apply = await runGitPatchCommand(repoPath, ['apply', '--whitespace=nowarn', patchFilePath])
+      if (apply.code !== 0) {
+        throw new BadRequestException(`Change set apply failed: ${summarizeGitOutput(apply.stdout, apply.stderr)}`)
+      }
+      return {
+        status: 'applied',
+        summary: 'Applied this change-set diff to the current workspace.',
+      }
+    }
+
+    const reverseCheck = await runGitPatchCommand(
+      repoPath,
+      ['apply', '--reverse', '--check', '--whitespace=nowarn', patchFilePath],
+    )
+    if (reverseCheck.code === 0) {
+      return {
+        status: 'already_applied',
+        summary: 'This change-set diff is already present in the current workspace.',
+      }
+    }
+
+    throw new BadRequestException(`Change set patch cannot be applied: ${summarizeGitOutput(check.stdout, check.stderr)}`)
+  } finally {
+    await unlink(patchFilePath).catch(() => undefined)
+  }
+}
 
 /**
  * Resolves the preferred room type for one project creation request.
