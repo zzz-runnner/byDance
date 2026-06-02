@@ -36,15 +36,13 @@ import {
 const background = require('./assets/background/mainBackground.png')
 const homeIcon = require('./assets/home/icon.png')
 
-type TabKey = 'home' | 'workspaces' | 'ai' | 'code' | 'agents'
+type TabKey = 'workbench' | 'chat' | 'agents'
 type LayoutTier = 'compact' | 'standard' | 'wide'
 
 const tabs: { key: TabKey; label: string; icon: IconName }[] = [
-  { key: 'home', label: '首页', icon: 'home-variant-outline' },
-  { key: 'workspaces', label: '工作区', icon: 'view-dashboard-outline' },
-  { key: 'ai', label: 'AI', icon: 'creation-outline' },
-  { key: 'code', label: '代码', icon: 'code-braces' },
-  { key: 'agents', label: '我的/Agent', icon: 'account' },
+  { key: 'workbench', label: '工作台', icon: 'view-dashboard-outline' },
+  { key: 'chat', label: '对话', icon: 'message-processing-outline' },
+  { key: 'agents', label: 'Agent', icon: 'account' },
 ]
 
 function AnimatedHomeIcon({ size }: { size: number }) {
@@ -98,18 +96,16 @@ function AnimatedHomeIcon({ size }: { size: number }) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabKey>('home')
+  const [activeTab, setActiveTab] = useState<TabKey>('workbench')
   const [navExpanded, setNavExpanded] = useState(false)
   const { width } = useWindowDimensions()
   const layoutTier: LayoutTier = width < 380 ? 'compact' : width < 430 ? 'standard' : 'wide'
-  const tightChatHeader = activeTab === 'ai' && layoutTier !== 'wide'
+  const tightChatHeader = activeTab === 'chat' && layoutTier !== 'wide'
   const activeWorkspace = workspaces[0]
   const runningAgents = agents.filter(agent => agent.status !== 'idle').length
   const title = useMemo(() => {
-    if (activeTab === 'home') return '多 Agent 协作工作台'
-    if (activeTab === 'workspaces') return '多工作区'
-    if (activeTab === 'ai') return 'AI 协作'
-    if (activeTab === 'code') return '代码与交付'
+    if (activeTab === 'workbench') return '工作台'
+    if (activeTab === 'chat') return '对话'
     return '我的 Agent'
   }, [activeTab])
 
@@ -119,27 +115,26 @@ export default function App() {
         <LinearGradient colors={['rgba(255,255,255,0.22)', 'rgba(255,255,255,0.08)', 'rgba(241,245,249,0.26)']} style={styles.overlay} />
         <SafeAreaView style={styles.safe}>
           <StatusBar style="dark" />
-          <View style={[styles.header, activeTab === 'agents' && styles.agentHeader, (activeTab === 'code' || activeTab === 'ai') && styles.codeHeader]}>
-            {activeTab === 'code' || activeTab === 'ai' ? (
+          <View style={[styles.header, activeTab === 'agents' && styles.agentHeader, activeTab === 'chat' && styles.codeHeader]}>
+            {activeTab === 'chat' ? (
               <GlassCard compact style={styles.codeHeaderButton}>
                 <MaterialCommunityIcons name="chevron-left" size={28} color="#0f172a" />
               </GlassCard>
             ) : null}
-            <View style={[styles.headerLeft, (activeTab === 'code' || activeTab === 'ai') && styles.codeHeaderLeft, tightChatHeader && styles.chatHeaderLeftTight]}>
-              {tightChatHeader ? null : <AgentGlyph agentId="orchestrator" size={activeTab === 'agents' || activeTab === 'code' || activeTab === 'ai' ? 46 : 54} />}
+            <View style={[styles.headerLeft, activeTab === 'chat' && styles.codeHeaderLeft, tightChatHeader && styles.chatHeaderLeftTight]}>
+              {tightChatHeader ? null : <AgentGlyph agentId="orchestrator" size={activeTab === 'agents' || activeTab === 'chat' ? 46 : 54} />}
               <View style={styles.headerCopy}>
-                {activeTab === 'ai' ? null : <Text style={styles.eyebrow}>AGENTHUB</Text>}
-                <Text style={[styles.headerTitle, activeTab === 'ai' && styles.chatHeaderTitle]} numberOfLines={1}>
-                  {activeTab === 'ai' ? activeWorkspace.name : title}
+                {activeTab === 'chat' ? null : <Text style={styles.eyebrow}>AGENTHUB</Text>}
+                <Text style={[styles.headerTitle, activeTab === 'chat' && styles.chatHeaderTitle]} numberOfLines={1}>
+                  {activeTab === 'chat' ? activeWorkspace.name : title}
                 </Text>
-                {activeTab === 'code' ? <Text style={styles.codeSubtitle}>校园 AI 助手 App / repo</Text> : null}
-                {activeTab === 'ai' ? (
+                {activeTab === 'chat' ? (
                   <View style={styles.chatSubtitleRow}>
                     <View style={styles.chatLiveDot} />
                     <Text style={styles.codeSubtitle} numberOfLines={1}>群聊 · 3 个 Agent 协作中</Text>
                   </View>
                 ) : null}
-                {activeTab === 'ai' && tightChatHeader ? (
+                {activeTab === 'chat' && tightChatHeader ? (
                   <View style={styles.chatStreamingRow}>
                     <GlassCard compact style={styles.streamingPill}>
                       <MaterialCommunityIcons name="chart-timeline-variant-shimmer" size={17} color="#10b981" />
@@ -149,13 +144,13 @@ export default function App() {
                 ) : null}
               </View>
             </View>
-            {activeTab === 'ai' ? (
+            {activeTab === 'chat' ? (
               <View style={styles.chatHeaderActions}>
                 <GlassCard compact style={styles.codeHeaderButton}>
                   <MaterialCommunityIcons name="refresh" size={25} color="#0f172a" />
                 </GlassCard>
               </View>
-            ) : activeTab === 'workspaces' ? (
+            ) : activeTab === 'workbench' ? (
               <View style={styles.workspaceHeaderActions}>
                 <GlassCard compact style={styles.headerIconButton}>
                   <MaterialCommunityIcons name="plus" size={28} color="#0f172a" />
@@ -167,10 +162,6 @@ export default function App() {
                   </View>
                 </GlassCard>
               </View>
-            ) : activeTab === 'code' ? (
-              <GlassCard compact style={styles.codeHeaderButton}>
-                <MaterialCommunityIcons name="refresh" size={25} color="#0f172a" />
-              </GlassCard>
             ) : activeTab === 'agents' ? (
               <View style={styles.headerActions}>
                 <GlassCard compact style={[styles.agentCreateButton, layoutTier === 'compact' && styles.agentCreateButtonCompact]}>
@@ -191,15 +182,13 @@ export default function App() {
             )}
           </View>
 
-          {activeTab === 'ai' ? (
+          {activeTab === 'chat' ? (
             <View style={styles.contentFill}>
               <ChatScreen workspace={activeWorkspace} layoutTier={layoutTier} />
             </View>
           ) : (
             <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} showsVerticalScrollIndicator={false}>
-              {activeTab === 'home' ? <HomeScreen runningAgents={runningAgents} workspace={activeWorkspace} layoutTier={layoutTier} /> : null}
-              {activeTab === 'workspaces' ? <WorkspaceScreen layoutTier={layoutTier} /> : null}
-              {activeTab === 'code' ? <CodeScreen layoutTier={layoutTier} /> : null}
+              {activeTab === 'workbench' ? <WorkbenchScreen runningAgents={runningAgents} workspace={activeWorkspace} layoutTier={layoutTier} /> : null}
               {activeTab === 'agents' ? <AgentScreen layoutTier={layoutTier} /> : null}
             </ScrollView>
           )}
@@ -211,8 +200,104 @@ export default function App() {
   )
 }
 
-function HomeScreen({ runningAgents, workspace, layoutTier }: { runningAgents: number; workspace: Workspace; layoutTier: LayoutTier }) {
+function WorkbenchScreen({ runningAgents, workspace, layoutTier }: { runningAgents: number; workspace: Workspace; layoutTier: LayoutTier }) {
   const isCompact = layoutTier === 'compact'
+  const pinnedWorkspaces = workspaces.filter(item => item.pinned)
+  const recentWorkspaces = workspaces.filter(item => !item.archived)
+
+  return (
+    <View style={[styles.workbenchScreen, isCompact && styles.workspaceScreenCompact]}>
+      <GlassCard style={styles.homeWorkspaceCard}>
+        <View style={styles.homeWorkspaceHead}>
+          <View style={styles.workbenchActiveCopy}>
+            <Text style={styles.homeWorkspaceEyebrow}>ACTIVE WORKSPACE</Text>
+            <Text style={styles.homeWorkspaceTitle}>{workspace.name}</Text>
+          </View>
+          <View style={styles.workbenchIconWrap}>
+            <AnimatedHomeIcon size={isCompact ? 58 : 68} />
+          </View>
+        </View>
+        <Text style={styles.homeWorkspaceDesc} numberOfLines={2}>{workspace.goal}</Text>
+        <View style={styles.homeWorkspaceMetaRow}>
+          <View style={styles.homeStatusPill}>
+            <MaterialCommunityIcons name="waveform" size={16} color="#2563eb" />
+            <Text style={styles.homeStatusText}>running</Text>
+          </View>
+          <View style={styles.homeMetaChip}>
+            <Text style={styles.homeMetaTextBlue}>{workspace.kind === 'group' ? '群聊工作区' : '单聊工作区'}</Text>
+          </View>
+          <View style={styles.homeMetaChip}>
+            <Text style={styles.homeMetaTextGreen}>{workspace.artifactCount} 产物</Text>
+          </View>
+          <View style={styles.homeMetaChip}>
+            <Text style={styles.homeMetaTextGray}>{workspace.messageCount} 消息</Text>
+          </View>
+        </View>
+        <View style={styles.homeStatGrid}>
+          <StatCard label="工作区" value={String(workspaces.length)} icon="view-grid-outline" tone="#2563eb" />
+          <StatCard label="运行中" value={String(runningAgents)} icon="lightning-bolt-outline" tone="#db2777" />
+          <StatCard label="产物" value={String(artifacts.length)} icon="package-variant-closed" tone="#059669" />
+        </View>
+        <View style={styles.homeAvatarRow}>
+          {workspace.agents.slice(0, 4).map((agentId, index) => (
+            <View key={agentId} style={{ marginLeft: index === 0 ? 0 : -10 }}>
+              <AgentGlyph agentId={agentId} size={36} />
+            </View>
+          ))}
+          <Text style={styles.homeAvatarText}>{workspace.latestEventLabel}</Text>
+        </View>
+      </GlassCard>
+
+      <GlassCard style={styles.searchCard}>
+        <MaterialCommunityIcons name="magnify" size={24} color="#64748b" />
+        <TextInput placeholder="搜索工作区" placeholderTextColor="#94a3b8" style={styles.searchInput} />
+      </GlassCard>
+      <View style={styles.workspaceFilterLine}>
+        <Pill label="Active" tone="blue" icon="check-circle-outline" />
+        <Pill label="Updated" tone="muted" icon="sort-clock-descending-outline" />
+        <Pill label="Pinned first" tone="amber" icon="pin-outline" />
+        <Pill label="归档" tone="muted" icon="archive-outline" />
+      </View>
+
+      <View style={styles.workbenchSectionHead}>
+        <Text style={styles.homeSectionTitle}>置顶工作区</Text>
+        <Text style={styles.workbenchSectionMeta}>{pinnedWorkspaces.length} 个</Text>
+      </View>
+      {pinnedWorkspaces.map(item => (
+        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} />
+      ))}
+
+      <View style={styles.workbenchSectionHead}>
+        <Text style={styles.homeSectionTitle}>最近更新</Text>
+        <Text style={styles.workbenchSectionMeta}>按活跃度排序</Text>
+      </View>
+      {recentWorkspaces.slice(0, 3).map(item => (
+        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} />
+      ))}
+
+      <GlassCard style={styles.activityCard}>
+        <View style={styles.sectionHead}>
+          <Text style={styles.sectionTitle}>最近活动</Text>
+          <Pill label="跨工作区" tone="muted" icon="bell-outline" />
+        </View>
+        {workspaces.slice(0, 3).map(item => (
+          <View key={item.id} style={styles.activityRow}>
+            <View style={styles.activityDot} />
+            <View style={styles.activityCopy}>
+              <Text style={styles.cardTitle}>{item.name}</Text>
+              <Text style={styles.bodyText} numberOfLines={1}>{item.latestEventLabel}</Text>
+            </View>
+            <Text style={styles.activityTime}>{item.updatedAt}</Text>
+          </View>
+        ))}
+      </GlassCard>
+
+      <Pressable style={styles.loadMoreButton}>
+        <Text style={styles.loadMoreText}>查看归档与更多工作区</Text>
+        <MaterialCommunityIcons name="chevron-down" size={18} color="#64748b" />
+      </Pressable>
+    </View>
+  )
 
   return (
     <View style={[styles.homeScreen, isCompact && styles.homeScreenCompact]}>
@@ -320,6 +405,25 @@ function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTie
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={[styles.chatScrollInner, { paddingBottom: 18 + insets.bottom }]}
       >
+        <GlassCard style={styles.chatWorkspaceCard}>
+          <View style={styles.chatWorkspaceTop}>
+            <View style={styles.chatWorkspaceCopy}>
+              <Text style={styles.homeWorkspaceEyebrow}>{workspace.kind === 'group' ? 'GROUP WORKSPACE' : 'DIRECT WORKSPACE'}</Text>
+              <Text style={styles.chatWorkspaceTitle}>{workspace.name}</Text>
+            </View>
+            <Pill label="当前活跃" tone="blue" icon="waveform" />
+          </View>
+          <Text style={styles.homeWorkspaceDesc} numberOfLines={2}>{workspace.goal}</Text>
+          <View style={styles.chatAgentOverview}>
+            {workspace.agents.slice(0, isCompact ? 3 : 4).map((agentId, index) => (
+              <View key={agentId} style={{ marginLeft: index === 0 ? 0 : -8 }}>
+                <AgentGlyph agentId={agentId} size={34} />
+              </View>
+            ))}
+            <Text style={styles.chatAgentOverviewText}>{workspace.runningAgents} 个 Agent 执行中 · {workspace.artifactCount} 个产物</Text>
+          </View>
+        </GlassCard>
+
         <View style={styles.userMessageRow}>
           <GlassCard style={styles.userPromptBubble}>
             <Text style={styles.userPromptText}>
@@ -640,7 +744,7 @@ function SideTabs({ activeTab, onChange, expanded, onToggle }: { activeTab: TabK
       <View style={styles.sideRailStack}>
         {tabs.map(tab => {
           const active = tab.key === activeTab
-          const isAi = tab.key === 'ai'
+          const isAi = tab.key === 'chat'
           return (
             <Pressable
               key={tab.key}
@@ -1004,6 +1108,32 @@ const styles = StyleSheet.create({
   screenStack: {
     gap: 14,
   },
+  workbenchScreen: {
+    gap: 14,
+    paddingTop: 2,
+  },
+  workbenchActiveCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  workbenchIconWrap: {
+    width: 72,
+    height: 64,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  workbenchSectionHead: {
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  workbenchSectionMeta: {
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '800',
+  },
   homeScreen: {
     gap: 18,
     paddingTop: 4,
@@ -1051,6 +1181,30 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
+  },
+  activityCard: {
+    gap: 12,
+  },
+  activityRow: {
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  activityDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: '#2563eb',
+  },
+  activityCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  activityTime: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '900',
   },
   workspaceScreen: {
     gap: 14,
@@ -1446,6 +1600,36 @@ const styles = StyleSheet.create({
   chatScrollInner: {
     gap: 14,
     paddingBottom: 8,
+  },
+  chatWorkspaceCard: {
+    gap: 10,
+  },
+  chatWorkspaceTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  chatWorkspaceCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  chatWorkspaceTitle: {
+    marginTop: 2,
+    color: '#0f172a',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  chatAgentOverview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  chatAgentOverviewText: {
+    flex: 1,
+    marginLeft: 10,
+    color: '#475569',
+    fontSize: 13,
+    fontWeight: '800',
   },
   chatHeaderTitle: {
     fontSize: 20,
