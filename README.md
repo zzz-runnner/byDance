@@ -65,7 +65,7 @@ The backend still keeps the Nest business modules for:
 
 - One workspace equals one main chat window.
 - Group rooms support three effective routing inputs:
-  - explicit `@agent`
+  - explicit `@main` or `@agent`
   - quoted child-agent reply follow-up
   - code selection, which defaults to `engineer` when no explicit target is given
 - Direct rooms stay fixed to one agent and do not show the mention picker.
@@ -73,7 +73,7 @@ The backend still keeps the Nest business modules for:
 - Agent `name` is now the editable display identity, while `id` stays the stable key for routing, storage, session binding, and conversation participants.
 - Visible speaker identity now resolves from the current agent registry instead of flattening replies to one built-in coordinator label.
 - Editing an agent name now refreshes direct-room titles, agent-session titles, direct-room composer copy, and reply sender labels that can still resolve through the live agent registry.
-- Group-room explicit child-agent mentions now match stable ids, full current display names, and short display-name aliases.
+- Group-room explicit mentions now match `@main`, stable ids, full current display names, and short display-name aliases.
 - Built-in and custom child agents can now be viewed, created, edited, provider-switched, and deleted from the frontend through the business backend API.
 - The left workspace rail uses server-backed paging through `/api/workbench`.
 - The left workspace rail also supports backend-backed search, status filtering, sorting, pinning, and archiving.
@@ -82,8 +82,14 @@ The backend still keeps the Nest business modules for:
 - The chat surface renders one grouped turn:
   - user message
   - process block
-  - compact artifact cards
+  - one unified turn result card for preview, diff, and source outputs
   - final agent reply
+- Turn-level runtime preview URLs and code diffs no longer render as separate duplicate cards in chat.
+- The turn result entry now opens the workspace dialog directly, and the dialog can switch across:
+  - `Diff`
+  - `源码`
+  - `预览`
+- When one turn contains multiple repair attempts, the main chat flow now collapses them into one result entry instead of repeating similar preview and diff cards.
 - Quote replies and code selections are structured inputs, not plain text hacks.
 - AI output, process summaries, and artifact text use the unified Markdown renderer.
 - The code dialog is scoped to the current workspace repo only. It includes:
@@ -99,6 +105,10 @@ The backend still keeps the Nest business modules for:
   - whole-dialog bootstrap loading before the first screen renders
   - open and close transition animations
   - preview iframe and artifact iframe loading overlays
+- Delivery artifact cards in chat now reuse the code dialog preview area:
+  - local build artifacts open the dialog directly on the build preview surface
+  - local deployment artifacts open the dialog directly on the deployment preview surface
+  - raw source zip artifacts still keep direct download behavior
 - New workspaces no longer auto-seed a placeholder `index.html`.
 - If no previewable entry exists yet, the preview panel stays empty instead of fabricating a page.
 - Chat history recovery now uses turn-safe grouping:
@@ -238,6 +248,18 @@ Additional local preview smoke passed on 2026-06-02:
 - `GET http://127.0.0.1:8790/build-preview/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/v20260602_135651/index.html` returned `200`.
   - final visible reply sender was `product-manager`
   - SSE stream completed and state reload reflected the persisted reply
+
+Portable delivery preview smoke also passed on 2026-06-02 through one isolated backend instance on `127.0.0.1:8791`:
+
+- `POST /api/projects/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/builds` rebuilt delivery version `v20260602_135651` successfully with the updated portable HTML rewrite step.
+- `POST /api/projects/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/deploy` refreshed the local deployment successfully.
+- `GET /build-preview/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/v20260602_135651/index.html` returned `200` and now references `./favicon.svg` and `./assets/...` instead of `/favicon.svg` and `/assets/...`.
+- `GET /deploy/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/latest/index.html` returned `200` and now references the same relative asset URLs.
+- Direct asset fetches for both routes returned `200`:
+  - `/build-preview/.../assets/index-BxXBYxcm.js`
+  - `/build-preview/.../favicon.svg`
+  - `/deploy/.../latest/assets/index-BxXBYxcm.js`
+  - `/deploy/.../latest/favicon.svg`
 
 Version history smoke also passed on 2026-06-02 through a temporary isolated backend instance:
 

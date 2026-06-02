@@ -29,6 +29,7 @@ import { StatusPill } from './components/StatusPill'
 import { WorkspaceRail } from './components/WorkspaceRail'
 import type {
   AppState,
+  CodeWorkspaceDialogRequest,
   CodeSelectionReference,
   ConnectionStatus,
   LiveWorkflowEvent,
@@ -243,6 +244,10 @@ export function App() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [agentDialogOpen, setAgentDialogOpen] = useState(false)
   const [codeDialogOpen, setCodeDialogOpen] = useState(false)
+  const [codeDialogRequest, setCodeDialogRequest] = useState<{
+    request: CodeWorkspaceDialogRequest
+    requestId: number
+  }>()
   const [creatingWorkspace, setCreatingWorkspace] = useState(false)
   const [createWorkspaceError, setCreateWorkspaceError] = useState('')
   const [agentMutationSaving, setAgentMutationSaving] = useState(false)
@@ -251,6 +256,7 @@ export function App() {
   const [metadataUpdatingWorkspaceId, setMetadataUpdatingWorkspaceId] = useState<string>()
   const overviewRequestRef = useRef(0)
   const detailRequestRef = useRef(0)
+  const codeDialogRequestRef = useRef(0)
   const overviewRef = useRef<WorkbenchOverview>(emptyWorkbenchOverview())
   const loadedWorkspaceCountRef = useRef(INITIAL_WORKSPACE_PAGE_LIMIT)
   const workbenchReadyRef = useRef(false)
@@ -966,13 +972,41 @@ export function App() {
   }
 
   /**
+   * Opens the code dialog and optionally focuses one requested result tab or preview surface.
+   * Input: optional dialog request payload.
+   * Output: dialog open state and requested tab intent updated together.
+   */
+  function handleOpenCodeDialog(request?: CodeWorkspaceDialogRequest) {
+    if (!activeProjectId) {
+      return
+    }
+
+    codeDialogRequestRef.current += 1
+    setCodeDialogRequest({
+      request: request ?? {},
+      requestId: codeDialogRequestRef.current,
+    })
+    setCodeDialogOpen(true)
+  }
+
+  /**
+   * Closes the code dialog and clears any pending dialog request intent.
+   * Input: none.
+   * Output: dialog state reset for the next manual open.
+   */
+  function handleCloseCodeDialog() {
+    setCodeDialogOpen(false)
+    setCodeDialogRequest(undefined)
+  }
+
+  /**
    * Stores one quoted code selection for the next outgoing user message.
    * Input: file path, line range, and selected code payload.
    * Output: updates the code quote bar in the composer.
    */
   function handleQuoteCodeSelection(selection: CodeSelectionReference) {
     setPendingCodeSelection(selection)
-    setCodeDialogOpen(false)
+    handleCloseCodeDialog()
   }
 
   const connectionPillStatus =
@@ -1023,7 +1057,7 @@ export function App() {
             <button
               className="secondary-button topbar-code-button"
               type="button"
-              onClick={() => setCodeDialogOpen(true)}
+              onClick={() => handleOpenCodeDialog()}
               disabled={!activeProjectId || loadingState || creatingWorkspace}
             >
               <Braces size={15} />
@@ -1103,6 +1137,7 @@ export function App() {
               onCancelReply={() => setPendingReplyTo(undefined)}
               onCancelCodeSelection={() => setPendingCodeSelection(undefined)}
               onCopyMessage={content => void handleCopyMessage(content)}
+              onOpenCodeDialog={request => handleOpenCodeDialog(request)}
               onSend={handleSend}
             />
           </section>
@@ -1141,9 +1176,11 @@ export function App() {
         open={codeDialogOpen}
         projectId={activeProjectId}
         workspaceName={activeRoom?.workspace.name}
-        onClose={() => setCodeDialogOpen(false)}
+        onClose={handleCloseCodeDialog}
         onQuoteSelection={handleQuoteCodeSelection}
         onProjectDeliveryUpdated={() => reloadWorkbench(activeWorkspaceId, 'refresh')}
+        requestedDialogState={codeDialogRequest?.request}
+        requestedDialogStateKey={codeDialogRequest?.requestId}
       />
     </main>
   )

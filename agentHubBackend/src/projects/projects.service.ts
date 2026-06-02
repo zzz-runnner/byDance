@@ -5,7 +5,7 @@ import fs from 'fs-extra'
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { AgentHubClientService } from '../agent-hub/agent-hub.service'
 import { AgentHubState, AgentHubWorkspace } from '../agent-hub/agent-hub.types'
-import { agentDisplayName, findMentionedAgentId } from '../common/agent-presentation'
+import { agentDisplayName, findMentionedAgentId, stripLeadingOrchestratorMention } from '../common/agent-presentation'
 import { isoNow } from '../common/time'
 import { readConfig } from '../config'
 import { PreviewAsset, PreviewService } from '../preview-service'
@@ -484,11 +484,20 @@ export class ProjectsService {
     }
 
     const state = await this.agentHub.fetchState()
+    const conversation = resolveStreamConversation(
+      state.conversations,
+      this.toStoredProject(project),
+      input.conversationId,
+    )
     const targetAgentId = this.resolveStreamTargetAgentId(project, input, state)
+    const normalizedContent =
+      conversation?.type === 'group' && !targetAgentId
+        ? stripLeadingOrchestratorMention(input.content, state.agents) || input.content.trim()
+        : input.content
     const upstream = await this.agentHub.streamMessage({
       workspaceId: project.workspaceId,
       conversationId,
-      content: input.content,
+      content: normalizedContent,
       ...(targetAgentId ? { agentId: targetAgentId } : {}),
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
       ...(input.codeSelection ? { codeSelection: input.codeSelection } : {}),

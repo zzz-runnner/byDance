@@ -22,8 +22,9 @@ import type { ServerEnv } from '../env'
 import { createAdapterForAgent, runAgentWithFallback } from '../adapters'
 import {
   ORCHESTRATOR_AGENT_ID,
-  agentMentionAliases,
   resolveAgentDisplayName,
+  stripLeadingAgentMention,
+  stripLeadingOrchestratorMention,
 } from '../agents/agent-presentation'
 import type { StateStore } from '../store/types'
 import { WorkspaceRuntimeManager } from '../runtime/workspace'
@@ -448,31 +449,6 @@ async function buildReviewerEvidence(
     zipUrl: `/api/workspaces/${workspace.id}/zip`,
     sourceFileSummaries,
   }
-}
-
-/**
- * Removes one leading self-mention before sending content into a direct agent turn.
- * Input: raw user content and the target agent definition.
- * Output: content without the leading @alias when it matches the target agent.
- */
-function stripLeadingAgentMention(content: string, agent: AgentDefinition): string {
-  const trimmed = content.trim()
-
-  if (!trimmed.startsWith('@')) {
-    return trimmed
-  }
-
-  const body = trimmed.slice(1).trim()
-  const lowerBody = body.toLowerCase()
-  const matchedAlias = agentMentionAliases(agent)
-    .sort((left, right) => right.length - left.length)
-    .find(alias => lowerBody === alias || lowerBody.startsWith(`${alias} `))
-
-  if (!matchedAlias) {
-    return trimmed
-  }
-
-  return body.slice(matchedAlias.length).trim()
 }
 
 /**
@@ -1613,6 +1589,9 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
   const state = await workflowServices.store.read()
   const workspace = requiredById(state.workspaces, input.workspaceId, 'Workspace')
   const conversation = requiredById(state.conversations, input.conversationId, 'Conversation')
+  const normalizedMainContent = conversation.type === 'group'
+    ? stripLeadingOrchestratorMention(input.content, state.agents) || input.content.trim()
+    : input.content
   emitWorkflowEvent(workflowServices, {
     type: 'turn_started',
     workspaceId: workspace.id,
@@ -1869,12 +1848,12 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     type: 'workflow_received',
     workspaceId: input.workspaceId,
     conversationId: input.conversationId,
-    content: input.content,
+    content: normalizedMainContent,
   })
 
   const mainRoute = await routeTurnWithModel({
     env: workflowServices.env,
-    content: input.content,
+    content: normalizedMainContent,
     workspace,
     conversation,
     replyTo: input.replyTo,
@@ -1928,7 +1907,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
   }
 
   const dynamicVisibleSpeaker = selectDynamicVisibleSpeaker({
-    content: input.content,
+    content: normalizedMainContent,
     conversation,
     agents: state.agents,
     taskStage: mainRoute.route.taskStage,
@@ -2001,7 +1980,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       workflowServices,
       workspace,
       conversation,
-      input.content,
+      normalizedMainContent,
       input.replyTo,
       input.codeSelection,
       mainRoute.route,
@@ -2075,7 +2054,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       type: 'routing_started',
       workspaceId: input.workspaceId,
       conversationId: input.conversationId,
-      content: input.content,
+      content: normalizedMainContent,
     },
     tick => ({
       type: 'agent_progress',
@@ -2098,7 +2077,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
           : workflowServices.env.AGENTHUB_ORCHESTRATOR_MODEL,
       })
       return decideRoutingWithPlanner({
-        content: input.content,
+        content: normalizedMainContent,
         conversation,
         agents: state.agents,
         targetAgentId: directedGroupAgentId,
@@ -2172,7 +2151,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     conversation,
     plannedRouting,
     mainRoute.route,
-    input.content,
+    normalizedMainContent,
   )
   const reviewGuardedRouting = applyReviewSafety(workflowServices, state, workspace, conversation, stageGuardedRouting)
   const routing = applyExecutionSafety(workflowServices, state, workspace, conversation, reviewGuardedRouting)
@@ -2310,7 +2289,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     workspace,
     conversation,
     routing,
-    input.content,
+    normalizedMainContent,
     results,
   )
 
@@ -2328,7 +2307,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
   })
 
   const localSummaries = results.map(result => result.summary)
-  await appendSynthesisSummary(workflowServices, workspace, conversation, input.content, synthesis, localSummaries)
+  await appendSynthesisSummary(workflowServices, workspace, conversation, normalizedMainContent, synthesis, localSummaries)
   emitWorkflowEvent(workflowServices, {
     type: 'workflow_finished',
     workspaceId: workspace.id,

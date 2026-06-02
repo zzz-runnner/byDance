@@ -11,6 +11,7 @@ import { resolveWorkspaceAppRoot } from '../workspace-app-root'
 import { BuildVersionDto } from './builds.dto'
 
 const BUILD_LOG_LIMIT = 40_000
+const ROOT_RELATIVE_ASSET_ATTR_PATTERN = /\b(src|href|poster)=("|')\/(?!\/)([^"'?#]+)([^"']*)\2/gi
 
 /**
  * Appends one stdout or stderr chunk while keeping the newest tail only.
@@ -77,6 +78,19 @@ export class BuildsService {
       }
 
       const outputDir = await this.selectBuildOutputDir(buildRoot)
+      const portabilityResult = await this.rewritePortableHtmlAssetUrls(outputDir)
+      if (portabilityResult.rewrittenReferences > 0) {
+        buildLog = appendBuildLog(
+          buildLog,
+          `Adjusted ${portabilityResult.rewrittenReferences} root-relative asset reference(s) across ${portabilityResult.rewrittenFiles} HTML file(s) for portable nested previews.\n`,
+        )
+      }
+      const portabilityIssues = await this.findPortableHtmlAssetIssues(outputDir)
+      if (portabilityIssues.length > 0) {
+        throw new BadRequestException(
+          `Build output still contains root-relative asset references that would break nested preview routes:\n${portabilityIssues.join('\n')}`,
+        )
+      }
       const artifactDir = this.storage.buildArtifactDir(projectId, version.versionId)
       await this.storage.ensureCleanDir(artifactDir)
       await fs.copy(outputDir, artifactDir, {
@@ -299,6 +313,146 @@ export class BuildsService {
     }
 
     throw new BadRequestException('Build did not produce dist/index.html, build/index.html, out/index.html, or app-root index.html')
+  }
+
+  /**
+   * Rewrites root-relative HTML asset URLs into portable relative URLs when the target exists in the build output.
+   * Input: final build output directory.
+   * Output: rewritten HTML file and reference counts.
+   */
+  private async rewritePortableHtmlAssetUrls(outputDir: string): Promise<{
+    rewrittenFiles: number
+    rewrittenReferences: number
+  }> {
+    const htmlFiles = await this.listHtmlFiles(outputDir)
+    let rewrittenFiles = 0
+    let rewrittenReferences = 0
+
+    for (const htmlFilePath of htmlFiles) {
+      const relativeHtmlPath = path.relative(outputDir, htmlFilePath).replace(/\\/g, '/')
+      const currentHtml = await fs.readFile(htmlFilePath, 'utf8')
+      let fileRewriteCount = 0
+
+      const nextHtml = currentHtml.replace(
+        ROOT_RELATIVE_ASSET_ATTR_PATTERN,
+        (match, attributeName: string, quote: string, assetPath: string, suffix = '') => {
+          const portableUrl = this.tryBuildPortableAssetUrl(outputDir, relativeHtmlPath, assetPath)
+          if (!portableUrl) {
+            return match
+          }
+
+          fileRewriteCount += 1
+          return `${attributeName}=${quote}${portableUrl}${suffix}${quote}`
+        },
+      )
+
+      if (fileRewriteCount === 0) {
+        continue
+      }
+
+      rewrittenFiles += 1
+      rewrittenReferences += fileRewriteCount
+      await fs.writeFile(htmlFilePath, nextHtml, 'utf8')
+    }
+
+    return {
+      rewrittenFiles,
+      rewrittenReferences,
+    }
+  }
+
+  /**
+   * Collects any remaining root-relative HTML asset URLs that still point to files inside the build output.
+   * Input: final build output directory.
+   * Output: one issue string per unresolved HTML asset reference.
+   */
+  private async findPortableHtmlAssetIssues(outputDir: string): Promise<string[]> {
+    const htmlFiles = await this.listHtmlFiles(outputDir)
+    const issues: string[] = []
+
+    for (const htmlFilePath of htmlFiles) {
+      const relativeHtmlPath = path.relative(outputDir, htmlFilePath).replace(/\\/g, '/')
+      const html = await fs.readFile(htmlFilePath, 'utf8')
+
+      for (const match of html.matchAll(ROOT_RELATIVE_ASSET_ATTR_PATTERN)) {
+        const assetPath = match[3]
+        if (!this.tryBuildPortableAssetUrl(outputDir, relativeHtmlPath, assetPath)) {
+          continue
+        }
+
+        issues.push(`${relativeHtmlPath} -> /${assetPath}`)
+      }
+    }
+
+    return issues
+  }
+
+  /**
+   * Returns one portable relative asset URL when the referenced file exists inside the build output.
+   * Input: output directory, current HTML file path, and root-relative asset path.
+   * Output: relative asset URL or undefined when the reference should stay untouched.
+   */
+  private tryBuildPortableAssetUrl(
+    outputDir: string,
+    relativeHtmlPath: string,
+    assetPath: string,
+  ): string | undefined {
+    const normalizedAssetPath = assetPath.replace(/^\/+/, '').replace(/\\/g, '/')
+    if (!normalizedAssetPath) {
+      return undefined
+    }
+
+    const resolvedAssetPath = path.resolve(outputDir, normalizedAssetPath)
+    if (!this.isInsideDirectory(outputDir, resolvedAssetPath) || !fs.existsSync(resolvedAssetPath)) {
+      return undefined
+    }
+
+    const htmlDirectory = path.posix.dirname(relativeHtmlPath)
+    const relativeAssetPath = path.posix.relative(
+      htmlDirectory === '.' ? '' : htmlDirectory,
+      normalizedAssetPath,
+    )
+
+    return relativeAssetPath.startsWith('.') ? relativeAssetPath : `./${relativeAssetPath}`
+  }
+
+  /**
+   * Lists every HTML file beneath the build output directory.
+   * Input: final build output directory.
+   * Output: absolute HTML file paths.
+   */
+  private async listHtmlFiles(outputDir: string): Promise<string[]> {
+    const htmlFiles: string[] = []
+
+    const visit = async (currentDir: string): Promise<void> => {
+      const entries = await fs.readdir(currentDir, { withFileTypes: true })
+
+      for (const entry of entries) {
+        const nextPath = path.join(currentDir, entry.name)
+        if (entry.isDirectory()) {
+          await visit(nextPath)
+          continue
+        }
+
+        if (entry.isFile() && /\.(html?)$/i.test(entry.name)) {
+          htmlFiles.push(nextPath)
+        }
+      }
+    }
+
+    await visit(outputDir)
+    return htmlFiles
+  }
+
+  /**
+   * Checks whether one path stays inside the expected parent directory after normalization.
+   * Input: parent directory and candidate path.
+   * Output: true when the candidate does not escape the parent directory.
+   */
+  private isInsideDirectory(parentDir: string, candidatePath: string): boolean {
+    const resolvedParentDir = path.resolve(parentDir)
+    const resolvedCandidatePath = path.resolve(candidatePath)
+    return resolvedCandidatePath === resolvedParentDir || resolvedCandidatePath.startsWith(`${resolvedParentDir}${path.sep}`)
   }
 
   private errorMessage(error: unknown): string {

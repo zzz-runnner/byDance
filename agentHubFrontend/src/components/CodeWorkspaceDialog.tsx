@@ -30,8 +30,12 @@ import {
   triggerBusinessProjectPreviewBuild,
 } from '../api/businessBackend'
 import type {
+  CodeWorkspaceDialogRequest,
+  CodeWorkspaceDialogTab,
+  CodeWorkspaceDialogTurnResult,
   CodeSelectionReference,
   WorkspaceDeliveryAsset,
+  WorkspaceDeliverySurface,
   WorkspaceDeliverySummary,
   WorkspacePreviewCapability,
   WorkspacePreviewTarget,
@@ -43,6 +47,7 @@ import type {
   WorkspaceVersionRestoreResult,
 } from '../types'
 import { GlassPanel } from './GlassPanel'
+import { MarkdownRenderer } from './MarkdownRenderer'
 import { StatusPill } from './StatusPill'
 
 type CodeWorkspaceDialogProps = {
@@ -52,6 +57,8 @@ type CodeWorkspaceDialogProps = {
   onClose: () => void
   onQuoteSelection: (selection: CodeSelectionReference) => void
   onProjectDeliveryUpdated?: () => void | Promise<void>
+  requestedDialogState?: CodeWorkspaceDialogRequest
+  requestedDialogStateKey?: number
 }
 
 type FileCacheEntry = {
@@ -73,7 +80,7 @@ type EditorSelectionState = {
 }
 
 type CodeWrapMode = 'on' | 'off'
-type WorkspacePanelMode = 'code' | 'preview'
+type WorkspacePanelMode = CodeWorkspaceDialogTab
 type PreviewSurfaceMode = 'workspace' | 'build' | 'deployment'
 type PreviewFrameStatus = 'loading' | 'slow' | 'ready' | 'error'
 type DeliveryAction = 'save' | 'build' | 'deploy' | undefined
@@ -94,11 +101,6 @@ type MonacoDisposable = import('monaco-editor').IDisposable
 
 const CODE_EDITOR_THEME = 'agenthub-dark'
 const DIALOG_ANIMATION_MS = 220
-const CODE_DIALOG_PREVIEW_SURFACE_EVENT = 'agenthub:open-code-preview-surface'
-
-type CodeDialogPreviewSurfaceDetail = {
-  mode: Exclude<PreviewSurfaceMode, 'workspace'>
-}
 
 const CODE_EDITOR_THEME_DATA: MonacoThemeData = {
   base: 'vs-dark',
@@ -525,20 +527,6 @@ function previewSurfaceEmptyMessage(mode: PreviewSurfaceMode): string {
  * Input: open state, project identity, and quote callback.
  * Output: file tree, read-only code browser, and static preview panel.
  */
-/**
- * Broadcasts one request to focus a preview surface inside the code dialog.
- * Input: build or deployment preview mode.
- * Output: one browser event consumed by the active dialog instance.
- */
-function dispatchCodeDialogPreviewSurface(mode: Exclude<PreviewSurfaceMode, 'workspace'>) {
-  window.dispatchEvent(new CustomEvent<CodeDialogPreviewSurfaceDetail>(
-    CODE_DIALOG_PREVIEW_SURFACE_EVENT,
-    {
-      detail: { mode },
-    },
-  ))
-}
-
 export function CodeWorkspaceDialog({
   open,
   projectId,
@@ -546,6 +534,8 @@ export function CodeWorkspaceDialog({
   onClose,
   onQuoteSelection,
   onProjectDeliveryUpdated,
+  requestedDialogState,
+  requestedDialogStateKey,
 }: CodeWorkspaceDialogProps) {
   const editorRef = useRef<MonacoEditorInstance | null>(null)
   const editorShellRef = useRef<HTMLDivElement | null>(null)
@@ -575,6 +565,7 @@ export function CodeWorkspaceDialog({
   const [treeRootLabel, setTreeRootLabel] = useState('')
   const [wrapMode, setWrapMode] = useState<CodeWrapMode>('on')
   const [previewCapability, setPreviewCapability] = useState<WorkspacePreviewCapability>()
+  const [turnResultContext, setTurnResultContext] = useState<CodeWorkspaceDialogTurnResult>()
   const [previewSurfaceMode, setPreviewSurfaceMode] = useState<PreviewSurfaceMode>('workspace')
   const [selectedPreviewPath, setSelectedPreviewPath] = useState<string>()
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -630,6 +621,12 @@ export function CodeWorkspaceDialog({
   const dialogBusy = bootstrapState === 'loading' || treeLoading || previewLoading || deliveryLoading || versionsLoading
   const previewLogExcerpt = previewCapability?.build?.logExcerpt?.trim() ?? ''
   const deliveryBusy = Boolean(deliveryAction)
+  const turnDiff = turnResultContext?.diff
+  const turnReview = turnResultContext?.review
+  const diffPatch = turnDiff?.patch ?? diffSnapshot?.patch ?? ''
+  const diffFiles = turnDiff?.files ?? []
+  const diffSummary = turnDiff?.summary ?? turnReview?.summary ?? ''
+  const diffStatusSummary = diffSnapshot?.status?.trim() ?? ''
   const currentDeliveryVersionId = deliverySummary?.currentVersion?.versionId
   const canShowPreviewFrame = Boolean(activePreviewTarget?.url) && (
     activePreviewMode !== 'workspace' ||
@@ -775,6 +772,7 @@ export function CodeWorkspaceDialog({
     setTreeRootLabel('')
     setWrapMode('on')
     setPreviewCapability(undefined)
+    setTurnResultContext(undefined)
     setPreviewSurfaceMode('workspace')
     setSelectedPreviewPath(undefined)
     setPreviewLoading(false)
@@ -1143,32 +1141,6 @@ export function CodeWorkspaceDialog({
   }, [activePreviewOption, open, previewSurfaceMode])
 
   useEffect(() => {
-    if (!open) {
-      return
-    }
-
-    const handlePreviewSurfaceRequest = (event: Event) => {
-      const detail = (event as CustomEvent<CodeDialogPreviewSurfaceDetail>).detail
-      if (!detail || (detail.mode !== 'build' && detail.mode !== 'deployment')) {
-        return
-      }
-      openPreviewSurface(detail.mode)
-    }
-
-    window.addEventListener(
-      CODE_DIALOG_PREVIEW_SURFACE_EVENT,
-      handlePreviewSurfaceRequest as EventListener,
-    )
-
-    return () => {
-      window.removeEventListener(
-        CODE_DIALOG_PREVIEW_SURFACE_EVENT,
-        handlePreviewSurfaceRequest as EventListener,
-      )
-    }
-  }, [open])
-
-  useEffect(() => {
     if (!open || panelMode !== 'code') {
       return
     }
@@ -1512,6 +1484,35 @@ export function CodeWorkspaceDialog({
   }
 
   /**
+   * Applies one external dialog-open request from the chat surface.
+   * Input: optional requested tab, preview surface, and turn-result payload.
+   * Output: dialog tab state and preview source updated in place.
+   */
+  function applyDialogRequest(request: CodeWorkspaceDialogRequest | undefined) {
+    setTurnResultContext(request?.turnResult)
+
+    const nextTab = request?.tab ?? request?.turnResult?.defaultTab ?? 'code'
+    setPanelMode(nextTab)
+
+    if (nextTab === 'preview') {
+      if (request?.previewSurface) {
+        setPreviewSurfaceMode(request.previewSurface)
+      } else {
+        setPreviewSurfaceMode('workspace')
+      }
+      setPreviewAttempt(0)
+    }
+  }
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    applyDialogRequest(requestedDialogState)
+  }, [open, requestedDialogState, requestedDialogStateKey])
+
+  /**
    * Restores the workspace repo to the selected saved version and refreshes every dependent panel.
    * Input: target version record.
    * Output: version restore result stored for user feedback.
@@ -1695,6 +1696,7 @@ export function CodeWorkspaceDialog({
                 onAction={() => void handleBuildDelivery()}
                 linkLabel={deliverySummary?.build.url ? '打开产物' : undefined}
                 linkUrl={deliverySummary?.build.url}
+                onLinkAction={deliverySummary?.build.url ? () => openPreviewSurface('build') : undefined}
               />
               <DeliveryStatusCard
                 title="本地部署"
@@ -1710,6 +1712,7 @@ export function CodeWorkspaceDialog({
                 onAction={() => void handleDeployDelivery()}
                 linkLabel={deliverySummary?.deployment.url ? '打开部署' : undefined}
                 linkUrl={deliverySummary?.deployment.url}
+                onLinkAction={deliverySummary?.deployment.url ? () => openPreviewSurface('deployment') : undefined}
               />
             </div>
 
@@ -1781,6 +1784,27 @@ export function CodeWorkspaceDialog({
                   <div className="code-versions-list__empty">
                     <RefreshCcw size={18} />
                     当前还没有可用的源码版本
+                  </div>
+                ) : panelMode === 'diff' ? (
+                  <div className="code-editor-toolbar code-editor-toolbar--preview">
+                    <div className="code-editor-toolbar__meta">
+                      <strong>{turnDiff?.title ?? '当前代码 Diff'}</strong>
+                      <span>{turnResultContext ? '本轮产物差异视图' : '当前工作区实时差异视图'}</span>
+                      <span>{diffSummary || turnResultContext?.summary || diffStatusSummary || '这里会展示当前本轮或当前工作区的代码差异。'}</span>
+                    </div>
+                    <div className="code-editor-toolbar__actions code-editor-toolbar__actions--preview">
+                      {turnResultContext?.sourceArchiveUrl ? (
+                        <a
+                          className="secondary-button code-preview-open"
+                          href={turnResultContext.sourceArchiveUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          下载源码快照
+                          <ExternalLink size={14} />
+                        </a>
+                      ) : null}
+                    </div>
                   </div>
                 ) : (
                   <div className="code-version-cards">
@@ -1933,6 +1957,14 @@ export function CodeWorkspaceDialog({
                     代码
                   </button>
                   <button
+                    className={`code-panel-tab ${panelMode === 'diff' ? 'is-active' : ''}`}
+                    type="button"
+                    onClick={() => setPanelMode('diff')}
+                  >
+                    <ChevronRight size={15} />
+                    Diff
+                  </button>
+                  <button
                     className={`code-panel-tab ${panelMode === 'preview' ? 'is-active' : ''}`}
                     type="button"
                     onClick={() => setPanelMode('preview')}
@@ -2042,6 +2074,11 @@ export function CodeWorkspaceDialog({
                               ))
                             )}
                           </select>
+                        ) : null}
+                        {activePreviewMode !== 'workspace' ? (
+                          <div className="code-preview-toolbar__workspace-placeholder">
+                            当前预览模式无需选择文件入口
+                          </div>
                         ) : null}
                         {activePreviewTarget?.url ? (
                           <a
@@ -2154,6 +2191,47 @@ export function CodeWorkspaceDialog({
                     <div className="code-editor-empty">
                       <Braces size={18} />
                       从左侧文件树选择一个文本文件开始查看。
+                    </div>
+                  )}
+                </div>
+              ) : panelMode === 'diff' ? (
+                <div className="code-diff-shell">
+                  {turnReview ? (
+                    <div className="code-diff-review">
+                      {turnReview.verdict ? (
+                        <StatusPill status={turnReview.verdict === 'PASS' ? 'success' : turnReview.verdict === 'FAIL' ? 'failed' : 'ready'} label={turnReview.verdict} />
+                      ) : null}
+                      <MarkdownRenderer content={turnReview.summary} mode="panel" className="markdown-content--panel" />
+                      {turnReview.issues?.length ? (
+                        <ul className="code-diff-issues">
+                          {turnReview.issues.map((issue, index) => (
+                            <li key={`${issue}-${index}`}>{issue}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {diffFiles.length ? (
+                    <div className="code-diff-files">
+                      {diffFiles.map(file => (
+                        <div className="code-diff-file-row" key={file.path}>
+                          <span className={`diff-file-badge diff-file-badge--${file.status}`}>{file.status}</span>
+                          <code>{file.path}</code>
+                          <em>
+                            +{file.additions} / -{file.deletions}
+                          </em>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {diffPatch ? (
+                    <pre className="code-diff-patch">{diffPatch}</pre>
+                  ) : (
+                    <div className="code-preview-empty">
+                      <ChevronRight size={18} />
+                      {diffStatusSummary || '当前还没有可展示的代码差异。'}
                     </div>
                   )}
                 </div>
@@ -2291,6 +2369,7 @@ type DeliveryStatusCardProps = {
   onAction: () => void
   linkLabel?: string
   linkUrl?: string
+  onLinkAction?: () => void
   secondaryActionLabel?: string
   onSecondaryAction?: () => void
   secondaryActionDisabled?: boolean
@@ -2311,6 +2390,7 @@ function DeliveryStatusCard({
   onAction,
   linkLabel,
   linkUrl,
+  onLinkAction,
   secondaryActionLabel,
   onSecondaryAction,
   secondaryActionDisabled,
@@ -2332,13 +2412,18 @@ function DeliveryStatusCard({
       {asset?.versionId ? <span className="code-delivery-card__meta">{asset.versionId}</span> : null}
       {logExcerpt ? <pre className="code-delivery-card__log">{logExcerpt}</pre> : null}
       <div className="code-delivery-card__actions">
-        <button className="primary-button" type="button" onClick={onAction} disabled={actionDisabled}>
+        <button
+          className="primary-button code-delivery-card__action code-delivery-card__action--primary"
+          type="button"
+          onClick={onAction}
+          disabled={actionDisabled}
+        >
           {actionBusy ? <LoaderCircle className="icon-spin" size={14} /> : null}
           {actionLabel}
         </button>
         {secondaryActionLabel && onSecondaryAction ? (
           <button
-            className="secondary-button"
+            className="secondary-button code-delivery-card__action code-delivery-card__action--secondary"
             type="button"
             onClick={onSecondaryAction}
             disabled={secondaryActionDisabled}
@@ -2346,17 +2431,22 @@ function DeliveryStatusCard({
             {secondaryActionLabel}
             <Globe2 size={14} />
           </button>
-        ) : inlinePreviewMode && linkUrl ? (
+        ) : onLinkAction && linkLabel ? (
           <button
-            className="secondary-button"
+            className="secondary-button code-delivery-card__action code-delivery-card__action--secondary"
             type="button"
-            onClick={() => dispatchCodeDialogPreviewSurface(inlinePreviewMode)}
+            onClick={onLinkAction}
           >
             {inlinePreviewMode === 'build' ? '查看产物' : '查看部署'}
             <Globe2 size={14} />
           </button>
         ) : linkUrl && linkLabel ? (
-          <a className="secondary-button" href={linkUrl} target="_blank" rel="noreferrer">
+          <a
+            className="secondary-button code-delivery-card__action code-delivery-card__action--secondary"
+            href={linkUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
             {linkLabel}
             <ExternalLink size={14} />
           </a>

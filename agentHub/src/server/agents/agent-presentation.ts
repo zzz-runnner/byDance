@@ -169,6 +169,45 @@ export function agentMentionAliases(agent: AgentLike): string[] {
 }
 
 /**
+ * Removes one leading explicit @alias when it targets the provided agent.
+ * Input: raw message content and one agent-like record.
+ * Output: content without the leading mention or the trimmed original content.
+ */
+export function stripLeadingAgentMention(content: string, agent: AgentLike): string {
+  const trimmed = content.trim()
+
+  if (!trimmed.startsWith('@')) {
+    return trimmed
+  }
+
+  const body = trimmed.slice(1).trim()
+  const lowerBody = body.toLowerCase()
+  const matchedAlias = agentMentionAliases(agent)
+    .sort((left, right) => right.length - left.length)
+    .find(alias => lowerBody === alias || lowerBody.startsWith(`${alias} `))
+
+  if (!matchedAlias) {
+    return trimmed
+  }
+
+  return body.slice(matchedAlias.length).trim()
+}
+
+/**
+ * Removes one leading main-brain mention without changing the stable orchestrator id.
+ * Input: raw message content and the current agent registry.
+ * Output: content without one leading orchestrator mention when present.
+ */
+export function stripLeadingOrchestratorMention(content: string, agents: AgentLike[]): string {
+  const orchestrator = findAgentById(agents, ORCHESTRATOR_AGENT_ID) ?? {
+    id: ORCHESTRATOR_AGENT_ID,
+    name: DEFAULT_ORCHESTRATOR_AGENT_NAME,
+  }
+
+  return stripLeadingAgentMention(content, orchestrator)
+}
+
+/**
  * Detects whether the content contains one explicit @alias mention.
  * Input: raw message content and one normalized alias.
  * Output: true when the alias is explicitly mentioned.

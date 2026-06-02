@@ -6,6 +6,7 @@ import type {
   Message,
   StreamingAssistantDraft,
   WorkflowEvent,
+  WorkspaceDeliverySurface,
 } from './types'
 
 export type ChatProcessTone = 'neutral' | 'running' | 'success' | 'warning' | 'danger'
@@ -48,6 +49,7 @@ export type ChatTurnArtifact = {
   createdAt: string
   url?: string
   agentId?: string
+  deliverySurface?: WorkspaceDeliverySurface
   verdict?: string
   issues?: string[]
   detailText?: string
@@ -516,10 +518,20 @@ function artifactToChatArtifact(artifact: Artifact): ChatTurnArtifact {
     createdAt: artifact.createdAt,
     url: artifact.url,
     agentId: artifact.createdByAgentId,
+    deliverySurface: readDeliverySurfaceMetadata(artifact.metadata?.kind),
     detailText: artifact.type === 'text' ? artifact.content : undefined,
     fileCount: readNumericMetadata(artifact.metadata, 'fileCount'),
     byteLength: readNumericMetadata(artifact.metadata, 'byteLength'),
   }
+}
+
+/**
+ * Maps one raw artifact metadata value into the delivery-preview surface union.
+ * Input: metadata.kind from the backend artifact payload.
+ * Output: build or deployment when the artifact belongs to local delivery.
+ */
+function readDeliverySurfaceMetadata(value: unknown): WorkspaceDeliverySurface | undefined {
+  return value === 'build' || value === 'deployment' ? value : undefined
 }
 
 /**

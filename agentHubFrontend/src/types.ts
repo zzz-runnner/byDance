@@ -136,6 +136,45 @@ export type WorkspaceDiffSnapshot = {
   patch: string
 }
 
+export type CodeWorkspaceDialogTab = 'code' | 'diff' | 'preview'
+
+export type CodeWorkspaceDialogTurnPreview = {
+  title: string
+  summary: string
+  url: string
+}
+
+export type CodeWorkspaceDialogTurnDiff = {
+  title: string
+  summary: string
+  patch?: string
+  files?: ChangedFile[]
+}
+
+export type CodeWorkspaceDialogTurnReview = {
+  verdict?: string
+  summary: string
+  issues?: string[]
+}
+
+export type CodeWorkspaceDialogTurnResult = {
+  title: string
+  summary?: string
+  badges: string[]
+  defaultTab: CodeWorkspaceDialogTab
+  preview?: CodeWorkspaceDialogTurnPreview
+  diff?: CodeWorkspaceDialogTurnDiff
+  review?: CodeWorkspaceDialogTurnReview
+  sourceArchiveUrl?: string
+  deploymentUrl?: string
+}
+
+export type CodeWorkspaceDialogRequest = {
+  tab?: CodeWorkspaceDialogTab
+  previewSurface?: WorkspaceDeliverySurface
+  turnResult?: CodeWorkspaceDialogTurnResult
+}
+
 export type WorkspacePreviewTarget = {
   path: string
   url: string
@@ -184,6 +223,7 @@ export type WorkspacePreviewCapability = {
 }
 
 export type DeliveryAssetStatus = 'idle' | 'ready' | 'failed'
+export type WorkspaceDeliverySurface = 'build' | 'deployment'
 
 export type WorkspaceDeliveryVersion = {
   versionId: string

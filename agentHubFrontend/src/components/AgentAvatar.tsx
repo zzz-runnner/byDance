@@ -2,15 +2,24 @@ import { createAvatar } from '@dicebear/core'
 import { botttsNeutral } from '@dicebear/collection'
 import { UserRound } from 'lucide-react'
 import { DEFAULT_ORCHESTRATOR_NAME, agentTone } from '../appModel'
-import { OrbMark } from './OrbMark'
+import engineerAvatarSrc from '../asset/avatar/engineer-1.webp'
+import productManagerAvatarSrc from '../asset/avatar/product-manager.webp'
+import projectManagerAvatarSrc from '../asset/avatar/project-manager.webp'
+import reviewerAvatarSrc from '../asset/avatar/reviewer-2.webp'
 
 type AgentAvatarProps = {
   agentId: string
   name?: string
-  size?: 'sm' | 'md'
+  size?: 'sm' | 'md' | 'lg'
 }
 
 const agentAvatarCache = new Map<string, string>()
+const BUILTIN_AGENT_AVATAR_SRC: Record<string, string> = {
+  orchestrator: projectManagerAvatarSrc,
+  engineer: engineerAvatarSrc,
+  'product-manager': productManagerAvatarSrc,
+  reviewer: reviewerAvatarSrc,
+}
 
 const AGENT_AVATAR_BACKGROUNDS: Record<string, string[]> = {
   engineer: ['dbeafe', 'bfdbfe'],
@@ -28,11 +37,17 @@ function agentAvatarBackground(agentId: string): string[] {
 }
 
 /**
- * Builds and caches a deterministic DiceBear robot avatar for a child agent.
+ * Returns one stable avatar image for built-in agents or a generated fallback.
  * Input: agent id used as the avatar seed.
- * Output: a data URI string that can be used as an image source.
+ * Output: an image source string that can be used in one avatar element.
  */
 function childAgentAvatarSrc(agentId: string): string {
+  const builtinAvatar = BUILTIN_AGENT_AVATAR_SRC[agentId]
+
+  if (builtinAvatar) {
+    return builtinAvatar
+  }
+
   const cached = agentAvatarCache.get(agentId)
 
   if (cached) {
@@ -55,19 +70,11 @@ function childAgentAvatarSrc(agentId: string): string {
 }
 
 /**
- * Renders an avatar for the user, Orchestrator, or child agents.
+ * Renders an avatar for the user or one agent.
  * Input: agent id, optional display name, and size variant.
  * Output: an avatar element with a deterministic visual tone.
  */
 export function AgentAvatar({ agentId, name, size = 'md' }: AgentAvatarProps) {
-  if (agentId === 'orchestrator') {
-    return (
-      <span className={`agent-avatar agent-avatar--${size} agent-avatar--orb`} title={name ?? DEFAULT_ORCHESTRATOR_NAME}>
-        <OrbMark size={size === 'sm' ? 'sm' : 'md'} pulse />
-      </span>
-    )
-  }
-
   if (agentId === 'user') {
     return (
       <span className={`agent-avatar agent-avatar--${size} agent-avatar--user`} title="User">
@@ -79,7 +86,7 @@ export function AgentAvatar({ agentId, name, size = 'md' }: AgentAvatarProps) {
   return (
     <span
       className={`agent-avatar agent-avatar--${size} agent-avatar--${agentTone(agentId)} agent-avatar--generated`}
-      title={name ?? agentId}
+      title={agentId === 'orchestrator' ? name ?? DEFAULT_ORCHESTRATOR_NAME : name ?? agentId}
     >
       <img className="agent-avatar__image" src={childAgentAvatarSrc(agentId)} alt="" />
     </span>
