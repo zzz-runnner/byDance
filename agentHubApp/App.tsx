@@ -286,7 +286,8 @@ function WorkbenchScreen({
 
   return (
     <View style={[styles.workbenchScreen, isCompact && styles.workspaceScreenCompact]}>
-      <GlassCard style={styles.homeWorkspaceCard}>
+      <Pressable onPress={() => onOpenWorkspace(workspace)}>
+        <GlassCard style={styles.homeWorkspaceCard}>
         <View style={styles.homeWorkspaceHead}>
           <View style={styles.workbenchActiveCopy}>
             <Text style={styles.homeWorkspaceEyebrow}>ACTIVE WORKSPACE</Text>
@@ -325,7 +326,12 @@ function WorkbenchScreen({
           ))}
           <Text style={styles.homeAvatarText}>{workspace.latestEventLabel}</Text>
         </View>
-      </GlassCard>
+          <View style={styles.activeWorkspaceEnterRow}>
+            <Text style={styles.activeWorkspaceEnterText}>进入对应对话</Text>
+            <MaterialCommunityIcons name="chevron-right" size={20} color="#2563eb" />
+          </View>
+        </GlassCard>
+      </Pressable>
 
       <GlassCard style={styles.searchCard}>
         <MaterialCommunityIcons name="magnify" size={24} color="#64748b" />
@@ -1084,22 +1090,27 @@ function DeliveryStatusCard({ icon, title, status, body, time, tone }: { icon: I
 }
 
 function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
-  const runningCount = agents.filter(agent => agent.status !== 'idle').length
-  const builtinCount = agents.filter(agent => agent.id === 'orchestrator' || agent.id === 'engineer').length
   const showFullRegistry = layoutTier === 'wide'
+  const [visibleAgents, setVisibleAgents] = useState<Agent[]>(agents)
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<AgentFilter>('all')
+  const runningCount = visibleAgents.filter(agent => agent.status !== 'idle').length
+  const builtinCount = visibleAgents.filter(agent => agent.id === 'orchestrator' || agent.id === 'engineer').length
   const agentSearch = useMemo(
-    () => new Fuse(agents, { keys: ['name', 'role', 'provider', 'skills'], threshold: 0.34 }),
-    [],
+    () => new Fuse(visibleAgents, { keys: ['name', 'role', 'provider', 'skills'], threshold: 0.34 }),
+    [visibleAgents],
   )
-  const searchedAgents = query.trim() ? agentSearch.search(query.trim()).map(result => result.item) : agents
+  const searchedAgents = query.trim() ? agentSearch.search(query.trim()).map(result => result.item) : visibleAgents
   const filteredAgents = searchedAgents.filter(agent => {
     if (filter === 'all') return true
     if (filter === 'builtin') return agent.id === 'orchestrator' || agent.id === 'engineer'
     return agent.status === filter
   })
+  const deleteAgent = (agentId: string) => {
+    setVisibleAgents(current => current.filter(agent => agent.id !== agentId))
+    if (selectedAgent?.id === agentId) setSelectedAgent(null)
+  }
 
   return (
     <View style={styles.agentScreen}>
@@ -1116,7 +1127,7 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
         {showFullRegistry ? (
           <View style={styles.agentMetricRow}>
             <View style={styles.agentMetricBox}>
-              <Text style={styles.agentMetricValue}>{agents.length}</Text>
+              <Text style={styles.agentMetricValue}>{visibleAgents.length}</Text>
               <Text style={styles.agentMetricLabel}>Agents</Text>
             </View>
             <View style={styles.agentMetricBox}>
@@ -1170,7 +1181,7 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
       </View>
 
       {filteredAgents.map(agent => (
-        <AgentCard key={agent.id} agent={agent} layoutTier={layoutTier} onPress={() => setSelectedAgent(agent)} />
+        <AgentCard key={agent.id} agent={agent} layoutTier={layoutTier} onPress={() => setSelectedAgent(agent)} onDelete={() => deleteAgent(agent.id)} />
       ))}
       {filteredAgents.length === 0 ? (
         <GlassCard style={styles.emptyStateCard}>
@@ -1179,7 +1190,7 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
           <Text style={styles.bodyText}>换一个关键词或状态筛选试试。</Text>
         </GlassCard>
       ) : null}
-      <Text style={styles.agentLoadedText}>已显示 {filteredAgents.length} / {agents.length} 个 Agent</Text>
+      <Text style={styles.agentLoadedText}>已显示 {filteredAgents.length} / {visibleAgents.length} 个 Agent</Text>
       <AgentDetailModal agent={selectedAgent} onClose={() => setSelectedAgent(null)} />
     </View>
   )
@@ -1466,7 +1477,7 @@ function AgentDetailModal({ agent, onClose }: { agent: Agent | null; onClose: ()
   )
 }
 
-function AgentCard({ agent, layoutTier, onPress }: { agent: Agent; layoutTier: LayoutTier; onPress?: () => void }) {
+function AgentCard({ agent, layoutTier, onPress, onDelete }: { agent: Agent; layoutTier: LayoutTier; onPress?: () => void; onDelete?: () => void }) {
   const isBuiltin = agent.id === 'orchestrator' || agent.id === 'engineer'
   const statusLabel = agent.status === 'running' ? '运行中' : agent.status === 'reviewing' ? '审查中' : '空闲中'
   const statusTone = agent.status === 'running' ? 'running' : agent.status === 'reviewing' ? 'reviewing' : 'idle'
@@ -1481,7 +1492,18 @@ function AgentCard({ agent, layoutTier, onPress }: { agent: Agent; layoutTier: L
       <View style={styles.agentCopy}>
         <View style={styles.agentCardTop}>
           <Text style={styles.agentName} numberOfLines={1}>{agent.name}</Text>
-          <MaterialCommunityIcons name="chevron-right" size={26} color="#64748b" />
+          <View style={styles.agentCardActions}>
+            <Pressable
+              style={styles.agentDeleteButton}
+              onPress={event => {
+                event.stopPropagation()
+                onDelete?.()
+              }}
+            >
+              <MaterialCommunityIcons name="trash-can-outline" size={19} color="#ef4444" />
+            </Pressable>
+            <MaterialCommunityIcons name="chevron-right" size={26} color="#64748b" />
+          </View>
         </View>
         <View style={styles.agentBadgeRow}>
           <View style={[styles.agentTypeBadge, isBuiltin ? styles.agentTypeBuiltin : styles.agentTypeCustom]}>
@@ -1953,6 +1975,21 @@ const styles = StyleSheet.create({
     color: '#526173',
     fontSize: 14,
     fontWeight: '700',
+  },
+  activeWorkspaceEnterRow: {
+    alignSelf: 'flex-start',
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 11,
+    borderRadius: 17,
+    backgroundColor: 'rgba(219,234,254,0.72)',
+  },
+  activeWorkspaceEnterText: {
+    color: '#2563eb',
+    fontSize: 13,
+    fontWeight: '900',
   },
   searchCard: {
     height: 52,
@@ -3694,6 +3731,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
+  },
+  agentCardActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  agentDeleteButton: {
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 19,
+    backgroundColor: 'rgba(254,226,226,0.82)',
   },
   agentBadgeRow: {
     marginTop: 8,
