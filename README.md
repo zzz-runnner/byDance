@@ -21,12 +21,19 @@ The current local chain covers:
 - `GET /api/health`
 - `GET /api/agents`
 - `GET /api/agents/:agentId`
-- `POST /api/agents`
-- `PATCH /api/agents/:agentId`
-- `DELETE /api/agents/:agentId`
+- `GET /api/workspaces/:workspaceId/agents`
+- `GET /api/workspaces/:workspaceId/agents/:agentId`
+- `POST /api/workspaces/:workspaceId/agents`
+- `PATCH /api/workspaces/:workspaceId/agents/:agentId`
+- `DELETE /api/workspaces/:workspaceId/agents/:agentId`
 - `GET /api/workbench`
 - `GET /api/projects`
 - `GET /api/projects/:projectId`
+- `GET /api/projects/:projectId/agents`
+- `GET /api/projects/:projectId/agents/:agentId`
+- `POST /api/projects/:projectId/agents`
+- `PATCH /api/projects/:projectId/agents/:agentId`
+- `DELETE /api/projects/:projectId/agents/:agentId`
 - `PATCH /api/projects/:projectId/metadata`
 - `PUT /api/projects/:projectId/pin`
 - `DELETE /api/projects/:projectId/pin`
@@ -54,6 +61,8 @@ The current local chain covers:
 - `GET /preview/*`
 - `GET /build-preview/*`
 
+Global mutating `/api/agents` routes are no longer the write path. They now reject writes and point callers to the workspace-scoped agent routes.
+
 The backend still keeps the Nest business modules for:
 
 - project metadata
@@ -61,9 +70,14 @@ The backend still keeps the Nest business modules for:
 - builds
 - deployments
 
-## 2026-06-01 Local Status
+## 2026-06-03 Local Status
 
 - One workspace equals one main chat window.
+- Built-in agents are now registered as global templates, while every workspace auto-initializes its own locked default members:
+  - `orchestrator`
+  - `product-manager`
+  - `engineer`
+  - `reviewer`
 - Group rooms support three effective routing inputs:
   - explicit `@main` or `@agent`
   - quoted child-agent reply follow-up
@@ -71,10 +85,15 @@ The backend still keeps the Nest business modules for:
 - Direct rooms stay fixed to one agent and do not show the mention picker.
 - The built-in orchestrator keeps the stable id `orchestrator`, while its default display name is now `项目经理 Agent`.
 - Agent `name` is now the editable display identity, while `id` stays the stable key for routing, storage, session binding, and conversation participants.
+- Built-in workspace members are locked and non-deletable. They only allow per-workspace edits to:
+  - display name
+  - model provider
+  - model
+- Workspace custom agents are isolated per workspace. Create, edit, and delete actions affect only the current workspace.
 - Visible speaker identity now resolves from the current agent registry instead of flattening replies to one built-in coordinator label.
 - Editing an agent name now refreshes direct-room titles, agent-session titles, direct-room composer copy, and reply sender labels that can still resolve through the live agent registry.
 - Group-room explicit mentions now match `@main`, stable ids, full current display names, and short display-name aliases.
-- Built-in and custom child agents can now be viewed, created, edited, provider-switched, and deleted from the frontend through the business backend API.
+- The frontend agent management dialog now uses `/api/projects/:projectId/agents`, which proxies to workspace-scoped AgentHub routes through `agentHubBackend`.
 - The left workspace rail uses server-backed paging through `/api/workbench`.
 - The left workspace rail also supports backend-backed search, status filtering, sorting, pinning, and archiving.
 - The right chat pane loads only the active workspace state through `/api/projects/:projectId/state`.
@@ -238,6 +257,27 @@ Real local service smoke also passed on 2026-06-01:
   - restore metadata cleanly
 - Real group-room message stream smoke passed through `POST /api/projects/:projectId/messages/stream`:
   - explicit `@product-manager` message returned `speaker_direct`
+
+Workspace-agent membership smoke also passed on 2026-06-03 through the live services already running on `127.0.0.1:8787` and `127.0.0.1:8790`:
+
+- Created two fresh validation projects:
+  - workspace A: `proj-282948e3-7bdb-42e9-a26a-9ac946bf725c`
+  - workspace B: `proj-e95b6764-ca17-4e2d-9ef6-a121cd920ff6`
+- Workspace A renamed built-in `product-manager` to `PM-Workspace-A` and switched its stored provider/model override to `mock / workspace-pm-model`.
+- Workspace B kept the same built-in id `product-manager` with the default display name `产品经理` and default provider/model `claude / default`.
+- Workspace A created one custom agent `notes-agent-013014` named `Workspace Notes`; workspace B did not receive that agent.
+- Workspace A group participants were automatically synchronized to include `notes-agent-013014`.
+- Real mention routing by display name passed:
+  - `@PM-Workspace-A Give one short bullet about this workspace goal.`
+  - persisted reply sender id stayed `product-manager`
+  - workflow events resolved `agentName: PM-Workspace-A`
+- Real custom-agent execution passed through `POST /api/projects/:projectId/messages/stream` with:
+  - `@notes-agent-013014 /run Return 3 concise bullet notes about this workspace goal.`
+  - persisted `agentRun.id = run-17782b5b-e865-48c6-b1ea-62dd30d896bf`
+  - persisted `agentRun.provider = mock`
+  - persisted `agentRun.status = success`
+  - final reply sender id stayed `notes-agent-013014`
+  - final reply content came from the mock adapter and produced run artifacts
 
 Additional local preview smoke passed on 2026-06-02:
 

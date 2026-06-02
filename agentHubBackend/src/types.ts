@@ -264,6 +264,20 @@ export interface RuntimeMessage extends Record<string, unknown> {
 export interface RuntimeAgent extends Record<string, unknown> {
   id: string
   name?: string
+  modelProvider?: string
+  model?: string
+  source?: 'built-in' | 'workspace' | 'custom'
+  workspaceId?: string
+}
+
+export interface RuntimeWorkspaceAgentMember extends Record<string, unknown> {
+  workspaceId: string
+  agentId: string
+  displayName: string
+  modelProviderOverride?: string
+  modelOverride?: string
+  sortOrder?: number
+  enabled?: boolean
 }
 
 export interface RuntimeAgentSession extends Record<string, unknown> {
@@ -335,6 +349,7 @@ export interface RuntimeAppState {
   conversations: RuntimeConversation[]
   messages: RuntimeMessage[]
   agents: RuntimeAgent[]
+  workspaceAgentMembers: RuntimeWorkspaceAgentMember[]
   agentSessions: RuntimeAgentSession[]
   agentSessionMessages: RuntimeAgentSessionMessage[]
   taskHandoffs: RuntimeTaskHandoff[]

@@ -26,6 +26,7 @@ import {
   stripLeadingAgentMention,
   stripLeadingOrchestratorMention,
 } from '../agents/agent-presentation'
+import { resolveWorkspaceAgent, resolveWorkspaceAgents } from '../agents/workspace-agents'
 import type { StateStore } from '../store/types'
 import { WorkspaceRuntimeManager } from '../runtime/workspace'
 import type { LocalToolGateway } from '../tool-gateway'
@@ -152,6 +153,7 @@ function applyExecutionSafety(
   conversation: Conversation,
   routing: PlannedRoutingDecision,
 ): PlannedRoutingDecision {
+  const workspaceAgents = resolveWorkspaceAgents(state, workspace.id)
   const decision = routing.decision
   if (decision.execution !== 'parallel') {
     return routing
@@ -162,7 +164,7 @@ function applyExecutionSafety(
   }
 
   const fileWritingAgents = decision.dispatches
-    .map(brief => requiredById(state.agents, brief.agentId, 'Agent'))
+    .map(brief => requiredById(workspaceAgents, brief.agentId, 'Agent'))
     .filter(agent => agent.permissions.fileWrite)
 
   if (!fileWritingAgents.length) {
@@ -175,7 +177,7 @@ function applyExecutionSafety(
     conversationId: conversation.id,
     runId: `routing-${conversation.id}`,
     agentId: ORCHESTRATOR_AGENT_ID,
-    agentName: orchestratorDisplayName(state.agents),
+    agentName: orchestratorDisplayName(workspaceAgents),
     message: `Parallel execution downgraded to serial because file-writing agents require exclusive workspace writes: ${fileWritingAgents
       .map(agent => agent.id)
       .join(', ')}.`,
@@ -194,8 +196,8 @@ function applyExecutionSafety(
  * Finds whether a dispatch targets an agent that can mutate or execute workspace work.
  * Input: app state and task brief. Output: true for implementation-capable dispatches.
  */
-function isExecutionAgentDispatch(state: AppState, brief: RoutingTaskBrief): boolean {
-  const agent = state.agents.find(candidate => candidate.id === brief.agentId)
+function isExecutionAgentDispatch(state: AppState, workspaceId: string, brief: RoutingTaskBrief): boolean {
+  const agent = resolveWorkspaceAgent(state, workspaceId, brief.agentId)
   return Boolean(agent?.permissions.fileWrite || agent?.permissions.shell || agent?.id === 'engineer')
 }
 
@@ -212,6 +214,7 @@ function applyTaskStageGuard(
   route?: TurnRoute,
   userContent?: string,
 ): PlannedRoutingDecision {
+  const workspaceAgents = resolveWorkspaceAgents(state, workspace.id)
   if (!route || routing.decision.kind !== 'dispatch_agents') {
     if (!route || route.taskStage !== 'requirements_intake' && route.taskStage !== 'planning') {
       return routing
@@ -227,7 +230,7 @@ function applyTaskStageGuard(
       conversationId: conversation.id,
       runId: `routing-${conversation.id}`,
       agentId: ORCHESTRATOR_AGENT_ID,
-      agentName: orchestratorDisplayName(state.agents),
+      agentName: orchestratorDisplayName(workspaceAgents),
       message: `当前处于${route.taskStage === 'requirements_intake' ? '需求对接' : '方案规划'}阶段，已改为由产品经理先接管本轮澄清。`,
     })
 
@@ -274,7 +277,7 @@ function applyTaskStageGuard(
         conversationId: conversation.id,
         runId: `routing-${conversation.id}`,
         agentId: ORCHESTRATOR_AGENT_ID,
-        agentName: orchestratorDisplayName(state.agents),
+        agentName: orchestratorDisplayName(workspaceAgents),
         message: `当前处于${route.taskStage === 'requirements_intake' ? '需求对接' : '方案规划'}阶段，已暂缓工程实现：${removedDispatches
           .map(brief => brief.agentId)
           .join(', ')}。`,
@@ -296,7 +299,10 @@ function applyTaskStageGuard(
     }
   }
 
-  if (route.taskStage === 'awaiting_confirmation' || routing.decision.dispatches.some(brief => isExecutionAgentDispatch(state, brief))) {
+  if (
+    route.taskStage === 'awaiting_confirmation' ||
+    routing.decision.dispatches.some(brief => isExecutionAgentDispatch(state, workspace.id, brief))
+  ) {
     return {
       ...routing,
       decision: {
@@ -462,13 +468,14 @@ function applyReviewSafety(
   conversation: Conversation,
   routing: PlannedRoutingDecision,
 ): PlannedRoutingDecision {
+  const workspaceAgents = resolveWorkspaceAgents(state, workspace.id)
   const decision = routing.decision
   if (decision.kind !== 'dispatch_agents') {
     return routing
   }
   const hasEngineer = decision.dispatches.some(brief => brief.agentId === 'engineer')
   const hasReviewer = decision.dispatches.some(brief => brief.agentId === 'reviewer')
-  const reviewer = state.agents.find(agent => agent.id === 'reviewer')
+  const reviewer = workspaceAgents.find(agent => agent.id === 'reviewer')
   if (!hasEngineer || hasReviewer || !reviewer) {
     return routing
   }
@@ -493,7 +500,7 @@ function applyReviewSafety(
     conversationId: conversation.id,
     runId: `routing-${conversation.id}`,
     agentId: ORCHESTRATOR_AGENT_ID,
-    agentName: orchestratorDisplayName(state.agents),
+    agentName: orchestratorDisplayName(workspaceAgents),
     message: 'Added reviewer dispatch because an engineer execution requires review before final synthesis.',
   })
 
@@ -713,7 +720,10 @@ async function runTaskBrief(
   turnRoute?: TurnRoute,
   options?: { publishConversationMessage?: boolean },
 ): Promise<TaskBriefRunResult> {
-  const agent = requiredById(state.agents, brief.agentId, 'Agent')
+  const agent = resolveWorkspaceAgent(state, workspace.id, brief.agentId)
+  if (!agent) {
+    throw new Error(`Agent not found in workspace: ${brief.agentId}`)
+  }
   const routeBlocksAgentRun = !routeAllowsExecution(turnRoute) && (agent.permissions.fileWrite || agent.permissions.shell)
   if (routeBlocksAgentRun) {
     const runId = `run-blocked-${randomUUID()}`
@@ -1070,7 +1080,10 @@ async function runDirectedAgentConversationTurn(
   replyTo?: SendMessageInput['replyTo'],
   codeSelection?: SendMessageInput['codeSelection'],
 ): Promise<AppState> {
-  const agent = requiredById(state.agents, agentId, 'Agent')
+  const agent = resolveWorkspaceAgent(state, workspace.id, agentId)
+  if (!agent) {
+    throw new Error(`Agent not found in workspace: ${agentId}`)
+  }
   const normalizedContent = stripLeadingAgentMention(rawContent, agent) || rawContent.trim()
   const session = await ensureAgentSession(workflowServices.store, workspace, agent)
   const localRoutePreview = routeTurnLocally({
@@ -1369,6 +1382,7 @@ async function runSynthesis(
   userMessage: string,
   results: TaskBriefRunResult[],
 ): Promise<PlannedSynthesis> {
+  const workspaceAgents = resolveWorkspaceAgents(state, workspace.id)
   const localSummaries = results.map(result => result.summary)
   if (canUseLocalRequirementSynthesis(routing, results)) {
     const requirementSummaries = results.map(result => `${result.agentName}: ${compactText(result.output, 1200)}`)
@@ -1441,7 +1455,7 @@ async function runSynthesis(
       conversationId: conversation.id,
       runId: `synthesis-${conversation.id}`,
       agentId: ORCHESTRATOR_AGENT_ID,
-      agentName: orchestratorDisplayName(state.agents),
+      agentName: orchestratorDisplayName(workspaceAgents),
       message: `主脑正在综合子 Agent 结果，第 ${tick} 次刷新。`,
     }),
     async () => {
@@ -1456,7 +1470,7 @@ async function runSynthesis(
       const synthesis = await synthesizeWithMainBrain({
         env: services.env,
         contextPackage,
-        agents: state.agents,
+        agents: workspaceAgents,
         localSummaries,
       })
       if (synthesis.error) {
@@ -1509,7 +1523,10 @@ async function createMainDispatchSessionScope(
   state: AppState,
   brief: RoutingTaskBrief,
 ): Promise<TaskRunSessionScope> {
-  const agent = requiredById(state.agents, brief.agentId, 'Agent')
+  const agent = resolveWorkspaceAgent(state, workspace.id, brief.agentId)
+  if (!agent) {
+    throw new Error(`Agent not found in workspace: ${brief.agentId}`)
+  }
   const session = await ensureAgentSession(services.store, workspace, agent)
   const handoff = await createTaskHandoff({
     store: services.store,
@@ -1589,8 +1606,9 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
   const state = await workflowServices.store.read()
   const workspace = requiredById(state.workspaces, input.workspaceId, 'Workspace')
   const conversation = requiredById(state.conversations, input.conversationId, 'Conversation')
+  const workspaceAgents = resolveWorkspaceAgents(state, workspace.id)
   const normalizedMainContent = conversation.type === 'group'
-    ? stripLeadingOrchestratorMention(input.content, state.agents) || input.content.trim()
+    ? stripLeadingOrchestratorMention(input.content, workspaceAgents) || input.content.trim()
     : input.content
   emitWorkflowEvent(workflowServices, {
     type: 'turn_started',
@@ -1624,7 +1642,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       input.codeSelection,
     )
     /*
-    const agent = requiredById(state.agents, directAgentId, 'Agent')
+    const agent = requiredById(workspaceAgents, directAgentId, 'Agent')
     const session = await ensureAgentSession(workflowServices.store, workspace, agent)
     const localRoutePreview = routeTurnLocally({
       content: input.content,
@@ -1824,7 +1842,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
 
   const replyContinuationAgentId =
     !input.agentId && conversation.type === 'group'
-      ? resolveReplyContinuationAgentId(input.replyTo, conversation, state.agents)
+      ? resolveReplyContinuationAgentId(input.replyTo, conversation, workspaceAgents)
       : undefined
   const directedGroupAgentId = conversation.type === 'group'
     ? input.agentId ?? replyContinuationAgentId
@@ -1909,7 +1927,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
   const dynamicVisibleSpeaker = selectDynamicVisibleSpeaker({
     content: normalizedMainContent,
     conversation,
-    agents: state.agents,
+    agents: workspaceAgents,
     taskStage: mainRoute.route.taskStage,
     replyTo: input.replyTo,
   })
@@ -2062,7 +2080,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       conversationId: input.conversationId,
       runId: `routing-${input.conversationId}`,
       agentId: ORCHESTRATOR_AGENT_ID,
-      agentName: orchestratorDisplayName(state.agents),
+      agentName: orchestratorDisplayName(workspaceAgents),
       message: `主脑正在规划本轮调度，第 ${tick} 次刷新。`,
     }),
     async () => {
@@ -2079,7 +2097,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       return decideRoutingWithPlanner({
         content: normalizedMainContent,
         conversation,
-        agents: state.agents,
+        agents: workspaceAgents,
         targetAgentId: directedGroupAgentId,
         replyTo: input.replyTo,
         codeSelection: input.codeSelection,

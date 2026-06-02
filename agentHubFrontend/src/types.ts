@@ -16,6 +16,7 @@ import type {
   TaskHandoff,
   WorkflowEvent,
   WorkflowEventRecord,
+  WorkspaceAgentMember,
   Workspace,
 } from './contracts'
 
@@ -37,6 +38,7 @@ export type {
   TaskHandoff,
   WorkflowEvent,
   WorkflowEventRecord,
+  WorkspaceAgentMember,
   Workspace,
 }
 

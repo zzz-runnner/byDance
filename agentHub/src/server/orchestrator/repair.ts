@@ -1,7 +1,8 @@
 import type { Conversation, RoutingTaskBrief, Workspace } from '@shared/contracts'
+import { resolveWorkspaceAgent } from '../agents/workspace-agents'
 import type { WorkflowServices } from './workflow'
 import type { SynthesisAgentResult } from './context'
-import { compactText, requiredById } from './workflow/workflow-utils'
+import { compactText } from './workflow/workflow-utils'
 import { createTaskHandoff, ensureAgentSession } from './agent-session'
 import { emitAgentTaskDispatched, emitWorkflowEvent } from './workflow/workflow-events'
 import { logDiagnostic } from './workflow/diagnostics'
@@ -39,7 +40,10 @@ async function createRepairSessionScope(
   session: Awaited<ReturnType<typeof ensureAgentSession>>
   handoff: Awaited<ReturnType<typeof createTaskHandoff>>
 }> {
-  const agent = requiredById(state.agents, brief.agentId, 'Agent')
+  const agent = resolveWorkspaceAgent(state, workspace.id, brief.agentId)
+  if (!agent) {
+    throw new Error(`Agent not found in workspace: ${brief.agentId}`)
+  }
   const session = await ensureAgentSession(services.store, workspace, agent)
   const handoff = await createTaskHandoff({
     store: services.store,

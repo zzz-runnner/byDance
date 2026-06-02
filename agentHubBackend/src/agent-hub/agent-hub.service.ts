@@ -72,6 +72,26 @@ export class AgentHubClientService {
     return this.getJson(`/api/agents/${encodeURIComponent(agentId)}`)
   }
 
+  async fetchWorkspaceAgents(workspaceId: string): Promise<AgentHubAgent[]> {
+    return this.getJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/agents`)
+  }
+
+  async fetchWorkspaceAgent(workspaceId: string, agentId: string): Promise<AgentHubAgent> {
+    return this.getJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}`)
+  }
+
+  async createWorkspaceAgent(workspaceId: string, input: unknown): Promise<AgentHubAgent> {
+    return this.postJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/agents`, input)
+  }
+
+  async updateWorkspaceAgent(workspaceId: string, agentId: string, input: unknown): Promise<AgentHubAgent> {
+    return this.patchJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}`, input)
+  }
+
+  async deleteWorkspaceAgent(workspaceId: string, agentId: string): Promise<{ deleted: boolean; agentId: string; workspaceId: string }> {
+    return this.deleteJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}`)
+  }
+
   async createAgent(input: unknown): Promise<AgentHubAgent> {
     return this.postJson('/api/agents', input)
   }

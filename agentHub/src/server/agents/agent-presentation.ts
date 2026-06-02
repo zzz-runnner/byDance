@@ -15,12 +15,14 @@ type AgentLike = {
 
 type AgentDerivedTitleState = {
   conversations: Array<{
+    workspaceId: string
     type: string
     participants: string[]
     title: string
     updatedAt: string
   }>
   agentSessions: Array<{
+    workspaceId: string
     agentId: string
     title: string
     updatedAt: string
@@ -253,6 +255,7 @@ export function syncAgentDerivedTitles(
   previousAgent: AgentLike,
   updatedAgent: AgentLike,
   updatedAt: string,
+  workspaceId?: string,
 ): void {
   if (agentDisplayName(previousAgent) === agentDisplayName(updatedAgent)) {
     return
@@ -262,6 +265,9 @@ export function syncAgentDerivedTitles(
   const nextSessionTitle = `${agentDisplayName(updatedAgent)} 会话`
 
   for (const conversation of state.conversations) {
+    if (workspaceId && conversation.workspaceId !== workspaceId) {
+      continue
+    }
     if (conversation.type === 'direct' && conversation.participants.includes(updatedAgent.id)) {
       conversation.title = nextDirectTitle
       conversation.updatedAt = updatedAt
@@ -269,6 +275,9 @@ export function syncAgentDerivedTitles(
   }
 
   for (const session of state.agentSessions) {
+    if (workspaceId && session.workspaceId !== workspaceId) {
+      continue
+    }
     if (session.agentId === updatedAgent.id) {
       session.title = nextSessionTitle
       session.updatedAt = updatedAt

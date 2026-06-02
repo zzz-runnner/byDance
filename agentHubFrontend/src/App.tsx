@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, Braces, LayoutDashboard, LoaderCircle, PlugZap, RefreshCcw, ServerCrash, Wifi } from 'lucide-react'
 import {
-  createBusinessAgent,
+  createBusinessProjectAgent,
   createBusinessWorkspace,
   createEmptyWorkbenchState,
-  deleteBusinessAgent,
+  deleteBusinessProjectAgent,
   fetchBusinessProjectState,
   fetchBusinessWorkbenchOverview,
   streamBusinessProjectMessage,
-  updateBusinessAgent,
+  updateBusinessProjectAgent,
   updateBusinessWorkspaceMetadata,
   type CreateBusinessAgentInput,
   type UpdateBusinessAgentInput,
@@ -874,10 +874,13 @@ export function App() {
   }
 
   async function handleCreateAgent(input: CreateBusinessAgentInput) {
+    if (!activeProjectId) {
+      return undefined
+    }
     setAgentMutationError('')
     setAgentMutationSaving(true)
     try {
-      const agent = await createBusinessAgent(input)
+      const agent = await createBusinessProjectAgent(activeProjectId, input)
       await reloadWorkbench(activeWorkspaceId, 'refresh')
       return agent
     } catch (error) {
@@ -889,10 +892,13 @@ export function App() {
   }
 
   async function handleUpdateAgent(agentId: string, input: UpdateBusinessAgentInput) {
+    if (!activeProjectId) {
+      return undefined
+    }
     setAgentMutationError('')
     setAgentMutationSaving(true)
     try {
-      const agent = await updateBusinessAgent(agentId, input)
+      const agent = await updateBusinessProjectAgent(activeProjectId, agentId, input)
       await reloadWorkbench(activeWorkspaceId, 'refresh')
       return agent
     } catch (error) {
@@ -904,10 +910,13 @@ export function App() {
   }
 
   async function handleDeleteAgent(agentId: string) {
+    if (!activeProjectId) {
+      return
+    }
     setAgentMutationError('')
     setDeletingAgentId(agentId)
     try {
-      await deleteBusinessAgent(agentId)
+      await deleteBusinessProjectAgent(activeProjectId, agentId)
       await reloadWorkbench(activeWorkspaceId, 'refresh')
     } catch (error) {
       setAgentMutationError(errorMessageOf(error))
@@ -1040,7 +1049,7 @@ export function App() {
             </GlassPanel>
             <GlassPanel compact className="metric-chip">
               <PlugZap size={15} />
-              {overview.agents.length || state.agents.length} Agents
+              {state.agents.length || overview.agents.length} Agents
             </GlassPanel>
             <button
               className="secondary-button topbar-agent-button"
@@ -1146,7 +1155,7 @@ export function App() {
 
       <CreateWorkspaceDialog
         open={createDialogOpen}
-        agents={overview.agents.length > 0 ? overview.agents : state.agents}
+        agents={(overview.agents.length > 0 ? overview.agents : state.agents).filter(agent => agent.source === 'built-in')}
         submitting={creatingWorkspace}
         errorMessage={createWorkspaceError}
         sourceTargetLabel={connectionTargetLabel}
@@ -1159,7 +1168,7 @@ export function App() {
       />
       <AgentManagementDialog
         open={agentDialogOpen}
-        agents={overview.agents.length > 0 ? overview.agents : state.agents}
+        agents={state.agents}
         saving={agentMutationSaving}
         deletingAgentId={deletingAgentId}
         errorMessage={agentMutationError}

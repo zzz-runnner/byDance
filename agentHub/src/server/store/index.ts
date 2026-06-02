@@ -3,6 +3,10 @@ import {
   normalizeBuiltInAgentPresentation,
   syncAgentDerivedTitles,
 } from '../agents/agent-presentation'
+import {
+  ensureWorkspaceAgentMembers,
+  syncWorkspaceGroupParticipants,
+} from '../agents/workspace-agents'
 import { MemoryStateStore } from './memory'
 import { createPostgresStateStore } from './postgres'
 import { createSeedState } from './seed'
@@ -89,6 +93,31 @@ async function applyBuiltInAgentPresentationDefaults(store: StateStore): Promise
 }
 
 /**
+ * Backfills workspace membership rows for built-ins and keeps group rooms in sync.
+ * Input: state store.
+ * Output: promise resolved after workspace memberships are normalized.
+ */
+async function applyWorkspaceAgentMembershipDefaults(store: StateStore): Promise<void> {
+  await store.update(state => {
+    let changed = false
+    const now = isoNow()
+
+    for (const workspace of state.workspaces) {
+      const beforeCount = state.workspaceAgentMembers.length
+      ensureWorkspaceAgentMembers(state, workspace.id, now)
+      if (state.workspaceAgentMembers.length !== beforeCount) {
+        changed = true
+      }
+      if (syncWorkspaceGroupParticipants(state, workspace.id, now)) {
+        changed = true
+      }
+    }
+
+    return changed
+  })
+}
+
+/**
  * Creates the configured application state store.
  * Input: validated server environment. Output: ready state store.
  */
@@ -106,6 +135,7 @@ export async function createStateStore(env: ServerEnv): Promise<StateStore> {
   await applyBuiltInAgentRuntimeDefaults(store, seed)
   await applyBuiltInAgentRoutingProfiles(store, seed)
   await applyBuiltInAgentPresentationDefaults(store)
+  await applyWorkspaceAgentMembershipDefaults(store)
   await recoverStaleAgentRuns(store)
   return store
 }

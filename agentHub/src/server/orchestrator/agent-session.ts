@@ -28,6 +28,7 @@ import {
   type TurnRoute,
 } from './turn-router'
 import { buildReplyContextPayload } from './reply-context'
+import { resolveWorkspaceAgents } from '../agents/workspace-agents'
 
 export type PlannedAgentSessionTurn = {
   session: AgentSession
@@ -298,7 +299,7 @@ export function buildAgentSessionContextPackage(input: AgentSessionContextInput)
   return JSON.stringify(
     {
       userMessage: input.userMessage,
-      replyContext: buildReplyContextPayload(input.replyTo, input.state.agents),
+      replyContext: buildReplyContextPayload(input.replyTo, resolveWorkspaceAgents(input.state, input.workspace.id)),
       codeSelection: input.codeSelection
         ? {
             filePath: input.codeSelection.filePath,

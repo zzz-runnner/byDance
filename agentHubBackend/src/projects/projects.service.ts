@@ -5,6 +5,7 @@ import fs from 'fs-extra'
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { AgentHubClientService } from '../agent-hub/agent-hub.service'
 import { AgentHubState, AgentHubWorkspace } from '../agent-hub/agent-hub.types'
+import { CreateAgentDto, UpdateAgentDto } from '../agents/agents.dto'
 import { agentDisplayName, findMentionedAgentId, stripLeadingOrchestratorMention } from '../common/agent-presentation'
 import { isoNow } from '../common/time'
 import { readConfig } from '../config'
@@ -168,6 +169,31 @@ export class ProjectsService {
    */
   async listAgents() {
     return this.agentHub.fetchAgents()
+  }
+
+  async listProjectAgents(projectId: string) {
+    const project = await this.getProject(projectId)
+    return this.agentHub.fetchWorkspaceAgents(project.workspaceId)
+  }
+
+  async getProjectAgent(projectId: string, agentId: string) {
+    const project = await this.getProject(projectId)
+    return this.agentHub.fetchWorkspaceAgent(project.workspaceId, agentId)
+  }
+
+  async createProjectAgent(projectId: string, input: CreateAgentDto) {
+    const project = await this.getProject(projectId)
+    return this.agentHub.createWorkspaceAgent(project.workspaceId, input)
+  }
+
+  async updateProjectAgent(projectId: string, agentId: string, input: UpdateAgentDto) {
+    const project = await this.getProject(projectId)
+    return this.agentHub.updateWorkspaceAgent(project.workspaceId, agentId, input)
+  }
+
+  async deleteProjectAgent(projectId: string, agentId: string) {
+    const project = await this.getProject(projectId)
+    return this.agentHub.deleteWorkspaceAgent(project.workspaceId, agentId)
   }
 
   /**
@@ -483,16 +509,19 @@ export class ProjectsService {
       throw new BadRequestException('conversationId is required because this project is not bound to a default AgentHub conversation')
     }
 
-    const state = await this.agentHub.fetchState()
+    const [state, workspaceAgents] = await Promise.all([
+      this.agentHub.fetchState(),
+      this.agentHub.fetchWorkspaceAgents(project.workspaceId),
+    ])
     const conversation = resolveStreamConversation(
       state.conversations,
       this.toStoredProject(project),
       input.conversationId,
     )
-    const targetAgentId = this.resolveStreamTargetAgentId(project, input, state)
+    const targetAgentId = this.resolveStreamTargetAgentId(project, input, state, workspaceAgents)
     const normalizedContent =
       conversation?.type === 'group' && !targetAgentId
-        ? stripLeadingOrchestratorMention(input.content, state.agents) || input.content.trim()
+        ? stripLeadingOrchestratorMention(input.content, workspaceAgents) || input.content.trim()
         : input.content
     const upstream = await this.agentHub.streamMessage({
       workspaceId: project.workspaceId,
@@ -690,6 +719,7 @@ export class ProjectsService {
     project: ProjectMetadata,
     input: StreamProjectMessageDto,
     state: AgentHubState,
+    workspaceAgents: AgentHubState['agents'],
   ): string | undefined {
     if (input.agentId?.trim()) {
       return input.agentId.trim()
@@ -708,7 +738,7 @@ export class ProjectsService {
       return conversation.participants.find(participant => participant !== 'user') ?? project.targetAgentId
     }
 
-    const candidateAgents = state.agents.filter(agent => conversation.participants.includes(agent.id))
+    const candidateAgents = workspaceAgents.filter(agent => conversation.participants.includes(agent.id))
     const mentionedAgentId = resolveMentionTargetAgentId(input.content, candidateAgents)
     if (mentionedAgentId) {
       return mentionedAgentId

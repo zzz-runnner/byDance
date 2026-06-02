@@ -103,6 +103,7 @@ export function createEmptyWorkbenchState(agents: AgentDefinition[] = []): AppSt
     conversations: [],
     messages: [],
     agents,
+    workspaceAgentMembers: [],
     agentSessions: [],
     agentSessionMessages: [],
     taskHandoffs: [],
@@ -195,6 +196,47 @@ export async function createBusinessAgent(input: CreateBusinessAgentInput): Prom
     body: JSON.stringify(input),
   })
   return readJson<AgentDefinition>(response, 'Create business agent')
+}
+
+export async function fetchBusinessProjectAgents(projectId: string): Promise<AgentDefinition[]> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/agents`)
+  return readJson<AgentDefinition[]>(response, 'Load project agents')
+}
+
+export async function createBusinessProjectAgent(
+  projectId: string,
+  input: CreateBusinessAgentInput,
+): Promise<AgentDefinition> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/agents`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  return readJson<AgentDefinition>(response, 'Create project agent')
+}
+
+export async function updateBusinessProjectAgent(
+  projectId: string,
+  agentId: string,
+  input: UpdateBusinessAgentInput,
+): Promise<AgentDefinition> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentId)}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  return readJson<AgentDefinition>(response, 'Update project agent')
+}
+
+export async function deleteBusinessProjectAgent(projectId: string, agentId: string): Promise<void> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentId)}`, {
+    method: 'DELETE',
+  })
+  await readJson<{ deleted: boolean; agentId: string; workspaceId: string }>(response, 'Delete project agent')
 }
 
 export async function updateBusinessAgent(

@@ -17,6 +17,69 @@ import type {
 
 const DEFAULT_MESSAGE_LIMIT = 40
 const MAX_MESSAGE_LIMIT = 200
+const DEFAULT_WORKSPACE_AGENT_ORDER = ['orchestrator', 'product-manager', 'engineer', 'reviewer']
+
+function compareWorkspaceAgentOrder(leftId: string, rightId: string): number {
+  const leftOrder = DEFAULT_WORKSPACE_AGENT_ORDER.indexOf(leftId)
+  const rightOrder = DEFAULT_WORKSPACE_AGENT_ORDER.indexOf(rightId)
+  const normalizedLeft = leftOrder === -1 ? Number.MAX_SAFE_INTEGER : leftOrder
+  const normalizedRight = rightOrder === -1 ? Number.MAX_SAFE_INTEGER : rightOrder
+  return normalizedLeft - normalizedRight || leftId.localeCompare(rightId)
+}
+
+function listBuiltInAgents(state: RuntimeAppState): RuntimeAgent[] {
+  return state.agents
+    .filter(agent => agent.source === 'built-in')
+    .slice()
+    .sort((left, right) => compareWorkspaceAgentOrder(left.id, right.id))
+}
+
+function listWorkspaceCustomAgents(state: RuntimeAppState, workspaceId: string): RuntimeAgent[] {
+  return state.agents
+    .filter(agent => agent.source !== 'built-in' && agent.workspaceId === workspaceId)
+    .slice()
+    .sort((left, right) => left.id.localeCompare(right.id))
+}
+
+function resolveWorkspaceAgents(state: RuntimeAppState, workspaceId: string): RuntimeAgent[] {
+  const builtInAgents = new Map(listBuiltInAgents(state).map(agent => [agent.id, agent]))
+  const persistedMembers = state.workspaceAgentMembers.filter(member => member.workspaceId === workspaceId)
+  const missingMembers = listBuiltInAgents(state)
+    .filter(agent => !persistedMembers.some(member => member.agentId === agent.id))
+    .map((agent, index) => ({
+      workspaceId,
+      agentId: agent.id,
+      displayName: agent.name ?? agent.id,
+      modelProviderOverride: undefined,
+      modelOverride: undefined,
+      sortOrder: DEFAULT_WORKSPACE_AGENT_ORDER.indexOf(agent.id) >= 0
+        ? DEFAULT_WORKSPACE_AGENT_ORDER.indexOf(agent.id)
+        : DEFAULT_WORKSPACE_AGENT_ORDER.length + index,
+      enabled: true,
+    }))
+  const members = [...persistedMembers, ...missingMembers]
+    .slice()
+    .sort((left, right) =>
+      Number(left.sortOrder ?? 0) - Number(right.sortOrder ?? 0) ||
+      compareWorkspaceAgentOrder(left.agentId, right.agentId),
+    )
+  const resolvedBuiltIns = members
+    .filter(member => member.enabled !== false)
+    .flatMap(member => {
+      const template = builtInAgents.get(member.agentId)
+      if (!template) {
+        return []
+      }
+      return [{
+        ...template,
+        name: member.displayName || template.name,
+        modelProvider: member.modelProviderOverride ?? template.modelProvider,
+        model: member.modelOverride ?? template.model,
+      }]
+    })
+
+  return [...resolvedBuiltIns, ...listWorkspaceCustomAgents(state, workspaceId)]
+}
 
 /**
  * Adds preview and zip metadata to one stored project record.
@@ -79,6 +142,7 @@ export function selectProjectState(
   },
 ): ProjectStateResponse {
   const workspaceId = project.workspaceId
+  const workspaceAgents = resolveWorkspaceAgents(state, workspaceId)
   const conversations = state.conversations.filter(conversation => conversation.workspaceId === workspaceId)
   const conversationIds = new Set(conversations.map(conversation => conversation.id))
   const agentSessions = state.agentSessions.filter(session => session.workspaceId === workspaceId)
@@ -130,7 +194,8 @@ export function selectProjectState(
         .map(workspace => attachProjectMetadata(workspace, project)),
       conversations,
       messages: messagePage.messages,
-      agents: state.agents,
+      agents: workspaceAgents,
+      workspaceAgentMembers: state.workspaceAgentMembers.filter(member => member.workspaceId === workspaceId),
       agentSessions,
       agentSessionMessages: state.agentSessionMessages.filter(
         message => message.workspaceId === workspaceId || sessionIds.has(message.sessionId),
@@ -228,7 +293,7 @@ export function buildWorkbenchOverview(
     .sort((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt))
 
   return {
-    agents: state.agents,
+    agents: listBuiltInAgents(state),
     rooms,
     page: {
       limit: rooms.length,

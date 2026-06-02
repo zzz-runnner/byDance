@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res } from '@nestjs/common'
 import { Response } from 'express'
 import { toProjectResponse } from '../state-bridge'
+import { CreateAgentDto, UpdateAgentDto } from '../agents/agents.dto'
 import {
   CreateProjectDto,
   FileContentQueryDto,
@@ -29,6 +30,44 @@ export class ProjectsController {
   @Get(':projectId')
   async getProject(@Param('projectId') projectId: string) {
     return toProjectResponse(await this.projects.getProject(projectId))
+  }
+
+  @Get(':projectId/agents')
+  getProjectAgents(@Param('projectId') projectId: string) {
+    return this.projects.listProjectAgents(projectId)
+  }
+
+  @Get(':projectId/agents/:agentId')
+  getProjectAgent(
+    @Param('projectId') projectId: string,
+    @Param('agentId') agentId: string,
+  ) {
+    return this.projects.getProjectAgent(projectId, agentId)
+  }
+
+  @Post(':projectId/agents')
+  createProjectAgent(
+    @Param('projectId') projectId: string,
+    @Body() input: CreateAgentDto,
+  ) {
+    return this.projects.createProjectAgent(projectId, input)
+  }
+
+  @Patch(':projectId/agents/:agentId')
+  updateProjectAgent(
+    @Param('projectId') projectId: string,
+    @Param('agentId') agentId: string,
+    @Body() input: UpdateAgentDto,
+  ) {
+    return this.projects.updateProjectAgent(projectId, agentId, input)
+  }
+
+  @Delete(':projectId/agents/:agentId')
+  deleteProjectAgent(
+    @Param('projectId') projectId: string,
+    @Param('agentId') agentId: string,
+  ) {
+    return this.projects.deleteProjectAgent(projectId, agentId)
   }
 
   @Patch(':projectId/metadata')

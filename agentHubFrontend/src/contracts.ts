@@ -152,6 +152,20 @@ export type AgentDefinition = {
   skills: string[]
   routingProfile?: AgentRoutingProfile
   source: 'built-in' | 'workspace' | 'custom'
+  workspaceId?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type WorkspaceAgentMember = {
+  workspaceId: string
+  agentId: string
+  displayName: string
+  modelProviderOverride?: AgentProvider
+  modelOverride?: string
+  sortOrder: number
+  locked: boolean
+  enabled: boolean
   createdAt: string
   updatedAt: string
 }
@@ -371,6 +385,7 @@ export type AppState = {
   conversations: Conversation[]
   messages: Message[]
   agents: AgentDefinition[]
+  workspaceAgentMembers: WorkspaceAgentMember[]
   agentSessions: AgentSession[]
   agentSessionMessages: AgentSessionMessage[]
   taskHandoffs: TaskHandoff[]
