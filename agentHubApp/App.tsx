@@ -192,7 +192,7 @@ export default function App() {
 
           {activeTab === 'chat' ? (
             <View style={styles.contentFill}>
-              <ChatScreen workspace={activeWorkspace} layoutTier={layoutTier} />
+              <ChatScreen workspace={activeWorkspace} layoutTier={layoutTier} onOpenWorkspacePanel={() => setWorkspacePanelOpen(true)} />
             </View>
           ) : (
             <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} showsVerticalScrollIndicator={false}>
@@ -472,7 +472,7 @@ function WorkspaceScreen({ layoutTier }: { layoutTier: LayoutTier }) {
   )
 }
 
-function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTier: LayoutTier }) {
+function ChatScreen({ workspace, layoutTier, onOpenWorkspacePanel }: { workspace: Workspace; layoutTier: LayoutTier; onOpenWorkspacePanel: () => void }) {
   const isCompact = layoutTier === 'compact'
   const insets = useSafeAreaInsets()
   const keyboardOffset = Platform.OS === 'ios' ? 8 : 0
@@ -505,6 +505,10 @@ function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTie
             <Pill label="当前活跃" tone="blue" icon="waveform" />
           </View>
           <Text style={styles.homeWorkspaceDesc} numberOfLines={2}>{workspace.goal}</Text>
+          <Pressable style={styles.chatWorkspaceSwitchInline} onPress={onOpenWorkspacePanel}>
+            <MaterialCommunityIcons name="swap-horizontal" size={18} color="#2563eb" />
+            <Text style={styles.chatWorkspaceSwitchText}>打开工作区切换面板</Text>
+          </Pressable>
           <View style={styles.chatAgentOverview}>
             {workspace.agents.slice(0, isCompact ? 3 : 4).map((agentId, index) => (
               <View key={agentId} style={{ marginLeft: index === 0 ? 0 : -8 }}>
@@ -2152,6 +2156,8 @@ const styles = StyleSheet.create({
   },
   chatScrollInner: {
     gap: 14,
+    paddingTop: Platform.select({ ios: 10, android: 6, default: 8 }),
+    paddingHorizontal: 20,
     paddingBottom: 8,
   },
   chatWorkspaceCard: {
@@ -2171,6 +2177,21 @@ const styles = StyleSheet.create({
     marginTop: 2,
     color: '#0f172a',
     fontSize: 20,
+    fontWeight: '900',
+  },
+  chatWorkspaceSwitchInline: {
+    alignSelf: 'flex-start',
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(219,234,254,0.78)',
+  },
+  chatWorkspaceSwitchText: {
+    color: '#2563eb',
+    fontSize: 13,
     fontWeight: '900',
   },
   chatAgentOverview: {
