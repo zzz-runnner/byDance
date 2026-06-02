@@ -9,7 +9,8 @@ import { createVersionId, isoNow } from '../common/time'
 import { ProjectsService } from '../projects/projects.service'
 import { ProjectMetadata, VersionMetadata } from '../projects/project.types'
 import { LocalStorageService } from '../storage/local-storage.service'
-import { CreateVersionDto } from './versions.dto'
+import { ProjectVersionDiffResponse, ProjectVersionRecord, ProjectVersionRestoreResponse } from '../types'
+import { CreateVersionDto, RestoreVersionDto } from './versions.dto'
 
 interface ZipResult {
   fileCount: number
@@ -25,7 +26,7 @@ export class VersionsService {
     private readonly storage: LocalStorageService,
   ) {}
 
-  async createVersion(projectId: string, input: CreateVersionDto): Promise<VersionMetadata> {
+  async createVersion(projectId: string, input: CreateVersionDto): Promise<ProjectVersionRecord> {
     const project = await this.projects.getProject(projectId)
     if (input.requireAgentGate) {
       this.assertAgentGate(project)
@@ -41,7 +42,7 @@ export class VersionsService {
       throw new BadRequestException(`Workspace path is not a Git repo: ${repoPath}`)
     }
 
-    const versionId = input.versionId ?? createVersionId()
+    const versionId = input.versionId ?? await this.createUniqueVersionId(project)
     const tag = versionId
     await this.ensureTagDoesNotExist(git, tag)
     await this.ensureCommittedVersion(git, input.message ?? `Save product version ${versionId}`)
@@ -67,15 +68,20 @@ export class VersionsService {
       current.versions.push(version)
     })
 
-    return version
+    return {
+      ...version,
+      isCurrent: true,
+    }
   }
 
-  async listVersions(projectId: string): Promise<VersionMetadata[]> {
+  async listVersions(projectId: string): Promise<ProjectVersionRecord[]> {
     const project = await this.projects.getProject(projectId)
-    return [...project.versions].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    return [...project.versions]
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(version => this.toVersionRecord(project, version))
   }
 
-  async getDiff(projectId: string, v1: string, v2: string): Promise<{ v1: string; v2: string; diff: string }> {
+  async getDiff(projectId: string, v1: string, v2: string): Promise<ProjectVersionDiffResponse> {
     const project = await this.projects.getProject(projectId)
     const from = this.findVersion(project, v1)
     const to = this.findVersion(project, v2)
@@ -87,6 +93,71 @@ export class VersionsService {
       v1: from.versionId,
       v2: to.versionId,
       diff,
+      fromVersion: this.toVersionRecord(project, from),
+      toVersion: this.toVersionRecord(project, to),
+    }
+  }
+
+  async restoreVersion(
+    projectId: string,
+    versionId: string,
+    input: RestoreVersionDto,
+  ): Promise<ProjectVersionRestoreResponse> {
+    const project = await this.projects.getProject(projectId)
+    const targetVersion = this.findVersion(project, versionId)
+    const repoPath = this.storage.workspaceRepoPath(project.workspaceId)
+
+    if (!(await fs.pathExists(repoPath))) {
+      throw new NotFoundException(`Workspace repo not found: ${repoPath}`)
+    }
+
+    const git = simpleGit(repoPath)
+    if (!(await git.checkIsRepo())) {
+      throw new BadRequestException(`Workspace path is not a Git repo: ${repoPath}`)
+    }
+
+    const shouldCreateSnapshot = input.createSnapshotBeforeRestore !== false
+    let snapshotVersion: VersionMetadata | undefined
+
+    if (shouldCreateSnapshot) {
+      const snapshotId = `snapshot-before-restore-${createVersionId()}`
+      const snapshot = await this.createVersion(projectId, {
+        versionId: snapshotId,
+        message: input.message?.trim()
+          ? `${input.message.trim()} (snapshot before restore to ${targetVersion.versionId})`
+          : `Auto snapshot before restore to ${targetVersion.versionId}`,
+      })
+      snapshotVersion = {
+        versionId: snapshot.versionId,
+        tag: snapshot.tag,
+        commitSha: snapshot.commitSha,
+        sourceZipPath: snapshot.sourceZipPath,
+        sourceZipUrl: snapshot.sourceZipUrl,
+        buildPath: snapshot.buildPath,
+        buildPreviewUrl: snapshot.buildPreviewUrl,
+        buildStatus: snapshot.buildStatus,
+        buildLog: snapshot.buildLog,
+        createdAt: snapshot.createdAt,
+        updatedAt: snapshot.updatedAt,
+      }
+    }
+
+    await git.raw(['reset', '--hard', targetVersion.commitSha])
+    await git.raw(['clean', '-fd'])
+
+    await this.projects.updateProject(projectId, current => {
+      current.currentVersionId = targetVersion.versionId
+    })
+
+    const restoredProject = await this.projects.getProject(projectId)
+
+    return {
+      projectId,
+      workspaceId: restoredProject.workspaceId,
+      restoredVersion: this.toVersionRecord(restoredProject, this.findVersion(restoredProject, targetVersion.versionId)),
+      snapshotVersion: snapshotVersion ? this.toVersionRecord(restoredProject, snapshotVersion) : undefined,
+      currentVersionId: restoredProject.currentVersionId ?? targetVersion.versionId,
+      restoredAt: isoNow(),
     }
   }
 
@@ -151,6 +222,27 @@ export class VersionsService {
       throw new NotFoundException(`Version not found: ${versionRef}`)
     }
     return version
+  }
+
+  private async createUniqueVersionId(project: ProjectMetadata): Promise<string> {
+    let attempt = 0
+    while (attempt < 1000) {
+      const now = new Date(Date.now() + attempt)
+      const candidate = createVersionId(now)
+      const exists = project.versions.some(item => item.versionId === candidate || item.tag === candidate)
+      if (!exists) {
+        return candidate
+      }
+      attempt += 1
+    }
+    throw new BadRequestException('Failed to allocate a unique version id for the current workspace.')
+  }
+
+  private toVersionRecord(project: ProjectMetadata, version: VersionMetadata): ProjectVersionRecord {
+    return {
+      ...version,
+      isCurrent: project.currentVersionId === version.versionId,
+    }
   }
 
   private async ensureTagDoesNotExist(git: ReturnType<typeof simpleGit>, tag: string): Promise<void> {

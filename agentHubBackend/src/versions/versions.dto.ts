@@ -25,3 +25,14 @@ export class DiffQueryDto {
   @IsNotEmpty()
   v2!: string
 }
+
+export class RestoreVersionDto {
+  @IsOptional()
+  @IsBoolean()
+  createSnapshotBeforeRestore?: boolean
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  message?: string
+}

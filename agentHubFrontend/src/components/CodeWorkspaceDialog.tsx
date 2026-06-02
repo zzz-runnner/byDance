@@ -20,11 +20,14 @@ import {
   createBusinessProjectVersion,
   deployBusinessProjectVersion,
   fetchBusinessProjectDeliverySummary,
+  fetchBusinessProjectVersionDiff,
+  fetchBusinessProjectVersions,
   fetchBusinessProjectPreviewCapability,
-  triggerBusinessProjectPreviewBuild,
   fetchBusinessProjectDiff,
   fetchBusinessProjectFileContent,
   fetchBusinessProjectFiles,
+  restoreBusinessProjectVersion,
+  triggerBusinessProjectPreviewBuild,
 } from '../api/businessBackend'
 import type {
   CodeSelectionReference,
@@ -35,7 +38,9 @@ import type {
   WorkspaceDiffSnapshot,
   WorkspaceFileContent,
   WorkspaceFileNode,
+  WorkspaceVersionDiff,
   WorkspaceVersionRecord,
+  WorkspaceVersionRestoreResult,
 } from '../types'
 import { GlassPanel } from './GlassPanel'
 import { StatusPill } from './StatusPill'
@@ -552,6 +557,17 @@ export function CodeWorkspaceDialog({
   const [deliveryLoading, setDeliveryLoading] = useState(false)
   const [deliveryError, setDeliveryError] = useState('')
   const [deliveryAction, setDeliveryAction] = useState<DeliveryAction>()
+  const [versions, setVersions] = useState<WorkspaceVersionRecord[]>([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [versionsError, setVersionsError] = useState('')
+  const [selectedVersionId, setSelectedVersionId] = useState<string>()
+  const [diffBaseVersionId, setDiffBaseVersionId] = useState<string>()
+  const [versionDiff, setVersionDiff] = useState<WorkspaceVersionDiff>()
+  const [versionDiffLoading, setVersionDiffLoading] = useState(false)
+  const [versionDiffError, setVersionDiffError] = useState('')
+  const [restoreBusyVersionId, setRestoreBusyVersionId] = useState<string>()
+  const [restoreMessage, setRestoreMessage] = useState('')
+  const [lastRestoreResult, setLastRestoreResult] = useState<WorkspaceVersionRestoreResult>()
   const [previewAttempt, setPreviewAttempt] = useState(0)
   const [previewStatus, setPreviewStatus] = useState<PreviewFrameStatus>('loading')
   const [editorViewport, setEditorViewport] = useState({
@@ -593,6 +609,9 @@ export function CodeWorkspaceDialog({
     previewCapability?.mode === 'module-shell' ||
     previewBuildStatus === 'success'
   )
+  const currentVersion = versions.find(version => version.isCurrent) ?? versions.find(version => version.versionId === currentDeliveryVersionId)
+  const selectedVersion = versions.find(version => version.versionId === selectedVersionId)
+  const diffBaseVersion = versions.find(version => version.versionId === diffBaseVersionId)
 
   useEffect(() => {
     activeFilePathRef.current = activeFilePath
@@ -761,6 +780,70 @@ export function CodeWorkspaceDialog({
   }
 
   /**
+   * Loads saved version history for the selected project.
+   * Input: optional silent-refresh flag.
+   * Output: version list state refreshed from the backend.
+   */
+  async function loadVersions(options?: { silent?: boolean }) {
+    if (!projectId) {
+      return
+    }
+
+    if (!options?.silent) {
+      setVersionsLoading(true)
+      setVersionsError('')
+    }
+
+    try {
+      const nextVersions = await fetchBusinessProjectVersions(projectId)
+      setVersions(nextVersions)
+      setSelectedVersionId(previous => {
+        if (previous && nextVersions.some(version => version.versionId === previous)) {
+          return previous
+        }
+        return nextVersions[0]?.versionId
+      })
+      setDiffBaseVersionId(previous => {
+        if (previous && nextVersions.some(version => version.versionId === previous)) {
+          return previous
+        }
+        return undefined
+      })
+    } catch (error) {
+      setVersions([])
+      setVersionsError(error instanceof Error ? error.message : 'Failed to load version history.')
+    } finally {
+      if (!options?.silent) {
+        setVersionsLoading(false)
+      }
+    }
+  }
+
+  /**
+   * Loads one saved-version diff from the business backend.
+   * Input: base and target version ids.
+   * Output: version diff state refreshed from the backend.
+   */
+  async function loadVersionDiff(baseVersionId: string, targetVersionId: string) {
+    if (!projectId) {
+      return
+    }
+
+    setVersionDiffLoading(true)
+    setVersionDiffError('')
+
+    try {
+      const nextDiff = await fetchBusinessProjectVersionDiff(projectId, baseVersionId, targetVersionId)
+      setVersionDiff(nextDiff)
+    } catch (error) {
+      setVersionDiff(undefined)
+      setVersionDiffError(error instanceof Error ? error.message : 'Failed to load version diff.')
+    } finally {
+      setVersionDiffLoading(false)
+    }
+  }
+
+  /**
    * Loads the current project file browser snapshot from the local backend.
    * Input: optional preferred active file path and preview target path.
    * Output: updates file tree, diff state, preview state, and active selections.
@@ -820,6 +903,20 @@ export function CodeWorkspaceDialog({
     }
   }
 
+  /**
+   * Reloads every project-scoped browser surface after one restore or delivery mutation.
+   * Input: optional preferred active file and preview target.
+   * Output: tree, preview, diff, delivery, and version states refreshed.
+   */
+  async function refreshWorkspaceSurfaces(
+    preferredActiveFilePath?: string,
+    preferredPreviewPath?: string,
+  ) {
+    await loadWorkspaceBrowser(preferredActiveFilePath, preferredPreviewPath)
+    await loadVersions({ silent: true })
+    await onProjectDeliveryUpdated?.()
+  }
+
   useEffect(() => {
     if (!open) {
       clearSelectionCommitTimer()
@@ -853,6 +950,17 @@ export function CodeWorkspaceDialog({
     setDeliveryLoading(false)
     setDeliveryError('')
     setDeliveryAction(undefined)
+    setVersions([])
+    setVersionsLoading(false)
+    setVersionsError('')
+    setSelectedVersionId(undefined)
+    setDiffBaseVersionId(undefined)
+    setVersionDiff(undefined)
+    setVersionDiffLoading(false)
+    setVersionDiffError('')
+    setRestoreBusyVersionId(undefined)
+    setRestoreMessage('')
+    setLastRestoreResult(undefined)
     setPreviewAttempt(0)
     selectionDraftRef.current = undefined
     pointerSelectionRef.current = false
@@ -860,6 +968,7 @@ export function CodeWorkspaceDialog({
 
     if (projectId) {
       void loadWorkspaceBrowser()
+      void loadVersions()
     }
   }, [open, projectId])
 
@@ -1051,6 +1160,16 @@ export function CodeWorkspaceDialog({
     }
   }, [panelMode])
 
+  useEffect(() => {
+    if (!open || !projectId || !selectedVersionId || !diffBaseVersionId || selectedVersionId === diffBaseVersionId) {
+      setVersionDiff(undefined)
+      setVersionDiffError('')
+      return
+    }
+
+    void loadVersionDiff(diffBaseVersionId, selectedVersionId)
+  }, [diffBaseVersionId, open, projectId, selectedVersionId])
+
   /**
    * Starts or retries the current preview build through the business backend.
    * Input: optional force flag.
@@ -1080,8 +1199,7 @@ export function CodeWorkspaceDialog({
    * Output: workspace browser and parent room state reloaded.
    */
   async function refreshAfterDeliveryAction() {
-    await loadWorkspaceBrowser(activeFilePath, selectedPreviewPath)
-    await onProjectDeliveryUpdated?.()
+    await refreshWorkspaceSurfaces(activeFilePath, selectedPreviewPath)
   }
 
   /**
@@ -1203,7 +1321,46 @@ export function CodeWorkspaceDialog({
    * Output: reloads browser data from the local backend.
    */
   async function handleRefresh() {
-    await loadWorkspaceBrowser(activeFilePath, selectedPreviewPath)
+    await refreshWorkspaceSurfaces(activeFilePath, selectedPreviewPath)
+  }
+
+  /**
+   * Restores the workspace repo to the selected saved version and refreshes every dependent panel.
+   * Input: target version record.
+   * Output: version restore result stored for user feedback.
+   */
+  async function handleRestoreVersion(version: WorkspaceVersionRecord) {
+    if (!projectId || restoreBusyVersionId) {
+      return
+    }
+
+    const confirmed = window.confirm(
+      `确定恢复到版本 ${version.versionId} 吗？\n\n这会覆盖当前工作区源码。\n恢复前会自动保存当前快照，避免丢失现在的内容。`,
+    )
+
+    if (!confirmed) {
+      return
+    }
+
+    setRestoreBusyVersionId(version.versionId)
+    setVersionsError('')
+    setVersionDiffError('')
+
+    try {
+      const result = await restoreBusinessProjectVersion(projectId, version.versionId, {
+        createSnapshotBeforeRestore: true,
+        ...(restoreMessage.trim() ? { message: restoreMessage.trim() } : {}),
+      })
+      setLastRestoreResult(result)
+      setSelectedVersionId(result.restoredVersion.versionId)
+      setDiffBaseVersionId(undefined)
+      setVersionDiff(undefined)
+      await refreshWorkspaceSurfaces(activeFilePath, selectedPreviewPath)
+    } catch (error) {
+      setVersionsError(error instanceof Error ? error.message : 'Failed to restore version.')
+    } finally {
+      setRestoreBusyVersionId(undefined)
+    }
   }
 
   /**
@@ -1319,6 +1476,159 @@ export function CodeWorkspaceDialog({
                 <span>{deliveryError}</span>
               </div>
             ) : null}
+          </section>
+
+          <section className="code-version-strip">
+            <div className="code-version-strip__header">
+              <div>
+                <p className="eyebrow">Version History</p>
+                <strong>版本历史 / Diff / 恢复</strong>
+                <span>
+                  {versionsLoading
+                    ? '正在同步版本列表...'
+                    : versions.length > 0
+                      ? `当前共 ${versions.length} 个版本`
+                      : '当前还没有保存过源码版本'}
+                </span>
+              </div>
+              <div className="code-version-strip__actions">
+                <input
+                  className="code-version-message-input"
+                  type="text"
+                  placeholder="可选：恢复提交说明"
+                  value={restoreMessage}
+                  onChange={event => setRestoreMessage(event.currentTarget.value)}
+                />
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void loadVersions()}
+                  disabled={versionsLoading}
+                >
+                  {versionsLoading ? <LoaderCircle className="icon-spin" size={14} /> : <RefreshCcw size={14} />}
+                  刷新版本
+                </button>
+              </div>
+            </div>
+
+            <div className="code-version-strip__layout">
+              <section className="code-versions-list">
+                <div className="code-versions-list__header">
+                  <strong>版本列表</strong>
+                  <span>{currentVersion ? `当前版本：${currentVersion.versionId}` : '当前还没有版本'}</span>
+                </div>
+
+                {versionsError ? (
+                  <div className="code-versions-list__error">{versionsError}</div>
+                ) : null}
+
+                {lastRestoreResult ? (
+                  <div className="code-versions-list__success">
+                    已恢复到 {lastRestoreResult.restoredVersion.versionId}
+                    {lastRestoreResult.snapshotVersion ? `，并自动保存快照 ${lastRestoreResult.snapshotVersion.versionId}` : ''}
+                  </div>
+                ) : null}
+
+                {versionsLoading ? (
+                  <div className="code-versions-list__empty">
+                    <LoaderCircle className="icon-spin" size={18} />
+                    正在加载版本列表...
+                  </div>
+                ) : versions.length === 0 ? (
+                  <div className="code-versions-list__empty">
+                    <RefreshCcw size={18} />
+                    当前还没有可用的源码版本
+                  </div>
+                ) : (
+                  <div className="code-version-cards">
+                    {versions.map(version => {
+                      const isSelected = version.versionId === selectedVersionId
+                      const isBase = version.versionId === diffBaseVersionId
+                      const isRestoring = restoreBusyVersionId === version.versionId
+
+                      return (
+                        <div
+                          className={`code-version-card ${isSelected ? 'is-selected' : ''} ${version.isCurrent ? 'is-current' : ''}`}
+                          key={version.versionId}
+                        >
+                          <button
+                            className="code-version-card__body"
+                            type="button"
+                            onClick={() => setSelectedVersionId(version.versionId)}
+                          >
+                            <div className="code-version-card__header">
+                              <strong>{version.versionId}</strong>
+                              <div className="code-version-card__badges">
+                                {version.isCurrent ? <StatusPill status="success" label="当前" /> : null}
+                                {isBase ? <StatusPill status="ready" label="Diff 基线" /> : null}
+                              </div>
+                            </div>
+                            <span>{new Date(version.createdAt).toLocaleString('zh-CN', { hour12: false })}</span>
+                            <span>{version.commitSha ? `commit ${version.commitSha.slice(0, 12)}` : '未记录 commitSha'}</span>
+                          </button>
+                          <div className="code-version-card__actions">
+                            <button
+                              className="secondary-button"
+                              type="button"
+                              onClick={() => setDiffBaseVersionId(version.versionId)}
+                              disabled={isSelected}
+                            >
+                              设为对比基线
+                            </button>
+                            <a className="secondary-button" href={version.sourceZipUrl} target="_blank" rel="noreferrer">
+                              下载源码
+                              <ExternalLink size={14} />
+                            </a>
+                            <button
+                              className="primary-button"
+                              type="button"
+                              onClick={() => void handleRestoreVersion(version)}
+                              disabled={isRestoring || version.isCurrent}
+                            >
+                              {isRestoring ? <LoaderCircle className="icon-spin" size={14} /> : null}
+                              {version.isCurrent ? '当前版本' : '恢复到此版本'}
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <section className="code-version-diff">
+                <div className="code-version-diff__header">
+                  <strong>版本 Diff</strong>
+                  <span>
+                    {diffBaseVersion && selectedVersion && diffBaseVersion.versionId !== selectedVersion.versionId
+                      ? `${diffBaseVersion.versionId} -> ${selectedVersion.versionId}`
+                      : '先选一个版本，再选一个 Diff 基线'}
+                  </span>
+                </div>
+
+                {versionDiffError ? (
+                  <div className="code-versions-list__error">{versionDiffError}</div>
+                ) : versionDiffLoading ? (
+                  <div className="code-versions-list__empty">
+                    <LoaderCircle className="icon-spin" size={18} />
+                    正在加载版本差异...
+                  </div>
+                ) : versionDiff ? (
+                  <div className="code-version-diff__content">
+                    <div className="code-version-diff__meta">
+                      <span>从 {versionDiff.fromVersion.versionId}</span>
+                      <span>到 {versionDiff.toVersion.versionId}</span>
+                    </div>
+                    <pre className="code-version-diff__patch">{versionDiff.diff || '两个版本之间没有文本差异。'}</pre>
+                  </div>
+                ) : (
+                  <div className="code-versions-list__empty">
+                    <Braces size={18} />
+                    选择两个不同版本后，这里会显示它们之间的源码 Diff
+                  </div>
+                )}
+              </section>
+            </div>
           </section>
 
           <div className="code-dialog__layout">

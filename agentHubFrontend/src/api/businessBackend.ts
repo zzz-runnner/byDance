@@ -16,7 +16,9 @@ import type {
   WorkspacePreviewCapability,
   WorkspacePreviewTargets,
   WorkspaceSortField,
+  WorkspaceVersionDiff,
   WorkspaceVersionRecord,
+  WorkspaceVersionRestoreResult,
   WorkflowEvent,
 } from '../types'
 
@@ -446,6 +448,57 @@ export async function createBusinessProjectVersion(
     }),
   })
   return readJson<WorkspaceVersionRecord>(response, 'Create business project version')
+}
+
+/**
+ * Loads saved source versions for one workspace-backed project.
+ * Input: project id.
+ * Output: version history ordered by backend default.
+ */
+export async function fetchBusinessProjectVersions(projectId: string): Promise<WorkspaceVersionRecord[]> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/versions`)
+  return readJson<WorkspaceVersionRecord[]>(response, 'Load business project versions')
+}
+
+/**
+ * Loads the unified diff between two saved project versions.
+ * Input: project id and two version ids.
+ * Output: backend version diff payload.
+ */
+export async function fetchBusinessProjectVersionDiff(
+  projectId: string,
+  v1: string,
+  v2: string,
+): Promise<WorkspaceVersionDiff> {
+  const query = new URLSearchParams({
+    v1,
+    v2,
+  })
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/version-diff?${query.toString()}`)
+  return readJson<WorkspaceVersionDiff>(response, 'Load business project version diff')
+}
+
+/**
+ * Restores the current workspace repo to one saved version.
+ * Input: project id, target version id, and optional restore guard settings.
+ * Output: restore result with optional auto snapshot.
+ */
+export async function restoreBusinessProjectVersion(
+  projectId: string,
+  versionId: string,
+  input: {
+    createSnapshotBeforeRestore?: boolean
+    message?: string
+  } = {},
+): Promise<WorkspaceVersionRestoreResult> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}/restore`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  return readJson<WorkspaceVersionRestoreResult>(response, 'Restore business project version')
 }
 
 /**

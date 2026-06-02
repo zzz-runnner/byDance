@@ -221,6 +221,7 @@ export type WorkspaceVersionRecord = {
   buildLog?: string
   createdAt: string
   updatedAt: string
+  isCurrent?: boolean
 }
 
 export type WorkspaceDeploymentRecord = {
@@ -229,6 +230,23 @@ export type WorkspaceDeploymentRecord = {
   deployPath: string
   deployUrl: string
   createdAt: string
+}
+
+export type WorkspaceVersionDiff = {
+  v1: string
+  v2: string
+  diff: string
+  fromVersion: WorkspaceVersionRecord
+  toVersion: WorkspaceVersionRecord
+}
+
+export type WorkspaceVersionRestoreResult = {
+  projectId: string
+  workspaceId: string
+  restoredVersion: WorkspaceVersionRecord
+  snapshotVersion?: WorkspaceVersionRecord
+  currentVersionId: string
+  restoredAt: string
 }
 
 export type StreamMessageInput = {

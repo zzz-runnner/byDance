@@ -36,10 +36,18 @@ The current local chain covers:
 - `GET /api/projects/:projectId/files`
 - `GET /api/projects/:projectId/files/content`
 - `GET /api/projects/:projectId/diff`
+- `GET /api/projects/:projectId/delivery`
 - `GET /api/projects/:projectId/preview-targets`
 - `GET /api/projects/:projectId/preview-capability`
 - `POST /api/projects`
 - `POST /api/projects/:projectId/messages/stream`
+- `POST /api/projects/:projectId/versions`
+- `GET /api/projects/:projectId/versions`
+- `GET /api/projects/:projectId/version-diff`
+- `POST /api/projects/:projectId/versions/:versionId/restore`
+- `GET /api/projects/:projectId/source.zip`
+- `POST /api/projects/:projectId/builds`
+- `POST /api/projects/:projectId/deploy`
 - `POST /api/projects/:projectId/preview-build`
 - `GET /api/workspaces/:workspaceId/zip`
 - `GET /preview/runtime/*`
@@ -80,6 +88,9 @@ The backend still keeps the Nest business modules for:
   - diff view
   - code quoting
   - preview panel
+  - saved source version history
+  - version-to-version diff
+  - one-click restore with auto snapshot protection
 - New workspaces no longer auto-seed a placeholder `index.html`.
 - If no previewable entry exists yet, the preview panel stays empty instead of fabricating a page.
 - Chat history recovery now uses turn-safe grouping:
@@ -210,6 +221,15 @@ Real local service smoke also passed on 2026-06-01:
   - final visible reply sender was `product-manager`
   - SSE stream completed and state reload reflected the persisted reply
 
+Version history smoke also passed on 2026-06-02 through a temporary isolated backend instance:
+
+- create a project bound to a temporary local workspace repo
+- save two source versions back to back
+- load `/api/projects/:projectId/versions`
+- load `/api/projects/:projectId/version-diff?v1=...&v2=...`
+- restore `/api/projects/:projectId/versions/:versionId/restore`
+- verify the workspace repo file content returned to the older version after restore
+
 Recommended real-chain verification after starting local services:
 
 ```powershell
@@ -219,11 +239,14 @@ npx vitest run tests/real/agent-chain-probe.test.ts -t "keeps an unapproved plan
 npx vitest run tests/real/agent-chain-probe.test.ts -t "probes the approved main chain through engineer, reviewer, and synthesis" --reporter=verbose
 ```
 
-## Local Delivery Flow
+## Local Delivery And Version Flow
 
-The current local frontend now exposes a first usable delivery flow inside the code workspace dialog:
+The current local frontend now exposes a first usable delivery and rollback flow inside the code workspace dialog:
 
 - save the current workspace repo into a source snapshot
+- browse saved source versions
+- compare two saved versions through unified diff
+- restore one saved version back into the live workspace repo with an automatic safety snapshot
 - build a delivery artifact from the latest saved version
 - publish that built artifact into the local `/deploy/*` route
 - open the latest built preview, deployed page, or source archive directly from the UI
@@ -235,7 +258,7 @@ The backend also injects the latest source/build/deploy status back into the mai
 The current local implementation still does not cover:
 
 - cloud deployment flow
-- one-click version diff and release UX
+- richer release management flows such as approval, release channels, and publish history
 - framework preview outside the first local phase, such as Angular
 - desktop and mobile clients
 
