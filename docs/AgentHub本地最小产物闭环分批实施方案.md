@@ -1,703 +1,465 @@
 # AgentHub 本地最小产物闭环分批实施方案
 
-## 1. 结论
+## 1. 当前结论
 
-这份文档只分两个责任域：
+当前版本以 2026-06-01 主干现状为准。
 
-- AgentHub Runtime / 产物闭环侧：包含需求 Agent、工程 Agent、Reviewer、Orchestrator、Runtime、ToolGateway、Artifact、ChangeSet、Preview、Zip、Build / Validate、Workflow Event。下文为了简洁，仍简称为“Agent 侧”。
-- 业务后端侧：包含业务 API、业务数据、业务鉴权、业务发布、业务系统自己的存储和运行逻辑。
-
-当前阶段优先把 AgentHub Runtime / 产物闭环做好。业务后端先只保留清晰边界和后续接入点，不进入本阶段主线。
-
-这里的“Agent 侧”不是单个大模型 Agent，而是 AgentHub 为了让 Agent 完成任务所需要的一整套执行环境和产物能力。也就是说，Runtime、预览、打包、构建、diff、artifact 记录都归 Agent 侧闭环。
-
-结合当前项目现状，需求阶段判断和执行闸门已经基本跑通，不再作为下一步大批次开发重点。后续真正要补的是“Agent 已经写出文件以后，系统能不能稳定生成可预览、可下载、可回放、可验收的产物链路”。
-
-核心判断：
-
-- 需求 Agent 负责把用户模糊输入变成可执行范围、验收标准和任务包。
-- 工程 Agent 负责在 Runtime workspace 里实现代码。
-- Reviewer 负责基于真实产物验收。
-- Orchestrator 负责阶段判断、任务派发、结果综合。
-- Runtime / ToolGateway / Artifact / ChangeSet / Preview / Zip / Build Log 是 Agent 侧基础设施。
-- 业务后端不参与本地 AgentRun 的打包、预览、构建和 artifact 生成。
-
-这部分工作量中等偏大，不建议一次性做完。
-
-原因不是单个功能难，而是它横跨 Agent 编排、Runtime、ToolGateway、Artifact、ChangeSet、Workflow Event、Reviewer 上下文和业务边界。一次性做完容易出现几个问题：
-
-- Agent 能写文件，但没有稳定 diff 和产物记录。
-- Preview 能打开，但静态资源、MIME、构建目录优先级不稳定。
-- Zip 能打包，但安全排除规则、下载接口、artifact 记录不完整。
-- Build 能跑，但日志没有进入 Reviewer 上下文。
-- Reviewer 会总结，但不是基于真实产物验收。
-- 后续接业务后端时，如果边界不清，会把业务 API、发布、鉴权和 Agent Runtime 混在一起。
-
-建议按实际缺口分批推进，每个批次都能独立验证。当前不从需求闸门重新做起，而是从 Preview、产物事件、Zip、Reviewer 真实验收开始。
-
-## 2. 职责边界
-
-### 2.1 Agent 侧做什么
-
-Agent 侧负责把“用户需求”变成“可验证的本地产物”。
-
-Agent 侧包含：
-
-- 需求 Agent。
-- 工程 Agent。
-- Reviewer。
-- Orchestrator。
-- Runtime。
-- ToolGateway。
-- AgentRun。
-- ChangeSet。
-- Artifact。
-- Preview。
-- Zip。
-- Build / Validate。
-- Workflow Event。
-
-Agent 侧负责：
-
-- 接收用户需求。
-- 判断当前阶段：需求对接、方案确认、执行、审查。
-- 需求 Agent 澄清范围、产出验收标准。
-- 工程 Agent 修改 workspace 文件。
-- Runtime 提供隔离 workspace repo。
-- ToolGateway 约束所有命令和文件访问在 workspace 内。
-- AgentRun 前后读取 repo snapshot。
-- 生成 changed files、patch、ChangeSet。
-- 提供本地 preview URL。
-- 打包源码 zip。
-- 运行受控 build/check。
-- 记录 build/check logs。
-- 生成 artifact。
-- 发出 workflow event。
-- Reviewer 基于真实产物给出 PASS / PARTIAL / FAIL。
-- Orchestrator 汇总最终结果。
-
-Agent 侧不负责：
-
-- 业务数据库建模。
-- 业务鉴权策略。
-- 业务生产数据写入。
-- 业务正式发布。
-- 业务后端服务运行。
-- 业务后端内部 CI/CD。
-
-### 2.2 需求 Agent 做什么
-
-需求 Agent 是 Agent 侧优先要做好的第一环。
-
-需求 Agent 负责：
-
-- 把用户的模糊需求整理成明确目标。
-- 追问缺失信息。
-- 定义范围和不做范围。
-- 输出验收标准。
-- 输出工程 Agent 可执行的任务包。
-- 标记是否已经允许进入执行阶段。
-
-需求 Agent 输出建议包含：
+本地真实主链已经统一为：
 
 ```text
-1. 用户目标
-2. 页面 / 功能范围
-3. 必须包含的内容
-4. 不做范围
-5. 验收标准
-6. 交给工程 Agent 的任务包
-7. 是否需要用户确认后才能执行
+agentHubFrontend -> agentHubBackend -> agentHub runtime -> real agents
 ```
 
-需求 Agent 不负责：
+旧的 `locateBackend/` 适配层已经从仓库中移除，`agentHubBackend` 现在就是前端唯一接入的统一本地后端入口，不再是“后续再接”的占位目录。
 
-- 写代码。
-- 打包 zip。
-- 跑 build。
-- 发布业务系统。
-- 直接操作业务数据库。
-
-### 2.3 工程 Agent 做什么
-
-工程 Agent 负责实现代码，但它依赖 Runtime 和 ToolGateway 完成安全执行。
-
-工程 Agent 负责：
-
-- 读取需求 Agent 输出的任务包。
-- 修改 workspace repo 文件。
-- 尽量生成可静态预览的产物。
-- 在输出中说明改动内容、关键文件、自测情况和风险。
-- 根据 build/check 日志继续修复。
-
-工程 Agent 不负责：
-
-- 自己定义 zip 排除规则。
-- 自己生成 artifact id。
-- 自己维护 workflow event。
-- 自己绕过 ToolGateway 执行命令。
-- 自己调用业务后端生产写接口。
-
-### 2.4 Reviewer 做什么
-
-Reviewer 负责验收，不只是读工程 Agent 总结。
-
-Reviewer 需要基于：
-
-- 原始用户需求。
-- 需求 Agent 的范围和验收标准。
-- 工程 Agent 输出。
-- changed files。
-- ChangeSet summary。
-- preview artifact。
-- zip artifact。
-- build/check logs。
-
-Reviewer 输出必须包含：
+因此，这份文档不再使用“Agent 侧先单独闭环，业务后端暂不进入主线”的旧口径，而改为当前三层统一主链口径：
 
 ```text
-1. 结论：PASS / PARTIAL / FAIL
-2. 验收依据
-3. 发现的问题
-4. 是否建议继续修复
+1. 前端工作台层：聊天、代码工作区、预览入口、产物展示
+2. 统一本地后端层：项目状态、元数据、预览构建、交付接口、资产路由
+3. Runtime / Agent 执行层：Orchestrator、子 Agent、workspace repo、真实执行
 ```
 
-### 2.5 业务后端做什么
-
-业务后端负责业务系统本身，不负责 Agent 本地执行闭环。
-
-业务后端负责：
-
-- 业务 API。
-- 业务数据模型。
-- 业务鉴权。
-- 业务资源存储。
-- 业务发布流程。
-- 业务系统运行监控。
-- 业务侧报表、文件、订单、用户、权限等能力。
-
-业务后端不负责：
-
-- Agent workspace 隔离。
-- AgentRun 生命周期。
-- Agent 本地源码 zip 打包。
-- Agent 本地 preview 服务。
-- Agent ChangeSet 生成。
-- Agent artifact id 生成。
-- Agent workflow event 生成。
-
-后续接业务后端时，只通过明确接口接入：
+当前最小本地闭环基础版已经完成。后续重点不再是从零补 Preview、Zip、基础事件，而是继续做：
 
 ```text
-API schema / manifest / webhook / publish adapter / artifact metadata
+1. 比赛要求剩余差距收口
+2. 管理能力产品化
+3. 构建 / 预览 / 部署状态体验收口
+4. 最终演示链路和比赛交付物
 ```
 
-不把业务后端逻辑混进 Agent Runtime。
+当前产品方向继续保持以下约束：
 
-## 3. 最终期望效果
+- Web 端优先。
+- 一个工作区对应一个主聊天窗口。
+- 群聊通过 `@agent`、引用回复、代码选中引用驱动路由。
+- 不为了当前阶段去做桌面端、移动端完整 IDE、多独立聊天窗口。
 
-用户在主群聊里发起一个模糊任务：
+## 2. 当前统一架构与职责边界
 
-```text
-帮我做一个极简活动页
+### 2.1 前端工作台层
+
+前端负责：
+
+- 聊天界面与工作区列表。
+- `@agent`、引用、代码选中引用的交互。
+- 聊天流里的过程卡片与产物卡片。
+- 代码工作区弹窗、文件树、Diff、预览面板。
+- 本地状态恢复和浏览器端交互体验。
+
+前端当前已经是 `live-only`，业务后端不可用时直接显示阻塞错误页，不再回退到 mock 页面。
+
+### 2.2 统一本地后端层 `agentHubBackend`
+
+`agentHubBackend` 当前负责：
+
+- 前端统一 API 入口。
+- 工作区列表分页和项目状态聚合。
+- 文件树、文件内容、Diff、预览能力查询。
+- preview build、build preview 资产路由、deploy 资产路由。
+- 项目元数据、版本、构建、部署模块壳。
+- 将前端请求桥接到 `agentHub runtime`。
+
+它已经属于当前主链的一部分，不再只是“后续接业务后端”的规划层。
+
+### 2.3 Runtime / Agent 执行层 `agentHub`
+
+`agentHub runtime` 当前负责：
+
+- Orchestrator、产品经理、工程师、Reviewer 等 Agent 角色编排。
+- 群聊路由、单聊路由、引用连续性、可见说话人身份。
+- workspace repo 生命周期。
+- 真实 Claude Code / Codex / mock adapter 执行。
+- agent run、artifact、workflow event、workspace zip 等运行态能力。
+
+### 2.4 当前阶段的改动边界
+
+后续阶段默认遵守以下边界：
+
+- 管理类后端能力优先落在 `agentHubBackend/src/**`。
+- 前端产品体验优先落在 `agentHubFrontend/src/**`。
+- 非必要不大改以下高冲突核心文件：
+  - `agentHub/src/server/orchestrator/workflow.ts`
+  - `agentHub/src/server/orchestrator/turn-router.ts`
+  - `agentHub/src/server/orchestrator/planner.ts`
+- 只在确有必要时少量补 `agentHub/src/shared/contracts.ts` 或 runtime 路由层。
+
+## 3. 已完成的本地闭环基线
+
+### 3.1 聊天与路由基线
+
+当前已经具备：
+
+- 工作区群聊与单聊两种模式。
+- 群聊显式 `@agent` 路由。
+- 引用子 Agent 回复后的连续跟进路由。
+- 代码选中引用透传，未显式指定时默认偏向 `engineer`。
+- 可见回复身份不再统一扁平为 Orchestrator。
+- 刷新后恢复最近活跃工作区。
+- 聊天记录按需增量加载，而不是首次全量灌入。
+
+### 3.2 聊天流展示基线
+
+当前聊天流已经具备：
+
+- 用户消息。
+- `本轮过程` 执行块。
+- 压缩后的产物卡片。
+- 最终 Agent 回复。
+- AI 文本、过程摘要、产物文本统一 Markdown 渲染。
+- 预览、Diff、review、zip、text 等产物卡片进入主聊天流。
+
+### 3.3 代码工作区基线
+
+当前代码工作区弹窗已经具备：
+
+- 当前工作区 repo 范围内的真实文件树。
+- 文件内容查看。
+- Diff 查看。
+- 代码选中引用。
+- 预览面板。
+- 没有预览入口时保持空态，不再伪造占位 `index.html`。
+
+### 3.4 本地预览与构建基线
+
+当前 `agentHubBackend` 已支持本地预览第一阶段：
+
+- 静态 HTML。
+- 浏览器原生 ESM。
+- Vite React。
+- Vite Vue。
+- Vite Svelte。
+
+当前预览运行约束：
+
+- 用户源码留在 `agentHub/data/workspaces/{workspaceId}/repo`。
+- 共享 pnpm store 放在 `agentHubBackend/data/pnpm-store`。
+- 构建沙箱与构建产物放在 `agentHubBackend` 数据目录。
+- 不把 `node_modules`、`dist`、运行时 lockfile 回写到用户源码目录。
+
+### 3.5 已完成的验证基线
+
+当前主干已经完成以下验证：
+
+```powershell
+cd E:\byDance\agentHub
+npm run check
+npm test
+
+cd E:\byDance\agentHubBackend
+npm run check
+npm run build
+
+cd E:\byDance\agentHubFrontend
+npm run check
+npm run build
 ```
 
-系统先进入需求对接，而不是直接写代码：
+## 4. 当前与比赛要求的主要差距
 
-```text
-task_stage_updated: requirements_intake
-agent_task_dispatched: product-manager
-```
+当前仍未完全收口的比赛能力主要有：
 
-需求 Agent 输出需求、范围和验收标准。用户确认后：
+### 4.1 Agent 管理能力
 
-```text
-可以，按这个方案开始实现
-```
+- 前端还没有完整的 Agent 管理页或管理弹窗。
+- 用户还不能直接新建自定义子 Agent。
+- 默认内置 Agent 还不能在前端直接切换 `claude / codex`。
+- 默认 Agent 与自定义 Agent 的可编辑字段边界还没有产品化。
 
-系统进入 Agent 侧执行链路：
+### 4.2 工作区管理能力
 
-```text
-task_stage_updated: execution
-agent_task_dispatched: engineer
-agent_started: engineer
-agent_progress: engineer 正在修改 workspace 文件
-agent_finished: engineer success
-change_set_created: Agent 侧生成真实 changed files + patch
-preview_ready: Agent 侧生成本地 preview URL
-zip_ready: Agent 侧生成本地源码 zip 下载 URL
-agent_task_dispatched: reviewer
-agent_started: reviewer
-agent_finished: reviewer success
-assistant_delta: 最终回复流式输出
-```
+- 搜索与分页已有基础，但 `置顶 / 归档 / 长期上下文 pin` 还没完整收口。
+- 这部分更偏元数据管理，不应混进现有 agent 主链路。
 
-本地 Demo 的验收标准：
+### 4.3 构建 / 预览 / 部署状态产品化
 
-```text
-1. 需求 Agent 能产出明确任务包和验收标准
-2. 工程 Agent 真的修改了 workspace repo 文件
-3. Agent 侧生成真实 ChangeSet 和 patch
-4. 预览 URL 能打开修改后的页面，并能加载 CSS / JS / 图片
-5. zip 能下载，解压后包含源码，且不包含 .git / node_modules / .env*
-6. 如果本轮执行了 build/check，结果会被记录为日志和 artifact；没有 build 脚本时可以跳过
-7. Reviewer 基于真实 changed files、preview、zip 给出结论；如果有 build/check 日志，需要一并引用
-8. 最终回复流式输出，并明确带出预览、diff、zip、验收结果
-9. 刷新后仍能从状态中恢复 run / artifact / changeSet / workflow event
-```
+- 本地预览和 preview build 已有基础能力，但前端展示和状态流还不够完整。
+- 部署模块已有后端壳和资产路由，但前端还没有形成完整部署体验。
+- 预览 URL、构建结果、部署状态、源码下载还缺少统一的前端产品表达。
 
-业务后端本阶段验收标准：
+### 4.4 聊天流中的产物操作
 
-```text
-1. 文档中边界清楚
-2. 不阻塞 Agent 侧闭环
-3. 后续能通过 API schema / manifest / webhook / publish adapter 接入
-```
+- 还需要继续补齐：
+  - 复制代码
+  - 一键应用 Diff
+  - 展开预览
+  - 部署状态卡片
+  - 源码下载入口
 
-## 4. 基于当前现状的实施顺序
+### 4.5 代码工作区体验
 
-### 已基本完成：需求 Agent 和执行闸门
+- 版本历史体验还没有成型。
+- Diff 还偏查看型，操作能力不足。
+- 代码选中引用交互还可以继续收口。
+- 预览与代码的联动展示还可以更顺手。
 
-当前项目已经具备：
+### 4.6 Agent 行为与产品感
 
-- 模糊需求进入 `requirements_intake`。
-- 未确认前只允许产品/需求对接，不直接派工程 Agent。
-- 用户明确确认后进入 `execution`。
-- 执行闸门会拦截模型误派的工程执行。
+- 当前已经有角色直出和主脑总结能力，但什么时候应该让产品经理、工程师、Reviewer 优先直答，还需要继续微调。
+- 这部分要尽量做轻量调优，不大改现有 agent 架构。
 
-这一块不再作为下一步大批次开发，只保留小修项：
+### 4.7 比赛交付物
 
-- 让需求 Agent 输出格式更稳定。
-- 强化“任务包 + 验收标准 + 是否需要确认”的结构。
-- 在 smoke 测试里继续覆盖“模糊任务不执行、确认后执行”。
+代码之外仍需补：
 
-验收以回归为主：
+- 产品设计文档收口。
+- 技术文档收口。
+- AI 协作开发记录整理。
+- 真实链路测试清单。
+- 3 分钟 Demo 脚本和录屏。
 
-```text
-1. “帮我做一个活动页”进入需求对接
-2. 未确认前不派工程 Agent
-3. 用户确认后进入执行阶段
-4. npm run check 通过
-```
+## 5. 并行开发边界与外部前置依赖
 
-### 批次 1：Runtime Preview 静态资源服务
+当前按低耦合原则，外部并行任务只保留两块后端管理能力，其余主线由我继续推进。
+
+### 5.1 外部前置依赖 A：Agent 管理接口
 
 目标：
 
-让 Agent 已经写好的本地 HTML/CSS/JS 页面可以被 iframe 稳定预览。
+- 支持自定义 Agent 的新增、查询、编辑、删除。
+- 支持默认内置 Agent 的可编辑字段管理。
+- 支持默认子 Agent 切换 `claude / codex` provider。
+- 限制核心 Agent 不可删除，只允许修改指定字段。
 
-范围：
+建议改动范围：
 
-- 支持 `/preview/:workspaceId/*` 返回 HTML、CSS、JS、图片等静态资源。
-- 根据文件后缀返回正确 MIME。
-- 支持相对路径资源加载。
-- 如果存在 `dist/` 或 `build/`，优先预览构建产物。
-- 如果没有构建产物，则预览 repo 根目录。
-- 保持 workspace 路径边界校验。
-- 保持 `web-preview` artifact 使用 `previewUrl`，供后续前端 iframe 直接加载。
+- 以 `agentHubBackend/src/**` 为主。
+- 必要时少量补 `agentHub/src/shared/contracts.ts`。
 
-不做：
+明确不动：
 
-- 公网预览 URL。
-- 长驻 dev server 反向代理。
-- 每个 workspace 独立容器。
-- 业务后端代理。
-- 前端 iframe 页面。
+- `agentHubFrontend/src/**`
+- `agentHub/src/server/orchestrator/workflow.ts`
+- `agentHub/src/server/orchestrator/turn-router.ts`
+- `agentHub/src/server/orchestrator/planner.ts`
 
-验收：
-
-```text
-1. Agent 生成 index.html + styles.css 后，预览页能加载 CSS
-2. 访问不存在文件返回明确错误
-3. 访问 workspace 外路径会被拒绝
-4. web-preview artifact 能从状态中恢复
-5. npm run check 通过
-```
-
-预估：
-
-0.5 天。
-
-### 批次 2：ChangeSet / Artifact 事件归一化
+### 5.2 外部前置依赖 B：工作区元数据接口
 
 目标：
 
-让 AgentRun 结束后有稳定的产物事件和可回放状态。当前系统已经能记录 ChangeSet 和部分 Artifact，但缺少专门的产物事件。
+- 支持工作区 `置顶 / 取消置顶`。
+- 支持工作区 `归档 / 取消归档`。
+- 统一分页、搜索、排序相关接口参数。
+- 保持这部分只属于项目元数据层，不碰聊天流和 agent 执行逻辑。
 
-范围：
+建议改动范围：
 
-- 新增 workflow event：
-  - `artifact_created`
-  - `change_set_created`
-  - `preview_ready`
-  - `zip_ready`
-- AgentRun 结束后按统一顺序发事件。
-- `change_set_created` 包含 changeSetId、agentRunId、files、summary。
-- `artifact_created` 包含 artifactId、type、title、url。
-- `preview_ready` 指向已有或新生成的 `web-preview` artifact。
-- 保持当前 `agent_task_dispatched`、`agent_started`、`agent_finished` 不变。
-- 事件必须落库，刷新后可回放。
+- `agentHubBackend/src/projects/**`
+- 项目元数据存储与 DTO / controller / service 层
 
-不做：
+明确不动：
 
-- 复杂 artifact parser。
-- 文档 / PPT / 图片转码。
-- 业务后端事件转发。
-- 前端时间线 UI。
+- `agentHubFrontend/src/**`
+- runtime 编排核心文件
 
-验收：
+## 6. 我后续主线任务
 
-```text
-1. /api/messages/stream 能收到新增事件
-2. 事件顺序能支撑后续时间线
-3. 事件落库后刷新可回放
-4. mock 链路和真实链路都不报错
-5. npm run check 通过
-```
+下述任务是当前文档的主线，也是我后续重点推进的部分。
 
-预估：
-
-0.5-1 天。
-
-### 批次 3：Zip 导出和 Zip Artifact
+### 6.1 阶段 1：构建 / 预览 / 部署状态收口
 
 目标：
 
-让 AgentHub Runtime 产物可以被下载，满足比赛主链路中的“源码 zip 下载”。
+把“源码生成 -> 构建结果 -> 预览 URL -> 部署状态 -> 源码下载”整理成前端可以稳定消费的一套链路。
 
 范围：
 
-- 新增 workspace zip 打包服务。
-- 新增下载接口，例如 `GET /api/workspaces/:workspaceId/zip`。
-- 排除 `.git`、`node_modules`、`.env*`、临时日志、缓存目录。
-- AgentRun 结束后，基于当前 workspace snapshot 生成 `zip` artifact。
-- Artifact 中保存 title、content、url、agentRunId、createdByAgentId。
-- 发出 `artifact_created` 和 `zip_ready` 事件。
-
-不做：
-
-- 对象存储。
-- 云端持久下载链接。
-- GitHub 导出。
-- 业务后端源码导出。
+- 收口 preview build 的状态表达。
+- 收口构建成功、失败、超时、空产物时的前端消费方式。
+- 统一预览 URL、构建产物 URL、源码下载 URL 的前端入口。
+- 把部署状态卡片和部署结果结构梳理清楚。
+- 不做云端部署，只做本地可演示闭环。
 
 验收：
 
-```text
-1. 下载 zip 成功
-2. 解压后包含 Agent 修改后的文件
-3. zip 中不包含 .git / node_modules / .env*
-4. artifact 列表中能看到 zip 产物
-5. SSE 能收到 zip_ready
-6. npm run check 通过
-```
+- 源码生成后，前端能稳定显示预览可用、构建失败、构建中等状态。
+- 部署指令能形成稳定状态卡片与结果结构。
+- zip 下载入口与预览入口在聊天流中能被清晰消费。
 
-预估：
-
-0.5-1 天。
-
-### 批次 4：Reviewer 基于真实产物验收
+### 6.2 阶段 2：Agent 管理前端
 
 目标：
 
-让 Reviewer 不再只读工程 Agent 总结，而是基于真实产物给出判断。
+接上外部依赖 A，把 Agent 管理能力真正做成用户可用的产品入口。
 
 范围：
 
-- Reviewer 上下文中注入：
-  - 原始用户需求
-  - 需求 Agent 输出的范围和验收标准
-  - engineer output
-  - changed files
-  - changeSet summary
-  - preview artifact
-  - zip artifact
-  - build/check logs，如果本轮存在
-- Reviewer 输出必须包含：
-  - 结论：PASS / PARTIAL / FAIL
-  - 验收依据
-  - 发现的问题
-  - 是否建议继续修复
-- 主脑最终综合时引用 Reviewer 结论。
+- Agent 管理页或弹窗。
+- 自定义 Agent 新建流程。
+- 默认内置 Agent 编辑流程。
+- provider 切换。
+- system prompt、工具集、头像、名称等配置入口。
 
-不做：
+依赖：
 
-- Playwright 截图验收。
-- 视觉 diff。
-- 自动修复循环。
-- 业务后端冒烟测试。
+- 外部前置依赖 A 完成接口收口。
 
 验收：
 
-```text
-1. Reviewer 结论能引用真实 changed files、preview 或 zip
-2. 最终回复里能看到验收结果
-3. npm run check 通过
-```
+- 能新建自定义 Agent。
+- 能编辑默认 Agent 的允许字段。
+- 能在前端切换工程师等角色的 provider。
+- 新建或修改后的 Agent 能进入工作区创建、`@agent` 选择和对话链路。
 
-预估：
-
-0.5-1 天。
-
-### 批次 5：Build / Validate 最小链路
+### 6.3 阶段 3：聊天流产品化
 
 目标：
 
-让 Agent 的产物在有 `package.json` 时具备最小构建或检查结果。这个批次是 P2，不阻塞静态 HTML/CSS 的最小闭环。
+继续把聊天流做成更适合比赛演示的产品体验。
 
 范围：
 
-- Runtime 增加受控 build/check 入口。
-- 如果 workspace 有 `package.json` 且存在 `scripts.build`，运行 `npm run build`。
-- 如果没有 build 脚本，记录为 skipped，不作为失败。
-- stdout/stderr 写入 AgentRun logs。
-- 生成 build/check text artifact。
-- Workflow 中发出构建开始和完成事件，事件名可先用：
-  - `agent_progress`
-  - 后续再升级为 `build_started` / `build_finished`
-- 命令仍必须经过 ToolGateway 白名单。
-
-关键决策：
-
-当前 ToolGateway 只白名单 git / Claude Code / Codex。要支持 `npm run build`，需要扩展命令白名单。建议只开放：
-
-```text
-npm install / npm run build / npm test
-```
-
-并限制：
-
-- cwd 必须在 workspace repo 内。
-- 超时时间固定。
-- 不允许任意 shell 字符串。
-- 不读取或注入平台密钥。
-- 不读取业务后端密钥。
-
-不做：
-
-- 任意命令执行。
-- 长驻 dev server。
-- 自动安装复杂依赖缓存。
-- 业务后端 CI/CD。
+- 引用、复制代码、重新生成的交互收口。
+- 过程卡片与产物卡片的层次优化。
+- 部署状态卡片、预览卡片、代码卡片的文案与动作统一。
+- 聊天流中保留必要信息，避免信息过载。
 
 验收：
 
-```text
-1. 有 build 脚本时能运行并记录日志
-2. 无 build 脚本时返回 skipped
-3. build 失败时不会吞错误
-4. Reviewer 上下文能看到 build/check 结果
-5. build 失败时 Reviewer 能识别为 PARTIAL 或 FAIL
-6. npm run check 通过
-```
+- 用户在聊天流里能直接完成最主要的产物查看与操作。
+- 执行过程、结果回复、产物动作三者边界清晰。
 
-预估：
+### 6.4 阶段 4：代码工作区体验增强
 
-1 天。
+目标：
 
-## 5. 业务后端后续接入边界
+继续强化代码工作区，而不是新造第二套在线 IDE。
 
-业务后端后续可以接入，但不应该阻塞 Agent 侧优先闭环。
+范围：
 
-### 5.1 业务后端接入方式
+- 文件树与代码查看体验继续收口。
+- Diff 展示和交互增强。
+- 版本历史轻量查看。
+- 代码选中引用的手感优化。
+- 预览与代码联动优化。
 
-可选方式：
+验收：
 
-```text
-1. API schema：告诉 Agent 业务后端有哪些接口
-2. manifest：告诉 AgentHub 有哪些业务能力可用
-3. webhook：业务后端订阅 AgentHub 产物事件
-4. publish adapter：用户确认后，把 Agent 侧产物发布到业务系统
-5. artifact metadata：用 metadata 引用业务资源，不复制业务数据库
-```
+- 用户能顺畅查看当前工作区源码。
+- 代码选中与引用不会打断正常浏览。
+- Diff 和版本查看具备最小可演示价值。
 
-### 5.2 业务后端不进入本阶段
+### 6.5 阶段 5：Agent 行为微调
 
-本阶段不做：
+目标：
 
-```text
-1. 业务生产环境发布
-2. 业务数据库迁移
-3. 业务后端权限系统重构
-4. Agent 直接调用生产写接口
-5. AgentHub 托管业务后端运行时
-6. 把业务后端代码混入 Agent Runtime
-7. 通用 CI/CD 平台
-```
+在不大改现有 agent 架构的前提下，继续优化角色发言优先级和主脑总结时机。
 
-### 5.3 后续业务接入验收
+范围：
 
-等 Agent 侧闭环稳定后，再做业务后端接入。验收标准可以是：
+- 需求类问题优先让 `product-manager` 直答。
+- 实现类问题优先让 `engineer` 直答。
+- 验收类问题优先让 `reviewer` 直答。
+- 多 Agent 真正都参与时，再让主脑做总结。
+- 继续保证引用和 `@` 的连续性体验。
 
-```text
-1. Agent 能读取业务 API schema 摘要
-2. 不暴露业务生产密钥
-3. 写操作必须经过用户确认
-4. 写操作必须经过 allowlist
-5. 发布结果生成 deploy-status artifact
-```
+明确不做：
 
-## 6. Agent 侧数据契约
+- 推倒现有 Orchestrator 体系重来。
+- 大规模改 `workflow.ts / planner.ts / turn-router.ts`。
 
-### 6.1 Artifact
+验收：
 
-Artifact 属于 Agent 侧产物记录。
+- 角色直答比例更符合用户直觉。
+- 主脑不再过度抢答。
+- 真实链路回归结果稳定。
 
-最小字段：
+### 6.6 阶段 6：最终联调、测试与比赛交付
 
-```text
-id
-workspaceId
-agentRunId
-type
-title
-content
-url
-createdByAgentId
-metadata
-createdAt
-```
+目标：
 
-当前本地闭环优先支持：
+把代码能力整理成真正能演示、能答辩、能交付的完整材料。
+
+范围：
+
+- 真实链路测试。
+- 比赛测试题回归。
+- 技术文档与产品文档收口。
+- AI 协作开发记录整理。
+- Demo 脚本与录屏准备。
+
+验收：
+
+- 能按固定问法稳定走完整链路。
+- 能清楚说明架构、边界和当前取舍。
+- 交付材料自洽，不再停留在零散记录。
+
+## 7. 推荐推进顺序
+
+按低耦合和当前依赖关系，建议顺序如下：
 
 ```text
-text
-diff
-web-preview
-zip
+并行开始：
+1. 外部前置依赖 A：Agent 管理接口
+2. 外部前置依赖 B：工作区元数据接口
+3. 我先做阶段 1：构建 / 预览 / 部署状态收口
+
+依赖 A 完成后：
+4. 我做阶段 2：Agent 管理前端
+
+随后：
+5. 我做阶段 3：聊天流产品化
+6. 我做阶段 4：代码工作区体验增强
+7. 我做阶段 5：Agent 行为微调
+8. 我做阶段 6：最终联调、测试与比赛交付
 ```
 
-后续业务接入再扩展：
+如果时间紧，优先级按下面执行：
 
 ```text
-deploy-status
-business-resource
+P0：
+1. 构建 / 预览 / 部署状态收口
+2. Agent 管理前端
+3. 聊天流产品化核心动作
+4. 代码工作区的关键演示路径
+
+P1：
+5. Agent 行为微调
+6. 工作区管理 UI 接入置顶 / 归档 / pin
+
+P2：
+7. 更完整的版本历史
+8. 更丰富的部署展示
+9. 附件类扩展预览
 ```
 
-### 6.2 ChangeSet
+## 8. 当前阶段不纳入
 
-ChangeSet 基于 AgentRun 前后的 repo snapshot 生成。
-
-最小字段：
+当前阶段明确不纳入：
 
 ```text
-id
-workspaceId
-agentRunId
-baseCommit
-files
-summary
-patch
-createdAt
+1. 多个独立聊天窗口
+2. 桌面端客户端
+3. 移动端完整代码树 / Diff / 编辑器
+4. 云端 Runtime
+5. 公网部署
+6. Angular 等更多框架支持
+7. 完整在线 IDE
+8. 大规模重构现有 agent 核心编排架构
 ```
 
-### 6.3 Workflow Event
+对移动端的取舍说明：
 
-产物相关事件属于 Agent 侧闭环。
+- 移动端在比赛要求里本来就是轻量查看、确认、产物预览。
+- 当前阶段不做移动端代码树和完整 Diff 编辑体验。
+- 代码相关完整能力继续集中在 Web 端。
 
-最小新增事件：
+## 9. 开发与交付约束
 
-```text
-artifact_created
-change_set_created
-preview_ready
-zip_ready
-```
+后续所有开发继续纳入以下约束：
 
-后续可扩展：
+- 生成或修改的代码写入简洁英文注释，避免中文乱码。
+- 当前环境可测时，改完就要直接验证，并记录执行命令和结论。
+- 临时测试文件、日志、一次性脚本，测试后及时清理。
+- 阶段性功能完成后，主动做中文 commit 保存。
+- 提交前先检查工作区状态，避免混入无关改动。
+- 方案收口后同步更新根目录 `README.md`，保持现状文档一致。
+- 如需引入成熟库或框架，先确认是否采用。
+- 如果后续出现拿不准的架构决策，先明确列出选项和建议，再决定是否实施。
 
-```text
-build_started
-build_finished
-artifact_failed
-preview_failed
-zip_failed
-deploy_started
-deploy_finished
-```
+当前阶段额外约束：
 
-## 7. 总工作量判断
-
-如果按当前项目现状只补剩余最小闭环，预计：
-
-```text
-最乐观：2 天
-正常：3-4 天
-如果真实 Codex / Claude Code 适配器输出不稳定：4-5 天
-```
-
-推荐节奏：
-
-```text
-第 1 天：Preview 静态资源 + ChangeSet / Artifact 事件
-第 2 天：Zip artifact + 下载接口
-第 3 天：Reviewer 真实产物验收
-第 4 天：联调、文档更新、必要时补 Build / Validate
-```
-
-如果时间紧，优先级如下：
-
-```text
-已完成回归：需求 Agent + 执行闸门
-P0：Preview 静态资源和 iframe 可访问链接
-P0：ChangeSet / Artifact 事件
-P0：Zip 下载和 zip artifact
-P1：Reviewer 真实产物验收
-P2：Build / Validate
-P2：业务后端接入
-```
-
-每个批次完成后都应该提交一次中文 commit，避免 Runtime、事件契约和产物模型混在一个大提交里。
-
-## 8. 风险和取舍
-
-### 8.1 最大风险
-
-- ToolGateway 开放 `npm` 后的安全边界。
-- Windows 下 zip 打包、路径排除和 MIME 处理的一致性。
-- Agent 修改的是 repo 根目录，但 preview 可能优先读取 dist/build，导致用户看不到最新改动。
-- 真实 Codex / Claude Code 可能写出非静态项目，build 失败率不可控。
-- Reviewer 如果没有强约束，容易继续泛泛总结。
-- 后续接业务后端时，如果不守边界，容易把 Agent Runtime 和业务发布系统混在一起。
-
-### 8.2 建议取舍
-
-- 先把 Agent 侧跑通，不等业务后端。
-- Preview 优先保证静态站点，不优先支持 dev server。
-- Zip 优先从 repo 当前文件打包，不等待 build 成功。
-- Diff 先只展示，不做一键应用。
-- Build 失败不阻断 artifact 生成，但 Reviewer 必须指出风险。
-- 业务后端先只保留 API schema / manifest / publish adapter 的接口设想。
-
-## 9. 不纳入本阶段
-
-```text
-1. 云端 Runtime
-2. 公网部署
-3. Vercel / Netlify / 自建部署 provider
-4. 文档 / PPT / 图片复杂预览
-5. 小程序真实编译和微信开发者工具联动
-6. 一键应用 Diff / 回滚 / 冲突解决
-7. 多工程 Agent 并行合并
-8. 完整在线 IDE
-9. 完整版本历史
-10. GitHub OAuth / 导入 / 推送
-11. 业务后端数据库写入
-12. 业务后端鉴权系统
-13. 业务后端部署流水线
-```
-
-## 10. 当前推荐下一步
-
-后续优先做 AgentHub Runtime / 产物闭环，建议顺序：
-
-```text
-0. 回归需求 Agent 和执行闸门，不重新大改
-1. 补 Preview 静态资源 MIME、路径安全和构建目录优先级
-2. 补 ChangeSet / Artifact / Preview / Zip 事件
-3. 补 Zip 下载接口和 zip artifact
-4. 补 Reviewer 真实产物验收上下文
-5. 最后再补 Build / Validate
-```
-
-业务后端暂时只保留边界，不进入近期实现主线。
+- 尽量不主动改现有 agent 核心架构。
+- 后端管理类能力优先走独立接口和元数据层，不把实现耦合进主链路。
+- 前端产品体验继续围绕“一个工作区一个主窗口”推进，不扩成多窗口体系。

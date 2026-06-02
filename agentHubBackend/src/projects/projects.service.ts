@@ -7,7 +7,7 @@ import { AgentHubClientService } from '../agent-hub/agent-hub.service'
 import { AgentHubState, AgentHubWorkspace } from '../agent-hub/agent-hub.types'
 import { isoNow } from '../common/time'
 import { readConfig } from '../config'
-import { PreviewService, previewAssetResponse } from '../preview-service'
+import { PreviewAsset, PreviewService } from '../preview-service'
 import {
   buildWorkbenchOverviewPage,
   previewUrlFor,
@@ -18,6 +18,7 @@ import {
 import { LocalStorageService } from '../storage/local-storage.service'
 import type {
   ConversationType,
+  ProjectDeliverySummaryResponse,
   ProjectStateResponse,
   ProjectWorkspaceDiff,
   StoredProjectRecord,
@@ -179,9 +180,91 @@ export class ProjectsService {
   ): Promise<ProjectStateResponse> {
     const project = await this.getProject(projectId)
     const state = await this.agentHub.fetchState()
-    return selectProjectState(state, this.toStoredProject(project), {
+    return selectProjectState(state, project, {
       messageLimit: query.messageLimit,
     })
+  }
+
+  /**
+   * Summarizes the latest source archive, build artifact, and local deployment status.
+   * Input: project id.
+   * Output: frontend-ready delivery summary for the current project workspace.
+   */
+  async getProjectDeliverySummary(projectId: string): Promise<ProjectDeliverySummaryResponse> {
+    const project = await this.getProject(projectId)
+    const currentVersion = project.currentVersionId
+      ? project.versions.find(version => version.versionId === project.currentVersionId)
+      : undefined
+    const latestDeployment = project.deployments
+      .slice()
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+
+    return {
+      projectId: project.projectId,
+      currentVersion: currentVersion
+        ? {
+            versionId: currentVersion.versionId,
+            createdAt: currentVersion.createdAt,
+            updatedAt: currentVersion.updatedAt,
+          }
+        : undefined,
+      sourceArchive: currentVersion
+        ? {
+            status: 'ready',
+            summary: `源码快照 ${currentVersion.versionId} 已可下载`,
+            versionId: currentVersion.versionId,
+            url: currentVersion.sourceZipUrl,
+            createdAt: currentVersion.createdAt,
+            updatedAt: currentVersion.updatedAt,
+          }
+        : {
+            status: 'idle',
+            summary: '当前还没有保存源码快照',
+          },
+      build: currentVersion?.buildStatus === 'success'
+        ? {
+            status: 'ready',
+            summary: `交付构建 ${currentVersion.versionId} 已完成`,
+            versionId: currentVersion.versionId,
+            url: currentVersion.buildPreviewUrl,
+            createdAt: currentVersion.createdAt,
+            updatedAt: currentVersion.updatedAt,
+            log: currentVersion.buildLog,
+          }
+        : currentVersion?.buildStatus === 'failed'
+          ? {
+              status: 'failed',
+              summary: `交付构建 ${currentVersion.versionId} 失败`,
+              versionId: currentVersion.versionId,
+              createdAt: currentVersion.createdAt,
+              updatedAt: currentVersion.updatedAt,
+              log: currentVersion.buildLog,
+            }
+          : currentVersion
+            ? {
+                status: 'idle',
+                summary: `版本 ${currentVersion.versionId} 还没有生成交付构建`,
+                versionId: currentVersion.versionId,
+                createdAt: currentVersion.createdAt,
+                updatedAt: currentVersion.updatedAt,
+              }
+            : {
+                status: 'idle',
+                summary: '当前还没有可构建的源码版本',
+              },
+      deployment: latestDeployment
+        ? {
+            status: 'ready',
+            summary: `本地部署已更新到 ${latestDeployment.versionId}`,
+            versionId: latestDeployment.versionId,
+            url: latestDeployment.deployUrl,
+            createdAt: latestDeployment.createdAt,
+          }
+        : {
+            status: 'idle',
+            summary: '当前还没有本地部署结果',
+          },
+    }
   }
 
   async updateProject(
@@ -320,10 +403,7 @@ export class ProjectsService {
       requestedPath,
       entry,
     )
-    const payload = previewAssetResponse(previewAsset)
-    response.type(payload.contentType)
-    response.setHeader('Cache-Control', 'no-cache')
-    response.send(payload.body)
+    await this.sendPreviewAsset(response, previewAsset)
   }
 
   /**
@@ -343,10 +423,35 @@ export class ProjectsService {
       sourceHash,
       requestedPath,
     )
-    const payload = previewAssetResponse(previewAsset)
-    response.type(payload.contentType)
+    await this.sendPreviewAsset(response, previewAsset)
+  }
+
+  /**
+   * Sends one preview asset as inline HTML or a local file response.
+   * Input: downstream Express response and one resolved preview asset.
+   * Output: preview body written to the browser.
+   */
+  private async sendPreviewAsset(
+    response: ExpressResponse,
+    asset: PreviewAsset,
+  ): Promise<void> {
+    response.type(asset.contentType)
     response.setHeader('Cache-Control', 'no-cache')
-    response.send(payload.body)
+
+    if (asset.kind === 'html') {
+      response.send(asset.content)
+      return
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      response.sendFile(asset.filePath, error => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve()
+      })
+    })
   }
 
   /**

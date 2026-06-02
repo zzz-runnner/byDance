@@ -10,6 +10,18 @@ class RuntimePreviewQueryDto {
 }
 
 /**
+ * Normalizes one wildcard route param into a slash-delimited relative path.
+ * Input: raw Nest wildcard path param.
+ * Output: browser-facing relative file path or undefined.
+ */
+function normalizePreviewPath(requestedPath: string | string[] | undefined): string | undefined {
+  if (Array.isArray(requestedPath)) {
+    return requestedPath.join('/')
+  }
+  return requestedPath
+}
+
+/**
  * Exposes runtime and built preview routes for the local frontend iframe.
  * Input: project-scoped preview paths and optional module entry query.
  * Output: proxied or locally-built preview assets.
@@ -34,7 +46,7 @@ export class PreviewController {
     @Query() query: RuntimePreviewQueryDto,
     @Res() response: Response,
   ): Promise<void> {
-    await this.projects.sendRuntimePreview(projectId, normalizeWildcardPath(requestedPath), query.entry, response)
+    await this.projects.sendRuntimePreview(projectId, normalizePreviewPath(requestedPath), query.entry, response)
   }
 
   @Get('build-preview/:projectId/:sourceHash')
@@ -53,7 +65,7 @@ export class PreviewController {
     @Param('path') requestedPath: string | string[],
     @Res() response: Response,
   ): Promise<void> {
-    await this.projects.sendBuiltPreview(projectId, sourceHash, normalizeWildcardPath(requestedPath), response)
+    await this.projects.sendBuiltPreview(projectId, sourceHash, normalizePreviewPath(requestedPath), response)
   }
 
   @Get('preview/*path')
@@ -61,10 +73,6 @@ export class PreviewController {
     @Param('path') requestedPath: string | string[],
     @Res() response: Response,
   ): Promise<void> {
-    await this.projects.proxyPreview(`/preview/${normalizeWildcardPath(requestedPath)}`, response)
+    await this.projects.proxyPreview(`/preview/${normalizePreviewPath(requestedPath) ?? ''}`, response)
   }
-}
-
-function normalizeWildcardPath(pathParam: string | string[]): string {
-  return Array.isArray(pathParam) ? pathParam.join('/') : pathParam
 }

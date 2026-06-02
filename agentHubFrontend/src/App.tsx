@@ -19,7 +19,6 @@ import {
   messagesForConversation,
 } from './appModel'
 import backgroundImage from './asset/background/newBG.png'
-import { BackgroundCanvas } from './components/BackgroundCanvas'
 import { ChatPane } from './components/ChatPane'
 import { AgentManagementDialog } from './components/AgentManagementDialog'
 import { CodeWorkspaceDialog } from './components/CodeWorkspaceDialog'
@@ -36,6 +35,7 @@ import type {
   Message,
   ProjectStatePage,
   ReplyReference,
+  StreamingAssistantDraft,
   SortDirection,
   WorkbenchOverview,
   WorkspaceListStatus,
@@ -52,6 +52,15 @@ const INITIAL_MESSAGE_PAGE_LIMIT = 40
 const MESSAGE_PAGE_STEP = 40
 
 /**
+ * Detects whether one temporary draft has already been persisted in the backend state.
+ * Input: current persisted messages and one draft message id.
+ * Output: true when the persisted message list already contains the same id.
+ */
+function hasCommittedMessage(messages: Message[], messageId: string): boolean {
+  return messages.some(message => message.id === messageId)
+}
+
+/**
  * Creates a temporary UI message for optimistic chat rendering.
  * Input: workspace id, conversation id, sender metadata, and content.
  * Output: a Message object that only lives in the web client.
@@ -63,11 +72,13 @@ function createTemporaryMessage(
   senderId: string,
   content: string,
   replyTo?: Message['replyTo'],
+  turnId?: string,
 ): Message {
   return {
     id: `tmp-${senderId}-${Date.now()}`,
     workspaceId,
     conversationId,
+    turnId,
     senderType,
     senderId,
     content,
@@ -210,7 +221,7 @@ export function App() {
   })
   const [liveWorkflowEvents, setLiveWorkflowEvents] = useState<LiveWorkflowEvent[]>([])
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([])
-  const [streamingMessages, setStreamingMessages] = useState<Record<string, Message>>({})
+  const [streamingMessages, setStreamingMessages] = useState<Record<string, StreamingAssistantDraft>>({})
   const [pendingReplyTo, setPendingReplyTo] = useState<ReplyReference>()
   const [pendingCodeSelection, setPendingCodeSelection] = useState<CodeSelectionReference>()
   const [sending, setSending] = useState(false)
@@ -253,13 +264,14 @@ export function App() {
   const activeRoom = rooms.find(room => room.id === activeWorkspaceId) ?? rooms[0]
   const activeProjectId = activeRoom?.workspace.projectId ?? activeRoom?.workspace.id
   const activeConversationId = activeRoom?.conversation.id ?? ''
+  const committedConversationMessages = messagesForConversation(state, activeConversationId)
   const currentMessages = [
-    ...messagesForConversation(state, activeConversationId),
+    ...committedConversationMessages,
     ...optimisticMessages.filter(message => message.conversationId === activeConversationId),
   ]
-  const currentStreamingMessages = Object.values(streamingMessages).filter(
-    message => message.conversationId === activeConversationId,
-  )
+  const currentStreamingMessages = Object.values(streamingMessages)
+    .filter(draft => !hasCommittedMessage(committedConversationMessages, draft.message.id))
+    .filter(draft => draft.message.conversationId === activeConversationId)
   const showBlockingState = rooms.length === 0 && (loadingState || connectionStatus === 'error')
   const canCreateWorkspace = connectionStatus === 'live' && !loadingState && !creatingWorkspace
   const composerDisabledReason =
@@ -511,6 +523,51 @@ export function App() {
   }, [activeConversationId])
 
   useEffect(() => {
+    setStreamingMessages(previous => {
+      const nextEntries = Object.entries(previous).filter(([, draft]) =>
+        !hasCommittedMessage(committedConversationMessages, draft.message.id),
+      )
+
+      if (nextEntries.length === Object.keys(previous).length) {
+        return previous
+      }
+
+      return Object.fromEntries(nextEntries)
+    })
+  }, [committedConversationMessages])
+
+  useEffect(() => {
+    const committedTurnIds = new Set(
+      committedConversationMessages
+        .filter(message => message.senderType === 'agent' && typeof message.turnId === 'string')
+        .map(message => message.turnId as string),
+    )
+
+    if (committedTurnIds.size === 0) {
+      return
+    }
+
+    setLiveWorkflowEvents(previous => {
+      const nextEvents = previous.filter(event => {
+        if (event.conversationId !== activeConversationId) {
+          return true
+        }
+
+        if (!event.turnId || !committedTurnIds.has(event.turnId)) {
+          return true
+        }
+
+        return event.type !== 'assistant_message_started' &&
+          event.type !== 'assistant_delta' &&
+          event.type !== 'assistant_message_finished' &&
+          event.type !== 'workflow_finished'
+      })
+
+      return nextEvents.length === previous.length ? previous : nextEvents
+    })
+  }, [activeConversationId, committedConversationMessages])
+
+  useEffect(() => {
     if (!workbenchReadyRef.current) {
       return
     }
@@ -607,76 +664,77 @@ export function App() {
     const receivedAt = new Date().toISOString()
     setLiveWorkflowEvents(previous => [...previous, { ...event, receivedAt }])
 
-    if (event.type === 'workflow_received') {
-      setStreamingMessages(previous => ({
-        ...previous,
-        [`routing-${event.conversationId}`]: createTemporaryMessage(
-          event.workspaceId,
-          event.conversationId,
-          'agent',
-          'orchestrator',
-          '主脑正在判断由谁回复...',
-        ),
-      }))
-    }
-
-    if (event.type === 'routing_finished') {
-      const speakerId = event.speakerAgentId ?? (event.targetAgents.length === 1 ? event.targetAgents[0] : 'orchestrator')
-      setStreamingMessages(previous => ({
-        ...previous,
-        [`routing-${event.conversationId}`]: createTemporaryMessage(
-          event.workspaceId,
-          event.conversationId,
-          'agent',
-          speakerId,
-          speakerId === 'orchestrator' ? '主脑正在整理回复...' : '正在整理回复...',
-        ),
-      }))
+    if (
+      event.type === 'workflow_received' ||
+      event.type === 'routing_finished' ||
+      event.type === 'workflow_finished'
+    ) {
+      return
     }
 
     if (event.type === 'assistant_message_started') {
-      setStreamingMessages(previous => {
-        const next = { ...previous }
-        delete next[`routing-${event.conversationId}`]
-        next[event.messageId] = createTemporaryMessage(
-          event.workspaceId,
-          event.conversationId,
-          'agent',
-          event.senderId,
-          '',
-        )
-        return next
-      })
+      setStreamingMessages(previous => ({
+        ...previous,
+        [event.messageId]: {
+          message: createTemporaryMessage(
+            event.workspaceId,
+            event.conversationId,
+            'agent',
+            event.senderId,
+            '',
+            undefined,
+            event.turnId,
+          ),
+          phase: 'streaming',
+        },
+      }))
+      return
     }
 
     if (event.type === 'assistant_delta') {
       setStreamingMessages(previous => {
         const current =
           previous[event.messageId] ??
-          createTemporaryMessage(event.workspaceId, event.conversationId, 'agent', 'orchestrator', '')
+          {
+            message: createTemporaryMessage(
+              event.workspaceId,
+              event.conversationId,
+              'agent',
+              'orchestrator',
+              '',
+              undefined,
+              event.turnId,
+            ),
+            phase: 'streaming' as const,
+          }
 
         return {
           ...previous,
           [event.messageId]: {
             ...current,
-            content: `${current.content}${event.delta}`,
+            message: {
+              ...current.message,
+              content: `${current.message.content}${event.delta}`,
+            },
+            phase: 'streaming',
           },
         }
       })
+      return
     }
 
     if (event.type === 'assistant_message_finished' || event.type === 'assistant_message_error') {
       setStreamingMessages(previous => {
-        const next = { ...previous }
-        delete next[event.messageId]
-        return next
-      })
-    }
+        const current = previous[event.messageId]
+        if (!current) {
+          return previous
+        }
 
-    if (event.type === 'workflow_finished') {
-      setStreamingMessages(previous => {
         const next = { ...previous }
-        delete next[`routing-${event.conversationId}`]
+        next[event.messageId] = {
+          ...current,
+          phase: 'awaiting_commit',
+        }
         return next
       })
     }
@@ -714,9 +772,7 @@ export function App() {
       )
 
       await reloadWorkbench(activeWorkspace.id, 'refresh')
-      setLiveWorkflowEvents([])
       setOptimisticMessages([])
-      setStreamingMessages({})
     } catch (error) {
       const message = errorMessageOf(error)
       setConnectionStatus('error')
@@ -931,7 +987,6 @@ export function App() {
 
   return (
     <main className="app-shell" style={{ backgroundImage: `url(${backgroundImage})` }}>
-      <BackgroundCanvas />
       <div className="app-overlay" />
       <div className="app-content">
         <header className="topbar">
@@ -1091,6 +1146,7 @@ export function App() {
         workspaceName={activeRoom?.workspace.name}
         onClose={() => setCodeDialogOpen(false)}
         onQuoteSelection={handleQuoteCodeSelection}
+        onProjectDeliveryUpdated={() => reloadWorkbench(activeWorkspaceId, 'refresh')}
       />
     </main>
   )

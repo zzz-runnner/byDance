@@ -676,6 +676,7 @@ async function persistRunResult(
       const agentMessage = createMessage({
         workspaceId: workspace.id,
         conversationId: conversation.id,
+        turnId: services.turnId,
         senderType: 'agent',
         senderId: agent.id,
         content: result.content,
@@ -1593,6 +1594,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
   const userMessage = createMessage({
     workspaceId: input.workspaceId,
     conversationId: input.conversationId,
+    turnId,
     senderType: 'user',
     senderId: 'user',
     content: input.content,

@@ -166,6 +166,30 @@ export interface ProjectPreviewCapabilityResponse {
   build?: ProjectPreviewBuildState
 }
 
+export interface ProjectDeliveryVersionSummary {
+  versionId: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ProjectDeliveryAssetSummary {
+  status: 'idle' | 'ready' | 'failed'
+  summary: string
+  versionId?: string
+  url?: string
+  createdAt?: string
+  updatedAt?: string
+  log?: string
+}
+
+export interface ProjectDeliverySummaryResponse {
+  projectId: string
+  currentVersion?: ProjectDeliveryVersionSummary
+  sourceArchive: ProjectDeliveryAssetSummary
+  build: ProjectDeliveryAssetSummary
+  deployment: ProjectDeliveryAssetSummary
+}
+
 export interface RuntimeWorkspace extends Record<string, unknown> {
   id: string
   name: string

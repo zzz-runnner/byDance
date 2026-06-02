@@ -87,6 +87,7 @@ export type Message = {
   id: string
   workspaceId: string
   conversationId: string
+  turnId?: string
   senderType: SenderType
   senderId: string
   content: string

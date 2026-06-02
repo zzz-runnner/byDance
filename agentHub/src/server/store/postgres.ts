@@ -118,6 +118,7 @@ function toMessage(row: Record<string, unknown>): Message {
     id: String(row.id),
     workspaceId: String(row.workspace_id),
     conversationId: String(row.conversation_id),
+    turnId: row.turn_id === null || row.turn_id === undefined ? undefined : String(row.turn_id),
     senderType: row.sender_type as Message['senderType'],
     senderId: String(row.sender_id),
     content: String(row.content),
@@ -456,6 +457,7 @@ async function createSchema(pool: Pool): Promise<void> {
       id text primary key,
       workspace_id text not null,
       conversation_id text not null,
+      turn_id text,
       sender_type text not null,
       sender_id text not null,
       content text not null,
@@ -612,6 +614,10 @@ async function createSchema(pool: Pool): Promise<void> {
     alter table ${TABLES.messages}
     add column if not exists reply_to jsonb;
   `)
+  await pool.query(`
+    alter table ${TABLES.messages}
+    add column if not exists turn_id text;
+  `)
 
   await pool.query(`alter table ${TABLES.agentRuns} add column if not exists session_id text`)
   await pool.query(`alter table ${TABLES.agentRuns} add column if not exists handoff_id text`)
@@ -739,13 +745,14 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     await client.query(
         `
           insert into ${TABLES.messages} (
-            id, workspace_id, conversation_id, sender_type, sender_id, content, reply_to, artifacts, created_at
-          ) values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9)
+            id, workspace_id, conversation_id, turn_id, sender_type, sender_id, content, reply_to, artifacts, created_at
+          ) values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10)
         `,
         [
           message.id,
           message.workspaceId,
           message.conversationId,
+          message.turnId ?? null,
           message.senderType,
           message.senderId,
           message.content,

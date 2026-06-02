@@ -4,12 +4,13 @@ import type {
   ChangedFile,
   LiveWorkflowEvent,
   Message,
+  StreamingAssistantDraft,
   WorkflowEvent,
 } from './types'
 
 export type ChatProcessTone = 'neutral' | 'running' | 'success' | 'warning' | 'danger'
-export type ChatTurnStatus = 'running' | 'completed' | 'partial' | 'failed'
-export type ChatTurnArtifactKind = 'preview' | 'diff' | 'review' | 'zip' | 'text' | 'artifact'
+export type ChatTurnStatus = 'running' | 'awaiting_commit' | 'completed' | 'partial' | 'failed'
+export type ChatTurnArtifactKind = 'preview' | 'diff' | 'review' | 'zip' | 'deploy' | 'text' | 'artifact'
 export type ChatProcessKind =
   | 'route'
   | 'stage'
@@ -62,6 +63,7 @@ export type ChatTurn = {
   userMessage: Message
   finalMessage?: Message
   streamingMessage?: Message
+  settlingMessage?: Message
   processEntries: ChatTurnProcessEntry[]
   artifacts: ChatTurnArtifact[]
   startedAt: string
@@ -90,7 +92,7 @@ type BuildChatTimelineInput = {
   workspaceId: string
   conversationId: string
   messages: Message[]
-  streamingMessages: Message[]
+  streamingMessages: StreamingAssistantDraft[]
   workflowEvents: LiveWorkflowEvent[]
 }
 
@@ -100,6 +102,7 @@ type MutableTurn = {
   userMessage: Message
   finalMessage?: Message
   streamingMessage?: Message
+  settlingMessage?: Message
   processEntries: ChatTurnProcessEntry[]
   artifacts: ChatTurnArtifact[]
   startedAt: string
@@ -142,33 +145,79 @@ export function buildChatTimeline(input: BuildChatTimelineInput): ChatTimelineIt
     .slice()
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
   const roomStreamingMessages = input.streamingMessages
-    .filter(message => message.conversationId === input.conversationId)
+    .filter(draft => draft.message.conversationId === input.conversationId)
     .slice()
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-  const userMessages = roomMessages.filter(message => message.senderType === 'user')
+    .sort((left, right) => left.message.createdAt.localeCompare(right.message.createdAt))
   const turnStartedEvents = roomEvents.filter(
     (event): event is Extract<LiveWorkflowEvent, { type: 'turn_started' }> => event.type === 'turn_started',
   )
-  const turnOrder: MutableTurn[] = userMessages.map((message, index) => {
-    const startEvent = turnStartedEvents[index]
-    return {
-      id: startEvent?.turnId ?? `turn-local-${index}`,
-      turnId: startEvent?.turnId,
-      userMessage: message,
+  const turnOrder: MutableTurn[] = []
+  const turnById = new Map<string, MutableTurn>()
+  const userMessageTurnIds = new Map<string, string>()
+  const assistantMessageTurnIds = new Map<string, string>()
+  const unassignedUserMessages = roomMessages
+    .filter(message => message.senderType === 'user')
+    .slice()
+
+  for (const event of turnStartedEvents) {
+    if (!event.turnId) {
+      continue
+    }
+
+    const matchingUserMessage = roomMessages.find(message =>
+      message.senderType === 'user' &&
+      message.turnId === event.turnId,
+    ) ?? findLatestUnassignedUserMessage(unassignedUserMessages, userMessageTurnIds, event.receivedAt)
+
+    if (!matchingUserMessage) {
+      continue
+    }
+
+    const turn: MutableTurn = {
+      id: event.turnId,
+      turnId: event.turnId,
+      userMessage: matchingUserMessage,
       finalMessage: undefined,
       streamingMessage: undefined,
+      settlingMessage: undefined,
       processEntries: [],
       artifacts: [],
-      startedAt: startEvent?.receivedAt ?? message.createdAt,
-      updatedAt: message.createdAt,
+      startedAt: event.receivedAt,
+      updatedAt: matchingUserMessage.createdAt,
       status: 'running',
       speakerAgentId: undefined,
       taskStage: undefined,
     }
-  })
-  const turnById = new Map(turnOrder.map(turn => [turn.id, turn]))
-  const userMessageTurnIds = new Map(turnOrder.map(turn => [turn.userMessage.id, turn.id]))
-  const assistantMessageTurnIds = new Map<string, string>()
+    turnOrder.push(turn)
+    turnById.set(turn.id, turn)
+    userMessageTurnIds.set(matchingUserMessage.id, turn.id)
+  }
+
+  const unboundUserMessages = roomMessages.filter(message =>
+    message.senderType === 'user' && !userMessageTurnIds.has(message.id),
+  )
+
+  for (const [index, message] of unboundUserMessages.entries()) {
+    const fallbackTurnId = message.turnId ?? `turn-local-${index}-${message.id}`
+    const turn: MutableTurn = {
+      id: fallbackTurnId,
+      turnId: message.turnId,
+      userMessage: message,
+      finalMessage: undefined,
+      streamingMessage: undefined,
+      settlingMessage: undefined,
+      processEntries: [],
+      artifacts: [],
+      startedAt: message.createdAt,
+      updatedAt: message.createdAt,
+      status: 'completed',
+      speakerAgentId: undefined,
+      taskStage: undefined,
+    }
+    turnOrder.push(turn)
+    turnById.set(turn.id, turn)
+    userMessageTurnIds.set(message.id, turn.id)
+  }
 
   for (const event of roomEvents) {
     if (event.type === 'assistant_message_started' && event.turnId) {
@@ -195,7 +244,7 @@ export function buildChatTimeline(input: BuildChatTimelineInput): ChatTimelineIt
       continue
     }
 
-    const directTurnId = assistantMessageTurnIds.get(message.id)
+    const directTurnId = message.turnId ?? assistantMessageTurnIds.get(message.id)
     const fallbackTurn = findLatestTurnBefore(turnOrder, message.createdAt)
     const targetTurn = (directTurnId ? turnById.get(directTurnId) : undefined) ?? fallbackTurn
 
@@ -298,8 +347,9 @@ export function buildChatTimeline(input: BuildChatTimelineInput): ChatTimelineIt
     }
   }
 
-  for (const streamingMessage of roomStreamingMessages) {
-    const directTurnId = assistantMessageTurnIds.get(streamingMessage.id)
+  for (const draft of roomStreamingMessages) {
+    const streamingMessage = draft.message
+    const directTurnId = streamingMessage.turnId ?? assistantMessageTurnIds.get(streamingMessage.id)
     const targetTurn =
       (directTurnId ? turnById.get(directTurnId) : undefined) ??
       turnOrder[turnOrder.length - 1]
@@ -308,9 +358,15 @@ export function buildChatTimeline(input: BuildChatTimelineInput): ChatTimelineIt
       continue
     }
 
-    targetTurn.streamingMessage = streamingMessage
+    if (draft.phase === 'streaming') {
+      targetTurn.streamingMessage = streamingMessage
+      targetTurn.settlingMessage = undefined
+    } else {
+      targetTurn.settlingMessage = streamingMessage
+      targetTurn.streamingMessage = undefined
+    }
     targetTurn.updatedAt = laterTimestamp(targetTurn.updatedAt, streamingMessage.createdAt)
-    targetTurn.status = 'running'
+    targetTurn.status = draft.phase === 'streaming' ? 'running' : targetTurn.status
   }
 
   for (const turn of turnOrder) {
@@ -336,8 +392,14 @@ export function buildChatTimeline(input: BuildChatTimelineInput): ChatTimelineIt
 
     if (turn.streamingMessage) {
       turn.status = 'running'
+    } else if (turn.settlingMessage && !turn.finalMessage) {
+      if (turn.status !== 'failed' && turn.status !== 'partial') {
+        turn.status = 'awaiting_commit'
+      }
+    } else if (turn.finalMessage && turn.status === 'running') {
+      turn.status = 'completed'
     } else if (!turn.finalMessage && turn.status === 'running') {
-      turn.status = 'running'
+      turn.status = turn.processEntries.length > 0 ? 'running' : 'completed'
     }
 
     sortArtifacts(turn.artifacts)
@@ -396,6 +458,23 @@ function findLatestTurnBefore(turns: MutableTurn[], timestamp: string): MutableT
 }
 
 /**
+ * Returns the latest unassigned visible user message before one event timestamp.
+ * Input: visible user messages, the assigned-message set, and one event timestamp.
+ * Output: closest earlier unbound user message or undefined.
+ */
+function findLatestUnassignedUserMessage(
+  messages: Message[],
+  assignedTurnIds: Map<string, string>,
+  timestamp: string,
+): Message | undefined {
+  const eligible = messages.filter(message =>
+    !assignedTurnIds.has(message.id) &&
+    message.createdAt <= timestamp,
+  )
+  return eligible[eligible.length - 1]
+}
+
+/**
  * Resolves one event to its owning turn.
  * Input: ordered turns, turn lookup, and one workflow event. Output: target turn or undefined.
  */
@@ -423,6 +502,8 @@ function artifactToChatArtifact(artifact: Artifact): ChatTurnArtifact {
     ? 'preview'
     : artifact.type === 'zip'
       ? 'zip'
+      : artifact.type === 'deploy-status'
+        ? 'deploy'
       : artifact.type === 'text'
         ? 'text'
         : 'artifact'
@@ -475,8 +556,9 @@ function sortArtifacts(artifacts: ChatTurnArtifact[]): void {
     diff: 1,
     review: 2,
     zip: 3,
-    text: 4,
-    artifact: 5,
+    deploy: 4,
+    text: 5,
+    artifact: 6,
   }
 
   artifacts.sort((left, right) => {
@@ -1361,6 +1443,7 @@ function turnToReadonly(turn: MutableTurn): ChatTurn {
     userMessage: turn.userMessage,
     finalMessage: turn.finalMessage,
     streamingMessage: turn.streamingMessage,
+    settlingMessage: turn.settlingMessage,
     processEntries: turn.processEntries.slice().sort((left, right) => left.time.localeCompare(right.time)),
     artifacts: turn.artifacts.slice(),
     startedAt: turn.startedAt,

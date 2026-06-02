@@ -183,6 +183,54 @@ export type WorkspacePreviewCapability = {
   build?: WorkspacePreviewBuildState
 }
 
+export type DeliveryAssetStatus = 'idle' | 'ready' | 'failed'
+
+export type WorkspaceDeliveryVersion = {
+  versionId: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type WorkspaceDeliveryAsset = {
+  status: DeliveryAssetStatus
+  summary: string
+  versionId?: string
+  url?: string
+  createdAt?: string
+  updatedAt?: string
+  log?: string
+}
+
+export type WorkspaceDeliverySummary = {
+  projectId: string
+  currentVersion?: WorkspaceDeliveryVersion
+  sourceArchive: WorkspaceDeliveryAsset
+  build: WorkspaceDeliveryAsset
+  deployment: WorkspaceDeliveryAsset
+}
+
+export type WorkspaceVersionRecord = {
+  versionId: string
+  tag: string
+  commitSha: string
+  sourceZipPath: string
+  sourceZipUrl: string
+  buildPath?: string
+  buildPreviewUrl?: string
+  buildStatus?: 'pending' | 'success' | 'failed'
+  buildLog?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type WorkspaceDeploymentRecord = {
+  deploymentId: string
+  versionId: string
+  deployPath: string
+  deployUrl: string
+  createdAt: string
+}
+
 export type StreamMessageInput = {
   projectId?: string
   workspaceId: string
@@ -195,4 +243,11 @@ export type StreamMessageInput = {
 
 export type LiveWorkflowEvent = WorkflowEvent & {
   receivedAt: string
+}
+
+export type StreamingMessagePhase = 'streaming' | 'awaiting_commit'
+
+export type StreamingAssistantDraft = {
+  message: Message
+  phase: StreamingMessagePhase
 }

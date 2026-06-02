@@ -13,6 +13,9 @@ logs/
 agentHub/.agent-bridge*
 agentHub/.agenthub-live*
 agentHubFrontend/.agent-vite.*
+_agenthub_*.log
+_agenthub_*.out
+_agenthub_*.err
 
 # Environment files
 .env
