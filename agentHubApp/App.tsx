@@ -474,6 +474,8 @@ function WorkspaceScreen({ layoutTier }: { layoutTier: LayoutTier }) {
 
 function ChatScreen({ workspace, layoutTier, onOpenWorkspacePanel }: { workspace: Workspace; layoutTier: LayoutTier; onOpenWorkspacePanel: () => void }) {
   const isCompact = layoutTier === 'compact'
+  const isStandard = layoutTier === 'standard'
+  const isWide = layoutTier === 'wide'
   const insets = useSafeAreaInsets()
   const keyboardOffset = Platform.OS === 'ios' ? 8 : 0
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactView | null>(null)
@@ -494,9 +496,15 @@ function ChatScreen({ workspace, layoutTier, onOpenWorkspacePanel }: { workspace
         style={styles.chatScroll}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={[styles.chatScrollInner, { paddingBottom: 18 + insets.bottom }]}
+        contentContainerStyle={[
+          styles.chatScrollInner,
+          isCompact && styles.chatScrollInnerCompact,
+          isStandard && styles.chatScrollInnerStandard,
+          isWide && styles.chatScrollInnerWide,
+          { paddingBottom: 18 + insets.bottom },
+        ]}
       >
-        <GlassCard style={styles.chatWorkspaceCard}>
+        <GlassCard style={[styles.chatWorkspaceCard, isCompact && styles.chatWorkspaceCardCompact, isStandard && styles.chatWorkspaceCardStandard]}>
           <View style={styles.chatWorkspaceTop}>
             <View style={styles.chatWorkspaceCopy}>
               <Text style={styles.homeWorkspaceEyebrow}>{workspace.kind === 'group' ? 'GROUP WORKSPACE' : 'DIRECT WORKSPACE'}</Text>
@@ -2156,12 +2164,35 @@ const styles = StyleSheet.create({
   },
   chatScrollInner: {
     gap: 14,
-    paddingTop: Platform.select({ ios: 10, android: 6, default: 8 }),
     paddingHorizontal: 20,
+    paddingTop: Platform.select({ ios: 16, android: 8, default: 12 }),
     paddingBottom: 8,
   },
+  chatScrollInnerCompact: {
+    paddingHorizontal: 16,
+    paddingTop: Platform.select({ ios: 18, android: 8, default: 12 }),
+  },
+  chatScrollInnerStandard: {
+    paddingHorizontal: 20,
+    paddingTop: Platform.select({ ios: 28, android: 10, default: 16 }),
+  },
+  chatScrollInnerWide: {
+    paddingHorizontal: 24,
+    paddingTop: Platform.select({ ios: 18, android: 10, default: 14 }),
+  },
   chatWorkspaceCard: {
+    paddingTop: 18,
+    paddingHorizontal: 18,
+    paddingBottom: 16,
     gap: 10,
+  },
+  chatWorkspaceCardCompact: {
+    paddingTop: 16,
+    paddingHorizontal: 16,
+  },
+  chatWorkspaceCardStandard: {
+    paddingTop: 22,
+    paddingHorizontal: 20,
   },
   chatWorkspaceTop: {
     flexDirection: 'row',
