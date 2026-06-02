@@ -101,6 +101,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('workbench')
   const [navExpanded, setNavExpanded] = useState(false)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(workspaces[0]?.id ?? '')
+  const [activityOpen, setActivityOpen] = useState(false)
   const { width } = useWindowDimensions()
   const layoutTier: LayoutTier = width < 380 ? 'compact' : width < 430 ? 'standard' : 'wide'
   const tightChatHeader = activeTab === 'chat' && layoutTier !== 'wide'
@@ -159,10 +160,10 @@ export default function App() {
                   <MaterialCommunityIcons name="plus" size={28} color="#0f172a" />
                 </GlassCard>
                 <GlassCard compact style={styles.headerIconButton}>
-                  <View style={styles.bellWrap}>
+                  <Pressable style={styles.bellWrap} onPress={() => setActivityOpen(true)}>
                     <MaterialCommunityIcons name="bell-outline" size={24} color="#0f172a" />
                     <View style={styles.bellDot} />
-                  </View>
+                  </Pressable>
                 </GlassCard>
               </View>
             ) : activeTab === 'agents' ? (
@@ -208,6 +209,7 @@ export default function App() {
           )}
 
           <SideTabs activeTab={activeTab} onChange={setActiveTab} expanded={navExpanded} onToggle={() => setNavExpanded(value => !value)} />
+          <ActivityCenterModal visible={activityOpen} onClose={() => setActivityOpen(false)} />
         </SafeAreaView>
       </ImageBackground>
     </SafeAreaProvider>
@@ -340,23 +342,6 @@ function WorkbenchScreen({
           <Text style={styles.bodyText}>换一个关键词或筛选条件试试。</Text>
         </GlassCard>
       ) : null}
-
-      <GlassCard style={styles.activityCard}>
-        <View style={styles.sectionHead}>
-          <Text style={styles.sectionTitle}>最近活动</Text>
-          <Pill label="跨工作区" tone="muted" icon="bell-outline" />
-        </View>
-        {workspaces.slice(0, 3).map(item => (
-          <View key={item.id} style={styles.activityRow}>
-            <View style={styles.activityDot} />
-            <View style={styles.activityCopy}>
-              <Text style={styles.cardTitle}>{item.name}</Text>
-              <Text style={styles.bodyText} numberOfLines={1}>{item.latestEventLabel}</Text>
-            </View>
-            <Text style={styles.activityTime}>{item.updatedAt}</Text>
-          </View>
-        ))}
-      </GlassCard>
 
       <Pressable style={styles.loadMoreButton}>
         <Text style={styles.loadMoreText}>查看归档与更多工作区</Text>
@@ -589,6 +574,67 @@ function CurrentArtifactCard({ artifact, onPress }: { artifact: Artifact; onPres
       <Text style={styles.currentArtifactTitle}>{artifact.title}</Text>
       <Text style={[styles.currentArtifactMeta, tone === 'green' && styles.currentArtifactMetaGreen, tone === 'muted' && styles.currentArtifactMetaMuted]}>{artifact.metric}</Text>
     </Pressable>
+  )
+}
+
+function ActivityCenterModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const activityItems = [
+    { workspace: workspaces[0], label: '工程师正在调整 RN 首页布局', type: '运行中', icon: 'robot-outline' as IconName },
+    { workspace: workspaces[1], label: '预览摘要已更新', type: '预览 ready', icon: 'cellphone-screenshot' as IconName },
+    { workspace: workspaces[2], label: '无阻塞问题', type: 'Review pass', icon: 'shield-check-outline' as IconName },
+  ]
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={styles.modalScrim} onPress={onClose} />
+        <GlassCard style={styles.activityCenterSheet}>
+          <View style={styles.artifactDetailHandle} />
+          <View style={styles.activityCenterHead}>
+            <View>
+              <Text style={styles.homeWorkspaceEyebrow}>ACTIVITY CENTER</Text>
+              <Text style={styles.artifactDetailTitle}>通知与最近活动</Text>
+            </View>
+            <Pressable style={styles.artifactCloseButton} onPress={onClose}>
+              <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
+            </Pressable>
+          </View>
+
+          <View style={styles.activitySummaryRow}>
+            <View style={styles.activitySummaryPill}>
+              <MaterialCommunityIcons name="at" size={17} color="#2563eb" />
+              <Text style={styles.activitySummaryText}>2 提及</Text>
+            </View>
+            <View style={styles.activitySummaryPill}>
+              <MaterialCommunityIcons name="bell-ring-outline" size={17} color="#db2777" />
+              <Text style={styles.activitySummaryText}>3 未读</Text>
+            </View>
+            <View style={styles.activitySummaryPill}>
+              <MaterialCommunityIcons name="checkbox-marked-circle-outline" size={17} color="#059669" />
+              <Text style={styles.activitySummaryText}>1 完成</Text>
+            </View>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.activityCenterList}>
+            {activityItems.map(item => (
+              <View key={item.workspace.id} style={styles.activityCenterRow}>
+                <View style={styles.activityCenterIcon}>
+                  <MaterialCommunityIcons name={item.icon} size={21} color="#2563eb" />
+                </View>
+                <View style={styles.activityCopy}>
+                  <View style={styles.activityCenterTitleLine}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>{item.workspace.name}</Text>
+                    <Text style={styles.activityTypeText}>{item.type}</Text>
+                  </View>
+                  <Text style={styles.bodyText} numberOfLines={1}>{item.label}</Text>
+                </View>
+                <Text style={styles.activityTime}>{item.workspace.updatedAt}</Text>
+              </View>
+            ))}
+          </ScrollView>
+        </GlassCard>
+      </View>
+    </Modal>
   )
 }
 
@@ -2300,6 +2346,72 @@ const styles = StyleSheet.create({
     flex: 1,
     color: '#0f172a',
     fontSize: 13,
+    fontWeight: '900',
+  },
+  activityCenterSheet: {
+    maxHeight: '72%',
+    marginHorizontal: 12,
+    marginBottom: Platform.select({ ios: 18, android: 12, default: 16 }),
+    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.select({ ios: 24, android: 18, default: 22 }),
+    borderRadius: 28,
+    gap: 14,
+  },
+  activityCenterHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  activitySummaryRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  activitySummaryPill: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.46)',
+  },
+  activitySummaryText: {
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  activityCenterList: {
+    gap: 10,
+    paddingBottom: 4,
+  },
+  activityCenterRow: {
+    minHeight: 72,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.38)',
+  },
+  activityCenterIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(219,234,254,0.72)',
+  },
+  activityCenterTitleLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  activityTypeText: {
+    color: '#2563eb',
+    fontSize: 12,
     fontWeight: '900',
   },
   agentDetailSheet: {
