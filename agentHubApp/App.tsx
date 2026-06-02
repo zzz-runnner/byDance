@@ -218,6 +218,12 @@ export default function App() {
 
 type WorkspaceFilter = 'active' | 'updated' | 'pinned' | 'archived'
 type AgentFilter = 'all' | 'running' | 'reviewing' | 'idle' | 'builtin'
+type ArtifactStatus = 'generating' | 'partial' | 'ready' | 'failed'
+
+type ArtifactView = Artifact & {
+  status: ArtifactStatus
+  statusLabel: string
+}
 
 function WorkbenchScreen({
   runningAgents,
@@ -443,7 +449,13 @@ function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTie
   const isCompact = layoutTier === 'compact'
   const insets = useSafeAreaInsets()
   const keyboardOffset = Platform.OS === 'ios' ? 8 : 0
-  const [selectedArtifact, setSelectedArtifact] = useState<Artifact | null>(null)
+  const [selectedArtifact, setSelectedArtifact] = useState<ArtifactView | null>(null)
+  const artifactViews: ArtifactView[] = artifacts.map(item => {
+    if (item.type === 'preview') return { ...item, status: 'generating', statusLabel: '生成中' }
+    if (item.type === 'diff') return { ...item, status: 'partial', statusLabel: '部分完成' }
+    if (item.type === 'review') return { ...item, status: 'generating', statusLabel: '等待审查' }
+    return { ...item, status: 'ready', statusLabel: '可查看' }
+  })
 
   return (
     <KeyboardAvoidingView
@@ -542,8 +554,14 @@ function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTie
         <GlassCard style={styles.currentArtifactsPanel}>
           <Text style={styles.currentArtifactsTitle}>当前产出（工程师）</Text>
           <View style={[styles.currentArtifactGrid, isCompact && styles.currentArtifactGridCompact]}>
-            {artifacts.map(item => (
-              <CurrentArtifactCard key={item.id} artifact={item} onPress={() => setSelectedArtifact(item)} />
+            {artifactViews.map(item => (
+              <CurrentArtifactCard
+                key={item.id}
+                artifact={item}
+                onPress={() => {
+                  if (item.status === 'ready' || item.status === 'partial') setSelectedArtifact(item)
+                }}
+              />
             ))}
           </View>
         </GlassCard>
@@ -566,13 +584,17 @@ function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTie
   )
 }
 
-function CurrentArtifactCard({ artifact, onPress }: { artifact: Artifact; onPress: () => void }) {
-  const tone = artifact.type === 'review' ? 'green' : artifact.type === 'text' ? 'muted' : 'blue'
+function CurrentArtifactCard({ artifact, onPress }: { artifact: ArtifactView; onPress: () => void }) {
+  const tone = artifact.status === 'ready' ? 'green' : artifact.status === 'partial' ? 'blue' : artifact.status === 'failed' ? 'muted' : 'muted'
+  const disabled = artifact.status === 'generating' || artifact.status === 'failed'
   return (
-    <Pressable style={styles.currentArtifactCard} onPress={onPress}>
+    <Pressable style={[styles.currentArtifactCard, disabled && styles.currentArtifactCardDisabled]} onPress={onPress} disabled={disabled}>
       <MaterialCommunityIcons name={artifact.icon} size={30} color={tone === 'green' ? '#10b981' : tone === 'muted' ? '#334155' : '#5572ff'} />
       <Text style={styles.currentArtifactTitle}>{artifact.title}</Text>
       <Text style={[styles.currentArtifactMeta, tone === 'green' && styles.currentArtifactMetaGreen, tone === 'muted' && styles.currentArtifactMetaMuted]}>{artifact.metric}</Text>
+      <View style={[styles.artifactStatusBadge, artifact.status === 'ready' && styles.artifactStatusReady, artifact.status === 'partial' && styles.artifactStatusPartial]}>
+        <Text style={[styles.artifactStatusText, artifact.status === 'ready' && styles.artifactStatusReadyText, artifact.status === 'partial' && styles.artifactStatusPartialText]}>{artifact.statusLabel}</Text>
+      </View>
     </Pressable>
   )
 }
@@ -638,7 +660,7 @@ function ActivityCenterModal({ visible, onClose }: { visible: boolean; onClose: 
   )
 }
 
-function ArtifactDetailModal({ artifact, onClose }: { artifact: Artifact | null; onClose: () => void }) {
+function ArtifactDetailModal({ artifact, onClose }: { artifact: ArtifactView | null; onClose: () => void }) {
   if (!artifact) return null
 
   const statusRows = [
@@ -669,7 +691,12 @@ function ArtifactDetailModal({ artifact, onClose }: { artifact: Artifact | null;
           </View>
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.artifactDetailContent}>
             <View style={styles.artifactHeroBlock}>
-              <Text style={styles.artifactHeroMetric}>{artifact.metric}</Text>
+              <View style={styles.artifactHeroStatusLine}>
+                <Text style={styles.artifactHeroMetric}>{artifact.metric}</Text>
+                <View style={[styles.artifactStatusBadge, artifact.status === 'ready' && styles.artifactStatusReady, artifact.status === 'partial' && styles.artifactStatusPartial]}>
+                  <Text style={[styles.artifactStatusText, artifact.status === 'ready' && styles.artifactStatusReadyText, artifact.status === 'partial' && styles.artifactStatusPartialText]}>{artifact.statusLabel}</Text>
+                </View>
+              </View>
               <Text style={styles.artifactHeroSummary}>{artifact.summary}</Text>
             </View>
 
@@ -2201,6 +2228,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     backgroundColor: 'rgba(255,255,255,0.28)',
   },
+  currentArtifactCardDisabled: {
+    opacity: 0.62,
+  },
   currentArtifactTitle: {
     color: '#172033',
     textAlign: 'center',
@@ -2218,6 +2248,31 @@ const styles = StyleSheet.create({
   },
   currentArtifactMetaMuted: {
     color: '#64748b',
+  },
+  artifactStatusBadge: {
+    minHeight: 24,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: 'rgba(226,232,240,0.72)',
+  },
+  artifactStatusReady: {
+    backgroundColor: 'rgba(209,250,229,0.82)',
+  },
+  artifactStatusPartial: {
+    backgroundColor: 'rgba(219,234,254,0.84)',
+  },
+  artifactStatusText: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  artifactStatusReadyText: {
+    color: '#059669',
+  },
+  artifactStatusPartialText: {
+    color: '#2563eb',
   },
   modalBackdrop: {
     flex: 1,
@@ -2296,6 +2351,12 @@ const styles = StyleSheet.create({
     color: '#2563eb',
     fontSize: 22,
     fontWeight: '900',
+  },
+  artifactHeroStatusLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
   },
   artifactHeroSummary: {
     color: '#334155',
