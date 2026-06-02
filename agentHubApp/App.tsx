@@ -4,6 +4,7 @@ import {
   Easing,
   ImageBackground,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -17,6 +18,7 @@ import { StatusBar } from 'expo-status-bar'
 import { LinearGradient } from 'expo-linear-gradient'
 import { MaterialCommunityIcons } from '@expo/vector-icons'
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import Fuse from 'fuse.js'
 import { AgentGlyph } from './src/components/AgentGlyph'
 import { GlassCard } from './src/components/GlassCard'
 import { Pill } from './src/components/Pill'
@@ -36,15 +38,13 @@ import {
 const background = require('./assets/background/mainBackground.png')
 const homeIcon = require('./assets/home/icon.png')
 
-type TabKey = 'home' | 'workspaces' | 'ai' | 'code' | 'agents'
+type TabKey = 'workbench' | 'chat' | 'agents'
 type LayoutTier = 'compact' | 'standard' | 'wide'
 
 const tabs: { key: TabKey; label: string; icon: IconName }[] = [
-  { key: 'home', label: '首页', icon: 'home-variant-outline' },
-  { key: 'workspaces', label: '工作区', icon: 'view-dashboard-outline' },
-  { key: 'ai', label: 'AI', icon: 'creation-outline' },
-  { key: 'code', label: '代码', icon: 'code-braces' },
-  { key: 'agents', label: '我的/Agent', icon: 'account' },
+  { key: 'workbench', label: '工作台', icon: 'view-dashboard-outline' },
+  { key: 'chat', label: '对话', icon: 'message-processing-outline' },
+  { key: 'agents', label: 'Agent', icon: 'account' },
 ]
 
 function AnimatedHomeIcon({ size }: { size: number }) {
@@ -98,18 +98,20 @@ function AnimatedHomeIcon({ size }: { size: number }) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabKey>('home')
+  const [activeTab, setActiveTab] = useState<TabKey>('workbench')
   const [navExpanded, setNavExpanded] = useState(false)
+  const [workspaceList, setWorkspaceList] = useState<Workspace[]>(workspaces)
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(workspaces[0]?.id ?? '')
+  const [activityOpen, setActivityOpen] = useState(false)
+  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false)
   const { width } = useWindowDimensions()
   const layoutTier: LayoutTier = width < 380 ? 'compact' : width < 430 ? 'standard' : 'wide'
-  const tightChatHeader = activeTab === 'ai' && layoutTier !== 'wide'
-  const activeWorkspace = workspaces[0]
+  const tightChatHeader = activeTab === 'chat' && layoutTier !== 'wide'
+  const activeWorkspace = workspaceList.find(workspace => workspace.id === activeWorkspaceId) ?? workspaceList[0]
   const runningAgents = agents.filter(agent => agent.status !== 'idle').length
   const title = useMemo(() => {
-    if (activeTab === 'home') return '多 Agent 协作工作台'
-    if (activeTab === 'workspaces') return '多工作区'
-    if (activeTab === 'ai') return 'AI 协作'
-    if (activeTab === 'code') return '代码与交付'
+    if (activeTab === 'workbench') return '工作台'
+    if (activeTab === 'chat') return '对话'
     return '我的 Agent'
   }, [activeTab])
 
@@ -119,27 +121,26 @@ export default function App() {
         <LinearGradient colors={['rgba(255,255,255,0.22)', 'rgba(255,255,255,0.08)', 'rgba(241,245,249,0.26)']} style={styles.overlay} />
         <SafeAreaView style={styles.safe}>
           <StatusBar style="dark" />
-          <View style={[styles.header, activeTab === 'agents' && styles.agentHeader, (activeTab === 'code' || activeTab === 'ai') && styles.codeHeader]}>
-            {activeTab === 'code' || activeTab === 'ai' ? (
+          <View style={[styles.header, activeTab === 'agents' && styles.agentHeader, activeTab === 'chat' && styles.codeHeader]}>
+            {activeTab === 'chat' ? (
               <GlassCard compact style={styles.codeHeaderButton}>
                 <MaterialCommunityIcons name="chevron-left" size={28} color="#0f172a" />
               </GlassCard>
             ) : null}
-            <View style={[styles.headerLeft, (activeTab === 'code' || activeTab === 'ai') && styles.codeHeaderLeft, tightChatHeader && styles.chatHeaderLeftTight]}>
-              {tightChatHeader ? null : <AgentGlyph agentId="orchestrator" size={activeTab === 'agents' || activeTab === 'code' || activeTab === 'ai' ? 46 : 54} />}
+            <View style={[styles.headerLeft, activeTab === 'chat' && styles.codeHeaderLeft, tightChatHeader && styles.chatHeaderLeftTight]}>
+              {tightChatHeader ? null : <AgentGlyph agentId="orchestrator" size={activeTab === 'agents' || activeTab === 'chat' ? 46 : 54} />}
               <View style={styles.headerCopy}>
-                {activeTab === 'ai' ? null : <Text style={styles.eyebrow}>AGENTHUB</Text>}
-                <Text style={[styles.headerTitle, activeTab === 'ai' && styles.chatHeaderTitle]} numberOfLines={1}>
-                  {activeTab === 'ai' ? activeWorkspace.name : title}
+                {activeTab === 'chat' ? null : <Text style={styles.eyebrow}>AGENTHUB</Text>}
+                <Text style={[styles.headerTitle, activeTab === 'chat' && styles.chatHeaderTitle]} numberOfLines={1}>
+                  {activeTab === 'chat' ? activeWorkspace.name : title}
                 </Text>
-                {activeTab === 'code' ? <Text style={styles.codeSubtitle}>校园 AI 助手 App / repo</Text> : null}
-                {activeTab === 'ai' ? (
+                {activeTab === 'chat' ? (
                   <View style={styles.chatSubtitleRow}>
                     <View style={styles.chatLiveDot} />
                     <Text style={styles.codeSubtitle} numberOfLines={1}>群聊 · 3 个 Agent 协作中</Text>
                   </View>
                 ) : null}
-                {activeTab === 'ai' && tightChatHeader ? (
+                {activeTab === 'chat' && tightChatHeader ? (
                   <View style={styles.chatStreamingRow}>
                     <GlassCard compact style={styles.streamingPill}>
                       <MaterialCommunityIcons name="chart-timeline-variant-shimmer" size={17} color="#10b981" />
@@ -149,28 +150,26 @@ export default function App() {
                 ) : null}
               </View>
             </View>
-            {activeTab === 'ai' ? (
+            {activeTab === 'chat' ? (
               <View style={styles.chatHeaderActions}>
                 <GlassCard compact style={styles.codeHeaderButton}>
                   <MaterialCommunityIcons name="refresh" size={25} color="#0f172a" />
                 </GlassCard>
               </View>
-            ) : activeTab === 'workspaces' ? (
+            ) : activeTab === 'workbench' ? (
               <View style={styles.workspaceHeaderActions}>
                 <GlassCard compact style={styles.headerIconButton}>
-                  <MaterialCommunityIcons name="plus" size={28} color="#0f172a" />
+                  <Pressable style={styles.headerButtonPressable} onPress={() => setWorkspacePanelOpen(true)}>
+                    <MaterialCommunityIcons name="plus" size={28} color="#0f172a" />
+                  </Pressable>
                 </GlassCard>
                 <GlassCard compact style={styles.headerIconButton}>
-                  <View style={styles.bellWrap}>
+                  <Pressable style={styles.bellWrap} onPress={() => setActivityOpen(true)}>
                     <MaterialCommunityIcons name="bell-outline" size={24} color="#0f172a" />
                     <View style={styles.bellDot} />
-                  </View>
+                  </Pressable>
                 </GlassCard>
               </View>
-            ) : activeTab === 'code' ? (
-              <GlassCard compact style={styles.codeHeaderButton}>
-                <MaterialCommunityIcons name="refresh" size={25} color="#0f172a" />
-              </GlassCard>
             ) : activeTab === 'agents' ? (
               <View style={styles.headerActions}>
                 <GlassCard compact style={[styles.agentCreateButton, layoutTier === 'compact' && styles.agentCreateButtonCompact]}>
@@ -191,28 +190,204 @@ export default function App() {
             )}
           </View>
 
-          {activeTab === 'ai' ? (
+          {activeTab === 'chat' ? (
             <View style={styles.contentFill}>
-              <ChatScreen workspace={activeWorkspace} layoutTier={layoutTier} />
+              <ChatScreen workspace={activeWorkspace} layoutTier={layoutTier} onOpenWorkspacePanel={() => setWorkspacePanelOpen(true)} />
             </View>
           ) : (
             <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} showsVerticalScrollIndicator={false}>
-              {activeTab === 'home' ? <HomeScreen runningAgents={runningAgents} workspace={activeWorkspace} layoutTier={layoutTier} /> : null}
-              {activeTab === 'workspaces' ? <WorkspaceScreen layoutTier={layoutTier} /> : null}
-              {activeTab === 'code' ? <CodeScreen layoutTier={layoutTier} /> : null}
+              {activeTab === 'workbench' ? (
+                <WorkbenchScreen
+                  workspaceList={workspaceList}
+                  runningAgents={runningAgents}
+                  workspace={activeWorkspace}
+                  layoutTier={layoutTier}
+                  onOpenWorkspace={nextWorkspace => {
+                    setActiveWorkspaceId(nextWorkspace.id)
+                    setActiveTab('chat')
+                    setNavExpanded(false)
+                  }}
+                />
+              ) : null}
               {activeTab === 'agents' ? <AgentScreen layoutTier={layoutTier} /> : null}
             </ScrollView>
           )}
 
           <SideTabs activeTab={activeTab} onChange={setActiveTab} expanded={navExpanded} onToggle={() => setNavExpanded(value => !value)} />
+          <WorkspacePanelModal
+            visible={workspacePanelOpen}
+            workspaceList={workspaceList}
+            activeWorkspaceId={activeWorkspace.id}
+            layoutTier={layoutTier}
+            onClose={() => setWorkspacePanelOpen(false)}
+            onSwitch={nextWorkspace => {
+              setActiveWorkspaceId(nextWorkspace.id)
+              setWorkspacePanelOpen(false)
+              setActiveTab('chat')
+              setNavExpanded(false)
+            }}
+            onCreate={nextWorkspace => {
+              setWorkspaceList(current => [nextWorkspace, ...current])
+              setActiveWorkspaceId(nextWorkspace.id)
+              setWorkspacePanelOpen(false)
+              setActiveTab('chat')
+              setNavExpanded(false)
+            }}
+          />
+          <ActivityCenterModal visible={activityOpen} onClose={() => setActivityOpen(false)} />
         </SafeAreaView>
       </ImageBackground>
     </SafeAreaProvider>
   )
 }
 
-function HomeScreen({ runningAgents, workspace, layoutTier }: { runningAgents: number; workspace: Workspace; layoutTier: LayoutTier }) {
+type WorkspaceFilter = 'active' | 'updated' | 'pinned' | 'archived'
+type AgentFilter = 'all' | 'running' | 'reviewing' | 'idle' | 'builtin'
+type ArtifactStatus = 'generating' | 'partial' | 'ready' | 'failed'
+
+type ArtifactView = Artifact & {
+  status: ArtifactStatus
+  statusLabel: string
+}
+
+function WorkbenchScreen({
+  workspaceList,
+  runningAgents,
+  workspace,
+  layoutTier,
+  onOpenWorkspace,
+}: {
+  workspaceList: Workspace[]
+  runningAgents: number
+  workspace: Workspace
+  layoutTier: LayoutTier
+  onOpenWorkspace: (workspace: Workspace) => void
+}) {
   const isCompact = layoutTier === 'compact'
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<WorkspaceFilter>('active')
+  const workspaceSearch = useMemo(
+    () => new Fuse(workspaceList, { keys: ['name', 'goal', 'latestEventLabel', 'type'], threshold: 0.36 }),
+    [workspaceList],
+  )
+  const searchedWorkspaces = query.trim() ? workspaceSearch.search(query.trim()).map(result => result.item) : workspaceList
+  const filteredWorkspaces = searchedWorkspaces.filter(item => {
+    if (filter === 'archived') return item.archived
+    if (filter === 'pinned') return item.pinned && !item.archived
+    return !item.archived
+  })
+  const sortedWorkspaces = [...filteredWorkspaces].sort((a, b) => {
+    if (filter === 'pinned') return Number(b.pinned) - Number(a.pinned)
+    if (filter === 'updated') return b.updatedAt.localeCompare(a.updatedAt)
+    return Number(b.status === 'running') - Number(a.status === 'running')
+  })
+  const pinnedWorkspaces = sortedWorkspaces.filter(item => item.pinned)
+  const recentWorkspaces = sortedWorkspaces.filter(item => !item.pinned)
+
+  return (
+    <View style={[styles.workbenchScreen, isCompact && styles.workspaceScreenCompact]}>
+      <Pressable onPress={() => onOpenWorkspace(workspace)}>
+        <GlassCard style={styles.homeWorkspaceCard}>
+        <View style={styles.homeWorkspaceHead}>
+          <View style={styles.workbenchActiveCopy}>
+            <Text style={styles.homeWorkspaceEyebrow}>ACTIVE WORKSPACE</Text>
+            <Text style={styles.homeWorkspaceTitle}>{workspace.name}</Text>
+          </View>
+          <View style={styles.workbenchIconWrap}>
+            <AnimatedHomeIcon size={isCompact ? 58 : 68} />
+          </View>
+        </View>
+        <Text style={styles.homeWorkspaceDesc} numberOfLines={2}>{workspace.goal}</Text>
+        <View style={styles.homeWorkspaceMetaRow}>
+          <View style={styles.homeStatusPill}>
+            <MaterialCommunityIcons name="waveform" size={16} color="#2563eb" />
+            <Text style={styles.homeStatusText}>running</Text>
+          </View>
+          <View style={styles.homeMetaChip}>
+            <Text style={styles.homeMetaTextBlue}>{workspace.kind === 'group' ? '群聊工作区' : '单聊工作区'}</Text>
+          </View>
+          <View style={styles.homeMetaChip}>
+            <Text style={styles.homeMetaTextGreen}>{workspace.artifactCount} 产物</Text>
+          </View>
+          <View style={styles.homeMetaChip}>
+            <Text style={styles.homeMetaTextGray}>{workspace.messageCount} 消息</Text>
+          </View>
+        </View>
+        <View style={styles.homeStatGrid}>
+          <StatCard label="工作区" value={String(workspaceList.length)} icon="view-grid-outline" tone="#2563eb" />
+          <StatCard label="运行中" value={String(runningAgents)} icon="lightning-bolt-outline" tone="#db2777" />
+          <StatCard label="产物" value={String(artifacts.length)} icon="package-variant-closed" tone="#059669" />
+        </View>
+        <View style={styles.homeAvatarRow}>
+          {workspace.agents.slice(0, 4).map((agentId, index) => (
+            <View key={agentId} style={{ marginLeft: index === 0 ? 0 : -10 }}>
+              <AgentGlyph agentId={agentId} size={36} />
+            </View>
+          ))}
+          <Text style={styles.homeAvatarText}>{workspace.latestEventLabel}</Text>
+        </View>
+          <View style={styles.activeWorkspaceEnterRow}>
+            <Text style={styles.activeWorkspaceEnterText}>进入对应对话</Text>
+            <MaterialCommunityIcons name="chevron-right" size={20} color="#2563eb" />
+          </View>
+        </GlassCard>
+      </Pressable>
+
+      <GlassCard style={styles.searchCard}>
+        <MaterialCommunityIcons name="magnify" size={24} color="#64748b" />
+        <TextInput
+          placeholder="搜索工作区"
+          placeholderTextColor="#94a3b8"
+          value={query}
+          onChangeText={setQuery}
+          style={styles.searchInput}
+        />
+      </GlassCard>
+      <View style={styles.workspaceFilterLine}>
+        <Pressable onPress={() => setFilter('active')}>
+          <Pill label="Active" tone={filter === 'active' ? 'blue' : 'muted'} icon="check-circle-outline" />
+        </Pressable>
+        <Pressable onPress={() => setFilter('updated')}>
+          <Pill label="Updated" tone={filter === 'updated' ? 'blue' : 'muted'} icon="sort-clock-descending-outline" />
+        </Pressable>
+        <Pressable onPress={() => setFilter('pinned')}>
+          <Pill label="Pinned first" tone={filter === 'pinned' ? 'amber' : 'muted'} icon="pin-outline" />
+        </Pressable>
+        <Pressable onPress={() => setFilter('archived')}>
+          <Pill label="归档" tone={filter === 'archived' ? 'blue' : 'muted'} icon="archive-outline" />
+        </Pressable>
+      </View>
+
+      <View style={styles.workbenchSectionHead}>
+        <Text style={styles.homeSectionTitle}>置顶工作区</Text>
+        <Text style={styles.workbenchSectionMeta}>{pinnedWorkspaces.length} 个</Text>
+      </View>
+      {pinnedWorkspaces.map(item => (
+        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} onPress={() => onOpenWorkspace(item)} />
+      ))}
+
+      <View style={styles.workbenchSectionHead}>
+        <Text style={styles.homeSectionTitle}>最近更新</Text>
+        <Text style={styles.workbenchSectionMeta}>按活跃度排序</Text>
+      </View>
+      {recentWorkspaces.slice(0, 3).map(item => (
+        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} onPress={() => onOpenWorkspace(item)} />
+      ))}
+
+      {sortedWorkspaces.length === 0 ? (
+        <GlassCard style={styles.emptyStateCard}>
+          <MaterialCommunityIcons name="database-search-outline" size={28} color="#64748b" />
+          <Text style={styles.cardTitle}>没有匹配的工作区</Text>
+          <Text style={styles.bodyText}>换一个关键词或筛选条件试试。</Text>
+        </GlassCard>
+      ) : null}
+
+      <Pressable style={styles.loadMoreButton}>
+        <Text style={styles.loadMoreText}>查看归档与更多工作区</Text>
+        <MaterialCommunityIcons name="chevron-down" size={18} color="#64748b" />
+      </Pressable>
+    </View>
+  )
 
   return (
     <View style={[styles.homeScreen, isCompact && styles.homeScreenCompact]}>
@@ -303,10 +478,19 @@ function WorkspaceScreen({ layoutTier }: { layoutTier: LayoutTier }) {
   )
 }
 
-function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTier: LayoutTier }) {
+function ChatScreen({ workspace, layoutTier, onOpenWorkspacePanel }: { workspace: Workspace; layoutTier: LayoutTier; onOpenWorkspacePanel: () => void }) {
   const isCompact = layoutTier === 'compact'
+  const isStandard = layoutTier === 'standard'
+  const isWide = layoutTier === 'wide'
   const insets = useSafeAreaInsets()
   const keyboardOffset = Platform.OS === 'ios' ? 8 : 0
+  const [selectedArtifact, setSelectedArtifact] = useState<ArtifactView | null>(null)
+  const artifactViews: ArtifactView[] = artifacts.map(item => {
+    if (item.type === 'preview') return { ...item, status: 'generating', statusLabel: '生成中' }
+    if (item.type === 'diff') return { ...item, status: 'partial', statusLabel: '部分完成' }
+    if (item.type === 'review') return { ...item, status: 'generating', statusLabel: '等待审查' }
+    return { ...item, status: 'ready', statusLabel: '可查看' }
+  })
 
   return (
     <KeyboardAvoidingView
@@ -318,8 +502,37 @@ function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTie
         style={styles.chatScroll}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={[styles.chatScrollInner, { paddingBottom: 18 + insets.bottom }]}
+        contentContainerStyle={[
+          styles.chatScrollInner,
+          isCompact && styles.chatScrollInnerCompact,
+          isStandard && styles.chatScrollInnerStandard,
+          isWide && styles.chatScrollInnerWide,
+          { paddingBottom: 18 + insets.bottom },
+        ]}
       >
+        <GlassCard style={[styles.chatWorkspaceCard, isCompact && styles.chatWorkspaceCardCompact, isStandard && styles.chatWorkspaceCardStandard]}>
+          <View style={styles.chatWorkspaceTop}>
+            <View style={styles.chatWorkspaceCopy}>
+              <Text style={styles.homeWorkspaceEyebrow}>{workspace.kind === 'group' ? 'GROUP WORKSPACE' : 'DIRECT WORKSPACE'}</Text>
+              <Text style={styles.chatWorkspaceTitle}>{workspace.name}</Text>
+            </View>
+            <Pill label="当前活跃" tone="blue" icon="waveform" />
+          </View>
+          <Text style={styles.homeWorkspaceDesc} numberOfLines={2}>{workspace.goal}</Text>
+          <Pressable style={styles.chatWorkspaceSwitchInline} onPress={onOpenWorkspacePanel}>
+            <MaterialCommunityIcons name="swap-horizontal" size={18} color="#2563eb" />
+            <Text style={styles.chatWorkspaceSwitchText}>打开工作区切换面板</Text>
+          </Pressable>
+          <View style={styles.chatAgentOverview}>
+            {workspace.agents.slice(0, isCompact ? 3 : 4).map((agentId, index) => (
+              <View key={agentId} style={{ marginLeft: index === 0 ? 0 : -8 }}>
+                <AgentGlyph agentId={agentId} size={34} />
+              </View>
+            ))}
+            <Text style={styles.chatAgentOverviewText}>{workspace.runningAgents} 个 Agent 执行中 · {workspace.artifactCount} 个产物</Text>
+          </View>
+        </GlassCard>
+
         <View style={styles.userMessageRow}>
           <GlassCard style={styles.userPromptBubble}>
             <Text style={styles.userPromptText}>
@@ -386,10 +599,15 @@ function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTie
         <GlassCard style={styles.currentArtifactsPanel}>
           <Text style={styles.currentArtifactsTitle}>当前产出（工程师）</Text>
           <View style={[styles.currentArtifactGrid, isCompact && styles.currentArtifactGridCompact]}>
-            <CurrentArtifactCard icon="cellphone-screenshot" title="移动首页预览" meta="1 张" />
-            <CurrentArtifactCard icon="code-tags" title="代码变更" meta="+428 / -0" tone="blue" />
-            <CurrentArtifactCard icon="shield-check-outline" title="审查结论" meta="pass" tone="green" />
-            <CurrentArtifactCard icon="cube-outline" title="源码快照" meta="v0.1.0" tone="muted" />
+            {artifactViews.map(item => (
+              <CurrentArtifactCard
+                key={item.id}
+                artifact={item}
+                onPress={() => {
+                  if (item.status === 'ready' || item.status === 'partial') setSelectedArtifact(item)
+                }}
+              />
+            ))}
           </View>
         </GlassCard>
       </ScrollView>
@@ -406,17 +624,331 @@ function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTie
           <MaterialCommunityIcons name="arrow-up" size={25} color="#fff" />
         </Pressable>
       </GlassCard>
+      <ArtifactDetailModal artifact={selectedArtifact} onClose={() => setSelectedArtifact(null)} />
     </KeyboardAvoidingView>
   )
 }
 
-function CurrentArtifactCard({ icon, title, meta, tone = 'blue' }: { icon: IconName; title: string; meta: string; tone?: 'blue' | 'green' | 'muted' }) {
+function CurrentArtifactCard({ artifact, onPress }: { artifact: ArtifactView; onPress: () => void }) {
+  const tone = artifact.status === 'ready' ? 'green' : artifact.status === 'partial' ? 'blue' : artifact.status === 'failed' ? 'muted' : 'muted'
+  const disabled = artifact.status === 'generating' || artifact.status === 'failed'
   return (
-    <View style={styles.currentArtifactCard}>
-      <MaterialCommunityIcons name={icon} size={30} color={tone === 'green' ? '#10b981' : tone === 'muted' ? '#334155' : '#5572ff'} />
-      <Text style={styles.currentArtifactTitle}>{title}</Text>
-      <Text style={[styles.currentArtifactMeta, tone === 'green' && styles.currentArtifactMetaGreen, tone === 'muted' && styles.currentArtifactMetaMuted]}>{meta}</Text>
-    </View>
+    <Pressable style={[styles.currentArtifactCard, disabled && styles.currentArtifactCardDisabled]} onPress={onPress} disabled={disabled}>
+      <MaterialCommunityIcons name={artifact.icon} size={30} color={tone === 'green' ? '#10b981' : tone === 'muted' ? '#334155' : '#5572ff'} />
+      <Text style={styles.currentArtifactTitle}>{artifact.title}</Text>
+      <Text style={[styles.currentArtifactMeta, tone === 'green' && styles.currentArtifactMetaGreen, tone === 'muted' && styles.currentArtifactMetaMuted]}>{artifact.metric}</Text>
+      <View style={[styles.artifactStatusBadge, artifact.status === 'ready' && styles.artifactStatusReady, artifact.status === 'partial' && styles.artifactStatusPartial]}>
+        <Text style={[styles.artifactStatusText, artifact.status === 'ready' && styles.artifactStatusReadyText, artifact.status === 'partial' && styles.artifactStatusPartialText]}>{artifact.statusLabel}</Text>
+      </View>
+    </Pressable>
+  )
+}
+
+function ActivityCenterModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const activityItems = [
+    { workspace: workspaces[0], label: '工程师正在调整 RN 首页布局', type: '运行中', icon: 'robot-outline' as IconName },
+    { workspace: workspaces[1], label: '预览摘要已更新', type: '预览 ready', icon: 'cellphone-screenshot' as IconName },
+    { workspace: workspaces[2], label: '无阻塞问题', type: 'Review pass', icon: 'shield-check-outline' as IconName },
+  ]
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={styles.modalScrim} onPress={onClose} />
+        <GlassCard style={styles.activityCenterSheet}>
+          <View style={styles.artifactDetailHandle} />
+          <View style={styles.activityCenterHead}>
+            <View>
+              <Text style={styles.homeWorkspaceEyebrow}>ACTIVITY CENTER</Text>
+              <Text style={styles.artifactDetailTitle}>通知与最近活动</Text>
+            </View>
+            <Pressable style={styles.artifactCloseButton} onPress={onClose}>
+              <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
+            </Pressable>
+          </View>
+
+          <View style={styles.activitySummaryRow}>
+            <View style={styles.activitySummaryPill}>
+              <MaterialCommunityIcons name="at" size={17} color="#2563eb" />
+              <Text style={styles.activitySummaryText}>2 提及</Text>
+            </View>
+            <View style={styles.activitySummaryPill}>
+              <MaterialCommunityIcons name="bell-ring-outline" size={17} color="#db2777" />
+              <Text style={styles.activitySummaryText}>3 未读</Text>
+            </View>
+            <View style={styles.activitySummaryPill}>
+              <MaterialCommunityIcons name="checkbox-marked-circle-outline" size={17} color="#059669" />
+              <Text style={styles.activitySummaryText}>1 完成</Text>
+            </View>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.activityCenterList}>
+            {activityItems.map(item => (
+              <View key={item.workspace.id} style={styles.activityCenterRow}>
+                <View style={styles.activityCenterIcon}>
+                  <MaterialCommunityIcons name={item.icon} size={21} color="#2563eb" />
+                </View>
+                <View style={styles.activityCopy}>
+                  <View style={styles.activityCenterTitleLine}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>{item.workspace.name}</Text>
+                    <Text style={styles.activityTypeText}>{item.type}</Text>
+                  </View>
+                  <Text style={styles.bodyText} numberOfLines={1}>{item.label}</Text>
+                </View>
+                <Text style={styles.activityTime}>{item.workspace.updatedAt}</Text>
+              </View>
+            ))}
+          </ScrollView>
+        </GlassCard>
+      </View>
+    </Modal>
+  )
+}
+
+function WorkspacePanelModal({
+  visible,
+  workspaceList,
+  activeWorkspaceId,
+  layoutTier,
+  onClose,
+  onSwitch,
+  onCreate,
+}: {
+  visible: boolean
+  workspaceList: Workspace[]
+  activeWorkspaceId: string
+  layoutTier: LayoutTier
+  onClose: () => void
+  onSwitch: (workspace: Workspace) => void
+  onCreate: (workspace: Workspace) => void
+}) {
+  const [draftName, setDraftName] = useState('')
+  const [draftKind, setDraftKind] = useState<Workspace['kind']>('group')
+  const [draftType, setDraftType] = useState<Workspace['type']>('dev')
+  const [selectedAgents, setSelectedAgents] = useState<string[]>(['orchestrator', 'engineer'])
+  const isCompact = layoutTier === 'compact'
+  const visibleWorkspaces = workspaceList.filter(workspace => !workspace.archived).slice(0, 5)
+  const typeOptions: { value: Workspace['type']; label: string; icon: IconName }[] = [
+    { value: 'dev', label: '开发', icon: 'code-braces' },
+    { value: 'research', label: '研究', icon: 'book-search-outline' },
+    { value: 'writing', label: '写作', icon: 'text-box-edit-outline' },
+    { value: 'chat', label: '聊天', icon: 'message-outline' },
+  ]
+
+  const toggleAgent = (agentId: string) => {
+    setSelectedAgents(current => {
+      if (draftKind === 'direct') return [agentId]
+      if (current.includes(agentId)) return current.length === 1 ? current : current.filter(id => id !== agentId)
+      return [...current, agentId]
+    })
+  }
+
+  const createWorkspace = () => {
+    const fallbackName = draftKind === 'group' ? '新的群聊工作区' : '新的单聊工作区'
+    const nextWorkspace: Workspace = {
+      id: `ws-mock-${Date.now()}`,
+      name: draftName.trim() || fallbackName,
+      goal: draftKind === 'group' ? '多 Agent 协作处理一个新任务' : '与单个 Agent 快速沟通并沉淀产物',
+      kind: draftKind,
+      type: draftType,
+      status: 'ready',
+      pinned: false,
+      archived: false,
+      agents: draftKind === 'direct' ? selectedAgents.slice(0, 1) : selectedAgents,
+      runningAgents: 0,
+      artifactCount: 0,
+      messageCount: 0,
+      latestEventLabel: '刚刚创建，等待发送第一条任务',
+      updatedAt: '刚刚',
+    }
+
+    setDraftName('')
+    onCreate(nextWorkspace)
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={styles.modalScrim} onPress={onClose} />
+        <GlassCard style={[styles.workspacePanelSheet, isCompact && styles.workspacePanelSheetCompact]}>
+          <View style={styles.artifactDetailHandle} />
+          <View style={styles.activityCenterHead}>
+            <View style={styles.workspacePanelTitleCopy}>
+              <Text style={styles.homeWorkspaceEyebrow}>WORKSPACE PANEL</Text>
+              <Text style={styles.artifactDetailTitle}>工作区切换与创建</Text>
+            </View>
+            <Pressable style={styles.artifactCloseButton} onPress={onClose}>
+              <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
+            </Pressable>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.workspacePanelContent}>
+            <View style={styles.workspacePanelSection}>
+              <View style={styles.workspacePanelSectionHead}>
+                <Text style={styles.workspacePanelSectionTitle}>快速切换</Text>
+                <Text style={styles.workbenchSectionMeta}>{workspaceList.length} 个</Text>
+              </View>
+              {visibleWorkspaces.map(workspace => {
+                const isActive = workspace.id === activeWorkspaceId
+                return (
+                  <Pressable key={workspace.id} style={[styles.workspaceSwitchRow, isActive && styles.workspaceSwitchRowActive]} onPress={() => onSwitch(workspace)}>
+                    <View style={styles.workspaceSwitchIcon}>
+                      <MaterialCommunityIcons name={workspace.kind === 'group' ? 'account-group-outline' : 'account-outline'} size={20} color="#2563eb" />
+                    </View>
+                    <View style={styles.workspaceSwitchCopy}>
+                      <Text style={styles.cardTitle} numberOfLines={1}>{workspace.name}</Text>
+                      <Text style={styles.bodyText} numberOfLines={1}>{workspace.latestEventLabel}</Text>
+                    </View>
+                    <Text style={styles.workspaceSwitchMeta}>{isActive ? '当前' : workspace.updatedAt}</Text>
+                  </Pressable>
+                )
+              })}
+            </View>
+
+            <View style={styles.workspacePanelSection}>
+              <Text style={styles.workspacePanelSectionTitle}>创建工作区</Text>
+              <TextInput
+                value={draftName}
+                onChangeText={setDraftName}
+                placeholder="输入工作区名称"
+                placeholderTextColor="#94a3b8"
+                style={styles.workspaceNameInput}
+              />
+
+              <View style={styles.workspaceOptionRow}>
+                {(['group', 'direct'] as Workspace['kind'][]).map(kind => (
+                  <Pressable
+                    key={kind}
+                    style={[styles.workspaceKindCard, draftKind === kind && styles.workspaceKindCardActive]}
+                    onPress={() => {
+                      setDraftKind(kind)
+                      if (kind === 'direct') setSelectedAgents(current => current.slice(0, 1))
+                    }}
+                  >
+                    <MaterialCommunityIcons name={kind === 'group' ? 'account-group-outline' : 'account-outline'} size={22} color={draftKind === kind ? '#2563eb' : '#64748b'} />
+                    <Text style={[styles.workspaceKindText, draftKind === kind && styles.workspaceKindTextActive]}>{kind === 'group' ? '群聊工作区' : '单聊工作区'}</Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <View style={styles.workspaceChipWrap}>
+                {typeOptions.map(option => (
+                  <Pressable key={option.value} style={[styles.workspaceTypeChip, draftType === option.value && styles.workspaceTypeChipActive]} onPress={() => setDraftType(option.value)}>
+                    <MaterialCommunityIcons name={option.icon} size={16} color={draftType === option.value ? '#2563eb' : '#64748b'} />
+                    <Text style={[styles.workspaceTypeText, draftType === option.value && styles.workspaceTypeTextActive]}>{option.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <View style={styles.workspaceChipWrap}>
+                {agents.map(agent => {
+                  const checked = selectedAgents.includes(agent.id)
+                  return (
+                    <Pressable key={agent.id} style={[styles.agentSelectChip, checked && styles.agentSelectChipActive]} onPress={() => toggleAgent(agent.id)}>
+                      <View style={[styles.agentSelectDot, { backgroundColor: agent.color }]} />
+                      <Text style={[styles.agentSelectText, checked && styles.agentSelectTextActive]} numberOfLines={1}>{agent.name}</Text>
+                    </Pressable>
+                  )
+                })}
+              </View>
+
+              <Pressable style={styles.workspaceCreateButton} onPress={createWorkspace}>
+                <MaterialCommunityIcons name="plus" size={20} color="#fff" />
+                <Text style={styles.workspaceCreateText}>创建并进入</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
+        </GlassCard>
+      </View>
+    </Modal>
+  )
+}
+
+function ArtifactDetailModal({ artifact, onClose }: { artifact: ArtifactView | null; onClose: () => void }) {
+  if (!artifact) return null
+
+  const statusRows = [
+    { label: '最近版本', value: 'v0.1.0 已生成', icon: 'source-branch' as IconName },
+    { label: '最近构建', value: '成功 · 只读摘要', icon: 'hammer-wrench' as IconName },
+    { label: '最近部署', value: '未触发 · 请回 Web', icon: 'cloud-upload-outline' as IconName },
+  ]
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={styles.modalScrim} onPress={onClose} />
+        <GlassCard style={styles.artifactDetailSheet}>
+          <View style={styles.artifactDetailHandle} />
+          <View style={styles.artifactDetailHead}>
+            <View style={styles.artifactDetailTitleRow}>
+              <View style={styles.artifactDetailIcon}>
+                <MaterialCommunityIcons name={artifact.icon} size={26} color="#2563eb" />
+              </View>
+              <View style={styles.artifactDetailTitleCopy}>
+                <Text style={styles.homeWorkspaceEyebrow}>ARTIFACT DETAIL</Text>
+                <Text style={styles.artifactDetailTitle}>{artifact.title}</Text>
+              </View>
+            </View>
+            <Pressable style={styles.artifactCloseButton} onPress={onClose}>
+              <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
+            </Pressable>
+          </View>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.artifactDetailContent}>
+            <View style={styles.artifactHeroBlock}>
+              <View style={styles.artifactHeroStatusLine}>
+                <Text style={styles.artifactHeroMetric}>{artifact.metric}</Text>
+                <View style={[styles.artifactStatusBadge, artifact.status === 'ready' && styles.artifactStatusReady, artifact.status === 'partial' && styles.artifactStatusPartial]}>
+                  <Text style={[styles.artifactStatusText, artifact.status === 'ready' && styles.artifactStatusReadyText, artifact.status === 'partial' && styles.artifactStatusPartialText]}>{artifact.statusLabel}</Text>
+                </View>
+              </View>
+              <Text style={styles.artifactHeroSummary}>{artifact.summary}</Text>
+            </View>
+
+            <View style={styles.artifactSection}>
+              <Text style={styles.sectionTitle}>预览摘要</Text>
+              <Text style={styles.bodyText}>预览状态 ready，可在 Web 工作台查看完整页面；App 仅展示摘要与入口。</Text>
+            </View>
+
+            <View style={styles.artifactSection}>
+              <Text style={styles.sectionTitle}>文件摘要</Text>
+              {codeFiles.slice(0, 3).map(file => (
+                <View key={file.path} style={styles.artifactFileRow}>
+                  <MaterialCommunityIcons name="file-code-outline" size={18} color="#2563eb" />
+                  <View style={styles.artifactFileCopy}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>{file.path}</Text>
+                    <Text style={styles.bodyText}>{file.language} · {file.changed} · {file.lines || 'asset'} 行</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.artifactSectionGrid}>
+              <View style={styles.artifactMiniPanel}>
+                <Text style={styles.sectionTitle}>Diff</Text>
+                <Text style={styles.artifactHeroMetric}>+428 / -0</Text>
+                <Text style={styles.bodyText}>关键改动集中在 App.tsx 与 mock 数据。</Text>
+              </View>
+              <View style={styles.artifactMiniPanel}>
+                <Text style={styles.sectionTitle}>Review</Text>
+                <Text style={styles.artifactHeroMetric}>pass</Text>
+                <Text style={styles.bodyText}>当前无阻塞项，建议继续真机验证。</Text>
+              </View>
+            </View>
+
+            <View style={styles.artifactSection}>
+              <Text style={styles.sectionTitle}>交付状态只读摘要</Text>
+              {statusRows.map(row => (
+                <View key={row.label} style={styles.deliveryStatusRow}>
+                  <MaterialCommunityIcons name={row.icon} size={19} color="#475569" />
+                  <Text style={styles.deliveryStatusLabel}>{row.label}</Text>
+                  <Text style={styles.deliveryStatusValue}>{row.value}</Text>
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </GlassCard>
+      </View>
+    </Modal>
   )
 }
 
@@ -558,9 +1090,28 @@ function DeliveryStatusCard({ icon, title, status, body, time, tone }: { icon: I
 }
 
 function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
-  const runningCount = agents.filter(agent => agent.status !== 'idle').length
-  const builtinCount = agents.filter(agent => agent.id === 'orchestrator' || agent.id === 'engineer').length
   const showFullRegistry = layoutTier === 'wide'
+  const [visibleAgents, setVisibleAgents] = useState<Agent[]>(agents)
+  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<AgentFilter>('all')
+  const runningCount = visibleAgents.filter(agent => agent.status !== 'idle').length
+  const builtinCount = visibleAgents.filter(agent => agent.id === 'orchestrator' || agent.id === 'engineer').length
+  const agentSearch = useMemo(
+    () => new Fuse(visibleAgents, { keys: ['name', 'role', 'provider', 'skills'], threshold: 0.34 }),
+    [visibleAgents],
+  )
+  const searchedAgents = query.trim() ? agentSearch.search(query.trim()).map(result => result.item) : visibleAgents
+  const filteredAgents = searchedAgents.filter(agent => {
+    if (filter === 'all') return true
+    if (filter === 'builtin') return agent.id === 'orchestrator' || agent.id === 'engineer'
+    return agent.status === filter
+  })
+  const deleteAgent = (agentId: string) => {
+    if (agentId === 'orchestrator' || agentId === 'engineer') return
+    setVisibleAgents(current => current.filter(agent => agent.id !== agentId))
+    if (selectedAgent?.id === agentId) setSelectedAgent(null)
+  }
 
   return (
     <View style={styles.agentScreen}>
@@ -577,7 +1128,7 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
         {showFullRegistry ? (
           <View style={styles.agentMetricRow}>
             <View style={styles.agentMetricBox}>
-              <Text style={styles.agentMetricValue}>{agents.length}</Text>
+              <Text style={styles.agentMetricValue}>{visibleAgents.length}</Text>
               <Text style={styles.agentMetricLabel}>Agents</Text>
             </View>
             <View style={styles.agentMetricBox}>
@@ -601,19 +1152,47 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
       <View style={[styles.agentSearchRow, layoutTier === 'compact' && styles.agentSearchRowCompact]}>
         <GlassCard compact style={styles.agentSearchBox}>
           <MaterialCommunityIcons name="magnify" size={22} color="#64748b" />
-          <Text style={styles.agentSearchPlaceholder}>搜索 Agent</Text>
+          <TextInput
+            placeholder="搜索 Agent"
+            placeholderTextColor="#94a3b8"
+            value={query}
+            onChangeText={setQuery}
+            style={styles.agentSearchInput}
+          />
         </GlassCard>
         <GlassCard compact style={styles.agentFilterButton}>
           <MaterialCommunityIcons name="filter-outline" size={21} color="#475569" />
-          <Text style={styles.agentFilterText}>全部状态</Text>
+          <Text style={styles.agentFilterText}>{filter === 'all' ? '全部状态' : filter === 'running' ? '运行中' : filter === 'reviewing' ? '审查中' : filter === 'idle' ? '空闲' : '内置'}</Text>
           <MaterialCommunityIcons name="menu-down" size={19} color="#64748b" />
         </GlassCard>
       </View>
 
-      {agents.slice(0, 4).map(agent => (
-        <AgentCard key={agent.id} agent={agent} layoutTier={layoutTier} />
+      <View style={styles.agentFilterChips}>
+        {[
+          { key: 'all' as AgentFilter, label: '全部', icon: 'apps' as IconName },
+          { key: 'running' as AgentFilter, label: '运行中', icon: 'play-circle-outline' as IconName },
+          { key: 'reviewing' as AgentFilter, label: '审查中', icon: 'shield-check-outline' as IconName },
+          { key: 'idle' as AgentFilter, label: '空闲', icon: 'sleep' as IconName },
+          { key: 'builtin' as AgentFilter, label: '内置', icon: 'layers-triple' as IconName },
+        ].map(item => (
+          <Pressable key={item.key} onPress={() => setFilter(item.key)}>
+            <Pill label={item.label} tone={filter === item.key ? 'blue' : 'muted'} icon={item.icon} />
+          </Pressable>
+        ))}
+      </View>
+
+      {filteredAgents.map(agent => (
+        <AgentCard key={agent.id} agent={agent} layoutTier={layoutTier} onPress={() => setSelectedAgent(agent)} onDelete={() => deleteAgent(agent.id)} />
       ))}
-      <Text style={styles.agentLoadedText}>已加载全部 {agents.length} 个 Agent</Text>
+      {filteredAgents.length === 0 ? (
+        <GlassCard style={styles.emptyStateCard}>
+          <MaterialCommunityIcons name="account-search-outline" size={28} color="#64748b" />
+          <Text style={styles.cardTitle}>没有匹配的 Agent</Text>
+          <Text style={styles.bodyText}>换一个关键词或状态筛选试试。</Text>
+        </GlassCard>
+      ) : null}
+      <Text style={styles.agentLoadedText}>已显示 {filteredAgents.length} / {visibleAgents.length} 个 Agent</Text>
+      <AgentDetailModal agent={selectedAgent} onClose={() => setSelectedAgent(null)} />
     </View>
   )
 }
@@ -640,7 +1219,7 @@ function SideTabs({ activeTab, onChange, expanded, onToggle }: { activeTab: TabK
       <View style={styles.sideRailStack}>
         {tabs.map(tab => {
           const active = tab.key === activeTab
-          const isAi = tab.key === 'ai'
+          const isAi = tab.key === 'chat'
           return (
             <Pressable
               key={tab.key}
@@ -688,7 +1267,7 @@ function Feature({ icon, label }: { icon: IconName; label: string }) {
   )
 }
 
-function WorkspaceCard({ workspace, layoutTier }: { workspace: Workspace; layoutTier: LayoutTier }) {
+function WorkspaceCard({ workspace, layoutTier, onPress }: { workspace: Workspace; layoutTier: LayoutTier; onPress?: () => void }) {
   const isCompact = layoutTier === 'compact'
   const iconName = workspace.kind === 'group' ? 'school-outline' : 'account-group-outline'
   const typeLabel = workspace.type === 'dev' ? 'dev' : workspace.type === 'chat' ? 'chat' : workspace.type === 'research' ? 'research' : 'writing'
@@ -697,7 +1276,8 @@ function WorkspaceCard({ workspace, layoutTier }: { workspace: Workspace; layout
   const extraAgents = Math.max(0, workspace.agents.length - 4)
 
   return (
-    <GlassCard style={[styles.workspaceCard, isCompact && styles.workspaceCardCompact]}>
+    <Pressable onPress={onPress} disabled={!onPress}>
+      <GlassCard style={[styles.workspaceCard, isCompact && styles.workspaceCardCompact]}>
       <View style={styles.workspaceTopRow}>
         <LinearGradient colors={workspace.kind === 'group' ? ['#4f8dfc', '#6ea5ff'] : ['#8f71f6', '#a98df8']} start={{ x: 0.08, y: 0.1 }} end={{ x: 1, y: 1 }} style={styles.workspaceIconTile}>
           <MaterialCommunityIcons name={iconName} size={48} color="#fff" />
@@ -752,7 +1332,8 @@ function WorkspaceCard({ workspace, layoutTier }: { workspace: Workspace; layout
         </View>
         <MaterialCommunityIcons name="chevron-right" size={22} color="#64748b" />
       </View>
-    </GlassCard>
+      </GlassCard>
+    </Pressable>
   )
 }
 
@@ -810,7 +1391,94 @@ function ArtifactStrip({ artifacts: items }: { artifacts: Artifact[] }) {
   )
 }
 
-function AgentCard({ agent, layoutTier }: { agent: Agent; layoutTier: LayoutTier }) {
+function AgentDetailModal({ agent, onClose }: { agent: Agent | null; onClose: () => void }) {
+  if (!agent) return null
+
+  const isBuiltin = agent.id === 'orchestrator' || agent.id === 'engineer'
+  const statusLabel = agent.status === 'running' ? '运行中' : agent.status === 'reviewing' ? '审查中' : '空闲中'
+  const recentWorkspaces = workspaces.filter(workspace => workspace.agents.includes(agent.id)).slice(0, 2)
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={styles.modalScrim} onPress={onClose} />
+        <GlassCard style={styles.agentDetailSheet}>
+          <View style={styles.artifactDetailHandle} />
+          <View style={styles.artifactDetailHead}>
+            <View style={styles.agentDetailTitleRow}>
+              <AgentGlyph agentId={agent.id} size={58} />
+              <View style={styles.artifactDetailTitleCopy}>
+                <Text style={styles.homeWorkspaceEyebrow}>{isBuiltin ? 'BUILT-IN AGENT' : 'CUSTOM AGENT'}</Text>
+                <Text style={styles.artifactDetailTitle}>{agent.name}</Text>
+              </View>
+            </View>
+            <Pressable style={styles.artifactCloseButton} onPress={onClose}>
+              <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
+            </Pressable>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.artifactDetailContent}>
+            <View style={styles.agentDetailStatusRow}>
+              <View style={[styles.agentStatusBadge, styles[agent.status === 'running' ? 'running' : agent.status === 'reviewing' ? 'reviewing' : 'idle']]}>
+                <View style={[styles.agentStatusDot, styles[`${agent.status === 'running' ? 'running' : agent.status === 'reviewing' ? 'reviewing' : 'idle'}Dot`]]} />
+                <Text style={[styles.agentStatusText, styles[`${agent.status === 'running' ? 'running' : agent.status === 'reviewing' ? 'reviewing' : 'idle'}Text`]]}>{statusLabel}</Text>
+              </View>
+              <View style={styles.homeMetaChip}>
+                <Text style={styles.homeMetaTextBlue}>{agent.provider}</Text>
+              </View>
+              <View style={styles.homeMetaChip}>
+                <Text style={styles.homeMetaTextGray}>model mock</Text>
+              </View>
+            </View>
+
+            <View style={styles.artifactSection}>
+              <Text style={styles.sectionTitle}>角色说明</Text>
+              <Text style={styles.artifactHeroSummary}>{agent.role}</Text>
+            </View>
+
+            <View style={styles.artifactSection}>
+              <Text style={styles.sectionTitle}>技能标签</Text>
+              <View style={styles.agentSkillLine}>
+                {agent.skills.map(skill => (
+                  <View key={skill} style={styles.agentSkillChip}>
+                    <Text style={styles.agentSkillText}>{skill}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.artifactSection}>
+              <Text style={styles.sectionTitle}>最近参与</Text>
+              {recentWorkspaces.map(workspace => (
+                <View key={workspace.id} style={styles.activityRow}>
+                  <View style={styles.activityDot} />
+                  <View style={styles.activityCopy}>
+                    <Text style={styles.cardTitle}>{workspace.name}</Text>
+                    <Text style={styles.bodyText} numberOfLines={1}>{workspace.latestEventLabel}</Text>
+                  </View>
+                  <Text style={styles.activityTime}>{workspace.updatedAt}</Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.artifactSectionGrid}>
+              <View style={styles.artifactMiniPanel}>
+                <Text style={styles.sectionTitle}>轻管理</Text>
+                <Text style={styles.bodyText}>{isBuiltin ? '内置 Agent 仅支持查看资料。' : '可编辑名称、简介、provider、model 与技能标签。'}</Text>
+              </View>
+              <Pressable style={[styles.agentEditMockButton, isBuiltin && styles.agentEditMockButtonDisabled]}>
+                <MaterialCommunityIcons name={isBuiltin ? 'lock-outline' : 'pencil-outline'} size={20} color={isBuiltin ? '#94a3b8' : '#fff'} />
+                <Text style={[styles.agentEditMockText, isBuiltin && styles.agentEditMockTextDisabled]}>{isBuiltin ? '不可编辑' : '基础编辑'}</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
+        </GlassCard>
+      </View>
+    </Modal>
+  )
+}
+
+function AgentCard({ agent, layoutTier, onPress, onDelete }: { agent: Agent; layoutTier: LayoutTier; onPress?: () => void; onDelete?: () => void }) {
   const isBuiltin = agent.id === 'orchestrator' || agent.id === 'engineer'
   const statusLabel = agent.status === 'running' ? '运行中' : agent.status === 'reviewing' ? '审查中' : '空闲中'
   const statusTone = agent.status === 'running' ? 'running' : agent.status === 'reviewing' ? 'reviewing' : 'idle'
@@ -819,12 +1487,26 @@ function AgentCard({ agent, layoutTier }: { agent: Agent; layoutTier: LayoutTier
   const avatarSize = isCompact ? 54 : isStandard ? 60 : 78
 
   return (
-    <GlassCard style={[styles.agentCard, (isCompact || isStandard) && styles.agentCardResponsive]}>
+    <Pressable onPress={onPress} disabled={!onPress}>
+      <GlassCard style={[styles.agentCard, (isCompact || isStandard) && styles.agentCardResponsive]}>
       <AgentGlyph agentId={agent.id} size={avatarSize} />
       <View style={styles.agentCopy}>
         <View style={styles.agentCardTop}>
           <Text style={styles.agentName} numberOfLines={1}>{agent.name}</Text>
-          <MaterialCommunityIcons name="chevron-right" size={26} color="#64748b" />
+          <View style={styles.agentCardActions}>
+            {!isBuiltin ? (
+              <Pressable
+                style={styles.agentDeleteButton}
+                onPress={event => {
+                  event.stopPropagation()
+                  onDelete?.()
+                }}
+              >
+                <MaterialCommunityIcons name="trash-can-outline" size={19} color="#ef4444" />
+              </Pressable>
+            ) : null}
+            <MaterialCommunityIcons name="chevron-right" size={26} color="#64748b" />
+          </View>
         </View>
         <View style={styles.agentBadgeRow}>
           <View style={[styles.agentTypeBadge, isBuiltin ? styles.agentTypeBuiltin : styles.agentTypeCustom]}>
@@ -859,7 +1541,8 @@ function AgentCard({ agent, layoutTier }: { agent: Agent; layoutTier: LayoutTier
           </View>
         </View>
       </View>
-    </GlassCard>
+      </GlassCard>
+    </Pressable>
   )
 }
 
@@ -952,6 +1635,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  headerButtonPressable: {
+    width: 54,
+    height: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   bellWrap: {
     position: 'relative',
     width: 54,
@@ -1004,6 +1693,32 @@ const styles = StyleSheet.create({
   screenStack: {
     gap: 14,
   },
+  workbenchScreen: {
+    gap: 14,
+    paddingTop: 2,
+  },
+  workbenchActiveCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  workbenchIconWrap: {
+    width: 72,
+    height: 64,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  workbenchSectionHead: {
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  workbenchSectionMeta: {
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '800',
+  },
   homeScreen: {
     gap: 18,
     paddingTop: 4,
@@ -1051,6 +1766,35 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
+  },
+  activityCard: {
+    gap: 12,
+  },
+  activityRow: {
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  activityDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: '#2563eb',
+  },
+  activityCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  activityTime: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  emptyStateCard: {
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 22,
   },
   workspaceScreen: {
     gap: 14,
@@ -1234,6 +1978,21 @@ const styles = StyleSheet.create({
     color: '#526173',
     fontSize: 14,
     fontWeight: '700',
+  },
+  activeWorkspaceEnterRow: {
+    alignSelf: 'flex-start',
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 11,
+    borderRadius: 17,
+    backgroundColor: 'rgba(219,234,254,0.72)',
+  },
+  activeWorkspaceEnterText: {
+    color: '#2563eb',
+    fontSize: 13,
+    fontWeight: '900',
   },
   searchCard: {
     height: 52,
@@ -1445,7 +2204,77 @@ const styles = StyleSheet.create({
   },
   chatScrollInner: {
     gap: 14,
+    paddingHorizontal: 20,
+    paddingTop: Platform.select({ ios: 16, android: 8, default: 12 }),
     paddingBottom: 8,
+  },
+  chatScrollInnerCompact: {
+    paddingHorizontal: 16,
+    paddingTop: Platform.select({ ios: 18, android: 8, default: 12 }),
+  },
+  chatScrollInnerStandard: {
+    paddingHorizontal: 20,
+    paddingTop: Platform.select({ ios: 28, android: 10, default: 16 }),
+  },
+  chatScrollInnerWide: {
+    paddingHorizontal: 24,
+    paddingTop: Platform.select({ ios: 18, android: 10, default: 14 }),
+  },
+  chatWorkspaceCard: {
+    paddingTop: 18,
+    paddingHorizontal: 18,
+    paddingBottom: 16,
+    gap: 10,
+  },
+  chatWorkspaceCardCompact: {
+    paddingTop: 16,
+    paddingHorizontal: 16,
+  },
+  chatWorkspaceCardStandard: {
+    paddingTop: 22,
+    paddingHorizontal: 20,
+  },
+  chatWorkspaceTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  chatWorkspaceCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  chatWorkspaceTitle: {
+    marginTop: 2,
+    color: '#0f172a',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  chatWorkspaceSwitchInline: {
+    alignSelf: 'flex-start',
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(219,234,254,0.78)',
+  },
+  chatWorkspaceSwitchText: {
+    color: '#2563eb',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  chatAgentOverview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  chatAgentOverviewText: {
+    flex: 1,
+    marginLeft: 10,
+    color: '#475569',
+    fontSize: 13,
+    fontWeight: '800',
   },
   chatHeaderTitle: {
     fontSize: 20,
@@ -1683,6 +2512,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     backgroundColor: 'rgba(255,255,255,0.28)',
   },
+  currentArtifactCardDisabled: {
+    opacity: 0.62,
+  },
   currentArtifactTitle: {
     color: '#172033',
     textAlign: 'center',
@@ -1700,6 +2532,445 @@ const styles = StyleSheet.create({
   },
   currentArtifactMetaMuted: {
     color: '#64748b',
+  },
+  artifactStatusBadge: {
+    minHeight: 24,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: 'rgba(226,232,240,0.72)',
+  },
+  artifactStatusReady: {
+    backgroundColor: 'rgba(209,250,229,0.82)',
+  },
+  artifactStatusPartial: {
+    backgroundColor: 'rgba(219,234,254,0.84)',
+  },
+  artifactStatusText: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  artifactStatusReadyText: {
+    color: '#059669',
+  },
+  artifactStatusPartialText: {
+    color: '#2563eb',
+  },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15,23,42,0.28)',
+  },
+  artifactDetailSheet: {
+    maxHeight: '82%',
+    marginHorizontal: 12,
+    marginBottom: Platform.select({ ios: 18, android: 12, default: 16 }),
+    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.select({ ios: 24, android: 18, default: 22 }),
+    borderRadius: 28,
+    gap: 12,
+  },
+  artifactDetailHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(100,116,139,0.36)',
+  },
+  artifactDetailHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  artifactDetailTitleRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  artifactDetailIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(219,234,254,0.8)',
+  },
+  artifactDetailTitleCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  artifactDetailTitle: {
+    color: '#0f172a',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  artifactCloseButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.55)',
+  },
+  artifactDetailContent: {
+    gap: 12,
+    paddingBottom: 8,
+  },
+  artifactHeroBlock: {
+    padding: 14,
+    borderRadius: 18,
+    backgroundColor: 'rgba(239,246,255,0.62)',
+    gap: 6,
+  },
+  artifactHeroMetric: {
+    color: '#2563eb',
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  artifactHeroStatusLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  artifactHeroSummary: {
+    color: '#334155',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  artifactSection: {
+    gap: 10,
+    padding: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.38)',
+  },
+  artifactFileRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  artifactFileCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  artifactSectionGrid: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  artifactMiniPanel: {
+    flex: 1,
+    minWidth: 0,
+    gap: 6,
+    padding: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.42)',
+  },
+  deliveryStatusRow: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  deliveryStatusLabel: {
+    width: 72,
+    color: '#475569',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  deliveryStatusValue: {
+    flex: 1,
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  activityCenterSheet: {
+    maxHeight: '72%',
+    marginHorizontal: 12,
+    marginBottom: Platform.select({ ios: 18, android: 12, default: 16 }),
+    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.select({ ios: 24, android: 18, default: 22 }),
+    borderRadius: 28,
+    gap: 14,
+  },
+  activityCenterHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  activitySummaryRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  activitySummaryPill: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.46)',
+  },
+  activitySummaryText: {
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  activityCenterList: {
+    gap: 10,
+    paddingBottom: 4,
+  },
+  activityCenterRow: {
+    minHeight: 72,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.38)',
+  },
+  activityCenterIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(219,234,254,0.72)',
+  },
+  activityCenterTitleLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  activityTypeText: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  workspacePanelSheet: {
+    maxHeight: '84%',
+    marginHorizontal: 12,
+    marginBottom: Platform.select({ ios: 18, android: 12, default: 16 }),
+    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.select({ ios: 24, android: 18, default: 22 }),
+    borderRadius: 28,
+    gap: 12,
+  },
+  workspacePanelSheetCompact: {
+    maxHeight: '88%',
+    paddingHorizontal: 14,
+  },
+  workspacePanelTitleCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  workspacePanelContent: {
+    gap: 14,
+    paddingBottom: 4,
+  },
+  workspacePanelSection: {
+    gap: 10,
+    padding: 12,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.36)',
+  },
+  workspacePanelSectionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  workspacePanelSectionTitle: {
+    color: '#172033',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  workspaceSwitchRow: {
+    minHeight: 66,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 10,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.38)',
+  },
+  workspaceSwitchRowActive: {
+    backgroundColor: 'rgba(219,234,254,0.78)',
+  },
+  workspaceSwitchIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.58)',
+  },
+  workspaceSwitchCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  workspaceSwitchMeta: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  workspaceNameInput: {
+    minHeight: 46,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '800',
+    backgroundColor: 'rgba(255,255,255,0.58)',
+  },
+  workspaceOptionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  workspaceKindCard: {
+    flex: 1,
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingHorizontal: 10,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.42)',
+  },
+  workspaceKindCardActive: {
+    backgroundColor: 'rgba(219,234,254,0.78)',
+  },
+  workspaceKindText: {
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  workspaceKindTextActive: {
+    color: '#2563eb',
+  },
+  workspaceChipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  workspaceTypeChip: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.46)',
+  },
+  workspaceTypeChipActive: {
+    backgroundColor: 'rgba(219,234,254,0.82)',
+  },
+  workspaceTypeText: {
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  workspaceTypeTextActive: {
+    color: '#2563eb',
+  },
+  agentSelectChip: {
+    maxWidth: '48%',
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 10,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.46)',
+  },
+  agentSelectChipActive: {
+    backgroundColor: 'rgba(236,253,245,0.82)',
+  },
+  agentSelectDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+  },
+  agentSelectText: {
+    flexShrink: 1,
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  agentSelectTextActive: {
+    color: '#047857',
+  },
+  workspaceCreateButton: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 18,
+    backgroundColor: '#2563eb',
+  },
+  workspaceCreateText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  agentDetailSheet: {
+    maxHeight: '78%',
+    marginHorizontal: 12,
+    marginBottom: Platform.select({ ios: 18, android: 12, default: 16 }),
+    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.select({ ios: 24, android: 18, default: 22 }),
+    borderRadius: 28,
+    gap: 12,
+  },
+  agentDetailTitleRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  agentDetailStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  agentEditMockButton: {
+    flex: 1,
+    minHeight: 88,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: 18,
+    backgroundColor: '#2563eb',
+  },
+  agentEditMockButtonDisabled: {
+    backgroundColor: 'rgba(226,232,240,0.82)',
+  },
+  agentEditMockText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  agentEditMockTextDisabled: {
+    color: '#94a3b8',
   },
   chatComposer: {
     minHeight: 68,
@@ -2414,6 +3685,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
   },
+  agentSearchInput: {
+    flex: 1,
+    minWidth: 0,
+    color: '#0f172a',
+    fontSize: 16,
+    fontWeight: '800',
+  },
   agentFilterButton: {
     minHeight: 56,
     flexDirection: 'row',
@@ -2426,6 +3704,11 @@ const styles = StyleSheet.create({
     color: '#475569',
     fontSize: 13,
     fontWeight: '900',
+  },
+  agentFilterChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   agentCard: {
     minHeight: 144,
@@ -2451,6 +3734,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
+  },
+  agentCardActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  agentDeleteButton: {
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 19,
+    backgroundColor: 'rgba(254,226,226,0.82)',
   },
   agentBadgeRow: {
     marginTop: 8,
