@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "AgentHub",
+    "slug": "agenthub-app",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/brand/ai-core.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/brand/ai-core.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/brand/ai-core.png",
+        "backgroundColor": "#ffffff"
+      }
+    }
+  }
+}
