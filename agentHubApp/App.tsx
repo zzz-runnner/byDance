@@ -100,12 +100,14 @@ function AnimatedHomeIcon({ size }: { size: number }) {
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('workbench')
   const [navExpanded, setNavExpanded] = useState(false)
+  const [workspaceList, setWorkspaceList] = useState<Workspace[]>(workspaces)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(workspaces[0]?.id ?? '')
   const [activityOpen, setActivityOpen] = useState(false)
+  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false)
   const { width } = useWindowDimensions()
   const layoutTier: LayoutTier = width < 380 ? 'compact' : width < 430 ? 'standard' : 'wide'
   const tightChatHeader = activeTab === 'chat' && layoutTier !== 'wide'
-  const activeWorkspace = workspaces.find(workspace => workspace.id === activeWorkspaceId) ?? workspaces[0]
+  const activeWorkspace = workspaceList.find(workspace => workspace.id === activeWorkspaceId) ?? workspaceList[0]
   const runningAgents = agents.filter(agent => agent.status !== 'idle').length
   const title = useMemo(() => {
     if (activeTab === 'workbench') return '工作台'
@@ -157,7 +159,9 @@ export default function App() {
             ) : activeTab === 'workbench' ? (
               <View style={styles.workspaceHeaderActions}>
                 <GlassCard compact style={styles.headerIconButton}>
-                  <MaterialCommunityIcons name="plus" size={28} color="#0f172a" />
+                  <Pressable style={styles.headerButtonPressable} onPress={() => setWorkspacePanelOpen(true)}>
+                    <MaterialCommunityIcons name="plus" size={28} color="#0f172a" />
+                  </Pressable>
                 </GlassCard>
                 <GlassCard compact style={styles.headerIconButton}>
                   <Pressable style={styles.bellWrap} onPress={() => setActivityOpen(true)}>
@@ -194,6 +198,7 @@ export default function App() {
             <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} showsVerticalScrollIndicator={false}>
               {activeTab === 'workbench' ? (
                 <WorkbenchScreen
+                  workspaceList={workspaceList}
                   runningAgents={runningAgents}
                   workspace={activeWorkspace}
                   layoutTier={layoutTier}
@@ -209,6 +214,26 @@ export default function App() {
           )}
 
           <SideTabs activeTab={activeTab} onChange={setActiveTab} expanded={navExpanded} onToggle={() => setNavExpanded(value => !value)} />
+          <WorkspacePanelModal
+            visible={workspacePanelOpen}
+            workspaceList={workspaceList}
+            activeWorkspaceId={activeWorkspace.id}
+            layoutTier={layoutTier}
+            onClose={() => setWorkspacePanelOpen(false)}
+            onSwitch={nextWorkspace => {
+              setActiveWorkspaceId(nextWorkspace.id)
+              setWorkspacePanelOpen(false)
+              setActiveTab('chat')
+              setNavExpanded(false)
+            }}
+            onCreate={nextWorkspace => {
+              setWorkspaceList(current => [nextWorkspace, ...current])
+              setActiveWorkspaceId(nextWorkspace.id)
+              setWorkspacePanelOpen(false)
+              setActiveTab('chat')
+              setNavExpanded(false)
+            }}
+          />
           <ActivityCenterModal visible={activityOpen} onClose={() => setActivityOpen(false)} />
         </SafeAreaView>
       </ImageBackground>
@@ -226,11 +251,13 @@ type ArtifactView = Artifact & {
 }
 
 function WorkbenchScreen({
+  workspaceList,
   runningAgents,
   workspace,
   layoutTier,
   onOpenWorkspace,
 }: {
+  workspaceList: Workspace[]
   runningAgents: number
   workspace: Workspace
   layoutTier: LayoutTier
@@ -240,10 +267,10 @@ function WorkbenchScreen({
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<WorkspaceFilter>('active')
   const workspaceSearch = useMemo(
-    () => new Fuse(workspaces, { keys: ['name', 'goal', 'latestEventLabel', 'type'], threshold: 0.36 }),
-    [],
+    () => new Fuse(workspaceList, { keys: ['name', 'goal', 'latestEventLabel', 'type'], threshold: 0.36 }),
+    [workspaceList],
   )
-  const searchedWorkspaces = query.trim() ? workspaceSearch.search(query.trim()).map(result => result.item) : workspaces
+  const searchedWorkspaces = query.trim() ? workspaceSearch.search(query.trim()).map(result => result.item) : workspaceList
   const filteredWorkspaces = searchedWorkspaces.filter(item => {
     if (filter === 'archived') return item.archived
     if (filter === 'pinned') return item.pinned && !item.archived
@@ -286,7 +313,7 @@ function WorkbenchScreen({
           </View>
         </View>
         <View style={styles.homeStatGrid}>
-          <StatCard label="工作区" value={String(workspaces.length)} icon="view-grid-outline" tone="#2563eb" />
+          <StatCard label="工作区" value={String(workspaceList.length)} icon="view-grid-outline" tone="#2563eb" />
           <StatCard label="运行中" value={String(runningAgents)} icon="lightning-bolt-outline" tone="#db2777" />
           <StatCard label="产物" value={String(artifacts.length)} icon="package-variant-closed" tone="#059669" />
         </View>
@@ -653,6 +680,165 @@ function ActivityCenterModal({ visible, onClose }: { visible: boolean; onClose: 
                 <Text style={styles.activityTime}>{item.workspace.updatedAt}</Text>
               </View>
             ))}
+          </ScrollView>
+        </GlassCard>
+      </View>
+    </Modal>
+  )
+}
+
+function WorkspacePanelModal({
+  visible,
+  workspaceList,
+  activeWorkspaceId,
+  layoutTier,
+  onClose,
+  onSwitch,
+  onCreate,
+}: {
+  visible: boolean
+  workspaceList: Workspace[]
+  activeWorkspaceId: string
+  layoutTier: LayoutTier
+  onClose: () => void
+  onSwitch: (workspace: Workspace) => void
+  onCreate: (workspace: Workspace) => void
+}) {
+  const [draftName, setDraftName] = useState('')
+  const [draftKind, setDraftKind] = useState<Workspace['kind']>('group')
+  const [draftType, setDraftType] = useState<Workspace['type']>('dev')
+  const [selectedAgents, setSelectedAgents] = useState<string[]>(['orchestrator', 'engineer'])
+  const isCompact = layoutTier === 'compact'
+  const visibleWorkspaces = workspaceList.filter(workspace => !workspace.archived).slice(0, 5)
+  const typeOptions: { value: Workspace['type']; label: string; icon: IconName }[] = [
+    { value: 'dev', label: '开发', icon: 'code-braces' },
+    { value: 'research', label: '研究', icon: 'book-search-outline' },
+    { value: 'writing', label: '写作', icon: 'text-box-edit-outline' },
+    { value: 'chat', label: '聊天', icon: 'message-outline' },
+  ]
+
+  const toggleAgent = (agentId: string) => {
+    setSelectedAgents(current => {
+      if (draftKind === 'direct') return [agentId]
+      if (current.includes(agentId)) return current.length === 1 ? current : current.filter(id => id !== agentId)
+      return [...current, agentId]
+    })
+  }
+
+  const createWorkspace = () => {
+    const fallbackName = draftKind === 'group' ? '新的群聊工作区' : '新的单聊工作区'
+    const nextWorkspace: Workspace = {
+      id: `ws-mock-${Date.now()}`,
+      name: draftName.trim() || fallbackName,
+      goal: draftKind === 'group' ? '多 Agent 协作处理一个新任务' : '与单个 Agent 快速沟通并沉淀产物',
+      kind: draftKind,
+      type: draftType,
+      status: 'ready',
+      pinned: false,
+      archived: false,
+      agents: draftKind === 'direct' ? selectedAgents.slice(0, 1) : selectedAgents,
+      runningAgents: 0,
+      artifactCount: 0,
+      messageCount: 0,
+      latestEventLabel: '刚刚创建，等待发送第一条任务',
+      updatedAt: '刚刚',
+    }
+
+    setDraftName('')
+    onCreate(nextWorkspace)
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={styles.modalScrim} onPress={onClose} />
+        <GlassCard style={[styles.workspacePanelSheet, isCompact && styles.workspacePanelSheetCompact]}>
+          <View style={styles.artifactDetailHandle} />
+          <View style={styles.activityCenterHead}>
+            <View style={styles.workspacePanelTitleCopy}>
+              <Text style={styles.homeWorkspaceEyebrow}>WORKSPACE PANEL</Text>
+              <Text style={styles.artifactDetailTitle}>工作区切换与创建</Text>
+            </View>
+            <Pressable style={styles.artifactCloseButton} onPress={onClose}>
+              <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
+            </Pressable>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.workspacePanelContent}>
+            <View style={styles.workspacePanelSection}>
+              <View style={styles.workspacePanelSectionHead}>
+                <Text style={styles.workspacePanelSectionTitle}>快速切换</Text>
+                <Text style={styles.workbenchSectionMeta}>{workspaceList.length} 个</Text>
+              </View>
+              {visibleWorkspaces.map(workspace => {
+                const isActive = workspace.id === activeWorkspaceId
+                return (
+                  <Pressable key={workspace.id} style={[styles.workspaceSwitchRow, isActive && styles.workspaceSwitchRowActive]} onPress={() => onSwitch(workspace)}>
+                    <View style={styles.workspaceSwitchIcon}>
+                      <MaterialCommunityIcons name={workspace.kind === 'group' ? 'account-group-outline' : 'account-outline'} size={20} color="#2563eb" />
+                    </View>
+                    <View style={styles.workspaceSwitchCopy}>
+                      <Text style={styles.cardTitle} numberOfLines={1}>{workspace.name}</Text>
+                      <Text style={styles.bodyText} numberOfLines={1}>{workspace.latestEventLabel}</Text>
+                    </View>
+                    <Text style={styles.workspaceSwitchMeta}>{isActive ? '当前' : workspace.updatedAt}</Text>
+                  </Pressable>
+                )
+              })}
+            </View>
+
+            <View style={styles.workspacePanelSection}>
+              <Text style={styles.workspacePanelSectionTitle}>创建工作区</Text>
+              <TextInput
+                value={draftName}
+                onChangeText={setDraftName}
+                placeholder="输入工作区名称"
+                placeholderTextColor="#94a3b8"
+                style={styles.workspaceNameInput}
+              />
+
+              <View style={styles.workspaceOptionRow}>
+                {(['group', 'direct'] as Workspace['kind'][]).map(kind => (
+                  <Pressable
+                    key={kind}
+                    style={[styles.workspaceKindCard, draftKind === kind && styles.workspaceKindCardActive]}
+                    onPress={() => {
+                      setDraftKind(kind)
+                      if (kind === 'direct') setSelectedAgents(current => current.slice(0, 1))
+                    }}
+                  >
+                    <MaterialCommunityIcons name={kind === 'group' ? 'account-group-outline' : 'account-outline'} size={22} color={draftKind === kind ? '#2563eb' : '#64748b'} />
+                    <Text style={[styles.workspaceKindText, draftKind === kind && styles.workspaceKindTextActive]}>{kind === 'group' ? '群聊工作区' : '单聊工作区'}</Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <View style={styles.workspaceChipWrap}>
+                {typeOptions.map(option => (
+                  <Pressable key={option.value} style={[styles.workspaceTypeChip, draftType === option.value && styles.workspaceTypeChipActive]} onPress={() => setDraftType(option.value)}>
+                    <MaterialCommunityIcons name={option.icon} size={16} color={draftType === option.value ? '#2563eb' : '#64748b'} />
+                    <Text style={[styles.workspaceTypeText, draftType === option.value && styles.workspaceTypeTextActive]}>{option.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <View style={styles.workspaceChipWrap}>
+                {agents.map(agent => {
+                  const checked = selectedAgents.includes(agent.id)
+                  return (
+                    <Pressable key={agent.id} style={[styles.agentSelectChip, checked && styles.agentSelectChipActive]} onPress={() => toggleAgent(agent.id)}>
+                      <View style={[styles.agentSelectDot, { backgroundColor: agent.color }]} />
+                      <Text style={[styles.agentSelectText, checked && styles.agentSelectTextActive]} numberOfLines={1}>{agent.name}</Text>
+                    </Pressable>
+                  )
+                })}
+              </View>
+
+              <Pressable style={styles.workspaceCreateButton} onPress={createWorkspace}>
+                <MaterialCommunityIcons name="plus" size={20} color="#fff" />
+                <Text style={styles.workspaceCreateText}>创建并进入</Text>
+              </Pressable>
+            </View>
           </ScrollView>
         </GlassCard>
       </View>
@@ -1407,6 +1593,12 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   headerIconButton: {
+    width: 54,
+    height: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerButtonPressable: {
     width: 54,
     height: 54,
     alignItems: 'center',
@@ -2473,6 +2665,176 @@ const styles = StyleSheet.create({
   activityTypeText: {
     color: '#2563eb',
     fontSize: 12,
+    fontWeight: '900',
+  },
+  workspacePanelSheet: {
+    maxHeight: '84%',
+    marginHorizontal: 12,
+    marginBottom: Platform.select({ ios: 18, android: 12, default: 16 }),
+    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.select({ ios: 24, android: 18, default: 22 }),
+    borderRadius: 28,
+    gap: 12,
+  },
+  workspacePanelSheetCompact: {
+    maxHeight: '88%',
+    paddingHorizontal: 14,
+  },
+  workspacePanelTitleCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  workspacePanelContent: {
+    gap: 14,
+    paddingBottom: 4,
+  },
+  workspacePanelSection: {
+    gap: 10,
+    padding: 12,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.36)',
+  },
+  workspacePanelSectionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  workspacePanelSectionTitle: {
+    color: '#172033',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  workspaceSwitchRow: {
+    minHeight: 66,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 10,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.38)',
+  },
+  workspaceSwitchRowActive: {
+    backgroundColor: 'rgba(219,234,254,0.78)',
+  },
+  workspaceSwitchIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.58)',
+  },
+  workspaceSwitchCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  workspaceSwitchMeta: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  workspaceNameInput: {
+    minHeight: 46,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '800',
+    backgroundColor: 'rgba(255,255,255,0.58)',
+  },
+  workspaceOptionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  workspaceKindCard: {
+    flex: 1,
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingHorizontal: 10,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.42)',
+  },
+  workspaceKindCardActive: {
+    backgroundColor: 'rgba(219,234,254,0.78)',
+  },
+  workspaceKindText: {
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  workspaceKindTextActive: {
+    color: '#2563eb',
+  },
+  workspaceChipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  workspaceTypeChip: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.46)',
+  },
+  workspaceTypeChipActive: {
+    backgroundColor: 'rgba(219,234,254,0.82)',
+  },
+  workspaceTypeText: {
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  workspaceTypeTextActive: {
+    color: '#2563eb',
+  },
+  agentSelectChip: {
+    maxWidth: '48%',
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 10,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.46)',
+  },
+  agentSelectChipActive: {
+    backgroundColor: 'rgba(236,253,245,0.82)',
+  },
+  agentSelectDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+  },
+  agentSelectText: {
+    flexShrink: 1,
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  agentSelectTextActive: {
+    color: '#047857',
+  },
+  workspaceCreateButton: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 18,
+    backgroundColor: '#2563eb',
+  },
+  workspaceCreateText: {
+    color: '#fff',
+    fontSize: 15,
     fontWeight: '900',
   },
   agentDetailSheet: {
