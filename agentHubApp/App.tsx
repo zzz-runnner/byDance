@@ -4,6 +4,7 @@ import {
   Easing,
   ImageBackground,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -456,6 +457,7 @@ function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTie
   const isCompact = layoutTier === 'compact'
   const insets = useSafeAreaInsets()
   const keyboardOffset = Platform.OS === 'ios' ? 8 : 0
+  const [selectedArtifact, setSelectedArtifact] = useState<Artifact | null>(null)
 
   return (
     <KeyboardAvoidingView
@@ -554,10 +556,9 @@ function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTie
         <GlassCard style={styles.currentArtifactsPanel}>
           <Text style={styles.currentArtifactsTitle}>当前产出（工程师）</Text>
           <View style={[styles.currentArtifactGrid, isCompact && styles.currentArtifactGridCompact]}>
-            <CurrentArtifactCard icon="cellphone-screenshot" title="移动首页预览" meta="1 张" />
-            <CurrentArtifactCard icon="code-tags" title="代码变更" meta="+428 / -0" tone="blue" />
-            <CurrentArtifactCard icon="shield-check-outline" title="审查结论" meta="pass" tone="green" />
-            <CurrentArtifactCard icon="cube-outline" title="源码快照" meta="v0.1.0" tone="muted" />
+            {artifacts.map(item => (
+              <CurrentArtifactCard key={item.id} artifact={item} onPress={() => setSelectedArtifact(item)} />
+            ))}
           </View>
         </GlassCard>
       </ScrollView>
@@ -574,17 +575,102 @@ function ChatScreen({ workspace, layoutTier }: { workspace: Workspace; layoutTie
           <MaterialCommunityIcons name="arrow-up" size={25} color="#fff" />
         </Pressable>
       </GlassCard>
+      <ArtifactDetailModal artifact={selectedArtifact} onClose={() => setSelectedArtifact(null)} />
     </KeyboardAvoidingView>
   )
 }
 
-function CurrentArtifactCard({ icon, title, meta, tone = 'blue' }: { icon: IconName; title: string; meta: string; tone?: 'blue' | 'green' | 'muted' }) {
+function CurrentArtifactCard({ artifact, onPress }: { artifact: Artifact; onPress: () => void }) {
+  const tone = artifact.type === 'review' ? 'green' : artifact.type === 'text' ? 'muted' : 'blue'
   return (
-    <View style={styles.currentArtifactCard}>
-      <MaterialCommunityIcons name={icon} size={30} color={tone === 'green' ? '#10b981' : tone === 'muted' ? '#334155' : '#5572ff'} />
-      <Text style={styles.currentArtifactTitle}>{title}</Text>
-      <Text style={[styles.currentArtifactMeta, tone === 'green' && styles.currentArtifactMetaGreen, tone === 'muted' && styles.currentArtifactMetaMuted]}>{meta}</Text>
-    </View>
+    <Pressable style={styles.currentArtifactCard} onPress={onPress}>
+      <MaterialCommunityIcons name={artifact.icon} size={30} color={tone === 'green' ? '#10b981' : tone === 'muted' ? '#334155' : '#5572ff'} />
+      <Text style={styles.currentArtifactTitle}>{artifact.title}</Text>
+      <Text style={[styles.currentArtifactMeta, tone === 'green' && styles.currentArtifactMetaGreen, tone === 'muted' && styles.currentArtifactMetaMuted]}>{artifact.metric}</Text>
+    </Pressable>
+  )
+}
+
+function ArtifactDetailModal({ artifact, onClose }: { artifact: Artifact | null; onClose: () => void }) {
+  if (!artifact) return null
+
+  const statusRows = [
+    { label: '最近版本', value: 'v0.1.0 已生成', icon: 'source-branch' as IconName },
+    { label: '最近构建', value: '成功 · 只读摘要', icon: 'hammer-wrench' as IconName },
+    { label: '最近部署', value: '未触发 · 请回 Web', icon: 'cloud-upload-outline' as IconName },
+  ]
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={styles.modalScrim} onPress={onClose} />
+        <GlassCard style={styles.artifactDetailSheet}>
+          <View style={styles.artifactDetailHandle} />
+          <View style={styles.artifactDetailHead}>
+            <View style={styles.artifactDetailTitleRow}>
+              <View style={styles.artifactDetailIcon}>
+                <MaterialCommunityIcons name={artifact.icon} size={26} color="#2563eb" />
+              </View>
+              <View style={styles.artifactDetailTitleCopy}>
+                <Text style={styles.homeWorkspaceEyebrow}>ARTIFACT DETAIL</Text>
+                <Text style={styles.artifactDetailTitle}>{artifact.title}</Text>
+              </View>
+            </View>
+            <Pressable style={styles.artifactCloseButton} onPress={onClose}>
+              <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
+            </Pressable>
+          </View>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.artifactDetailContent}>
+            <View style={styles.artifactHeroBlock}>
+              <Text style={styles.artifactHeroMetric}>{artifact.metric}</Text>
+              <Text style={styles.artifactHeroSummary}>{artifact.summary}</Text>
+            </View>
+
+            <View style={styles.artifactSection}>
+              <Text style={styles.sectionTitle}>预览摘要</Text>
+              <Text style={styles.bodyText}>预览状态 ready，可在 Web 工作台查看完整页面；App 仅展示摘要与入口。</Text>
+            </View>
+
+            <View style={styles.artifactSection}>
+              <Text style={styles.sectionTitle}>文件摘要</Text>
+              {codeFiles.slice(0, 3).map(file => (
+                <View key={file.path} style={styles.artifactFileRow}>
+                  <MaterialCommunityIcons name="file-code-outline" size={18} color="#2563eb" />
+                  <View style={styles.artifactFileCopy}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>{file.path}</Text>
+                    <Text style={styles.bodyText}>{file.language} · {file.changed} · {file.lines || 'asset'} 行</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.artifactSectionGrid}>
+              <View style={styles.artifactMiniPanel}>
+                <Text style={styles.sectionTitle}>Diff</Text>
+                <Text style={styles.artifactHeroMetric}>+428 / -0</Text>
+                <Text style={styles.bodyText}>关键改动集中在 App.tsx 与 mock 数据。</Text>
+              </View>
+              <View style={styles.artifactMiniPanel}>
+                <Text style={styles.sectionTitle}>Review</Text>
+                <Text style={styles.artifactHeroMetric}>pass</Text>
+                <Text style={styles.bodyText}>当前无阻塞项，建议继续真机验证。</Text>
+              </View>
+            </View>
+
+            <View style={styles.artifactSection}>
+              <Text style={styles.sectionTitle}>交付状态只读摘要</Text>
+              {statusRows.map(row => (
+                <View key={row.label} style={styles.deliveryStatusRow}>
+                  <MaterialCommunityIcons name={row.icon} size={19} color="#475569" />
+                  <Text style={styles.deliveryStatusLabel}>{row.label}</Text>
+                  <Text style={styles.deliveryStatusValue}>{row.value}</Text>
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </GlassCard>
+      </View>
+    </Modal>
   )
 }
 
@@ -1955,6 +2041,135 @@ const styles = StyleSheet.create({
   },
   currentArtifactMetaMuted: {
     color: '#64748b',
+  },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15,23,42,0.28)',
+  },
+  artifactDetailSheet: {
+    maxHeight: '82%',
+    marginHorizontal: 12,
+    marginBottom: Platform.select({ ios: 18, android: 12, default: 16 }),
+    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.select({ ios: 24, android: 18, default: 22 }),
+    borderRadius: 28,
+    gap: 12,
+  },
+  artifactDetailHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(100,116,139,0.36)',
+  },
+  artifactDetailHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  artifactDetailTitleRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  artifactDetailIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(219,234,254,0.8)',
+  },
+  artifactDetailTitleCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  artifactDetailTitle: {
+    color: '#0f172a',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  artifactCloseButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.55)',
+  },
+  artifactDetailContent: {
+    gap: 12,
+    paddingBottom: 8,
+  },
+  artifactHeroBlock: {
+    padding: 14,
+    borderRadius: 18,
+    backgroundColor: 'rgba(239,246,255,0.62)',
+    gap: 6,
+  },
+  artifactHeroMetric: {
+    color: '#2563eb',
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  artifactHeroSummary: {
+    color: '#334155',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  artifactSection: {
+    gap: 10,
+    padding: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.38)',
+  },
+  artifactFileRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  artifactFileCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  artifactSectionGrid: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  artifactMiniPanel: {
+    flex: 1,
+    minWidth: 0,
+    gap: 6,
+    padding: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.42)',
+  },
+  deliveryStatusRow: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  deliveryStatusLabel: {
+    width: 72,
+    color: '#475569',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  deliveryStatusValue: {
+    flex: 1,
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '900',
   },
   chatComposer: {
     minHeight: 68,
