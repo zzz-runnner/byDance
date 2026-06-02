@@ -77,6 +77,7 @@ type WorkspacePanelMode = 'code' | 'preview'
 type PreviewSurfaceMode = 'workspace' | 'build' | 'deployment'
 type PreviewFrameStatus = 'loading' | 'slow' | 'ready' | 'error'
 type DeliveryAction = 'save' | 'build' | 'deploy' | undefined
+type DialogBootstrapState = 'idle' | 'loading' | 'ready' | 'error'
 
 type PreviewSurfaceOption = {
   mode: PreviewSurfaceMode
@@ -92,6 +93,7 @@ type MonacoThemeData = import('monaco-editor').editor.IStandaloneThemeData
 type MonacoDisposable = import('monaco-editor').IDisposable
 
 const CODE_EDITOR_THEME = 'agenthub-dark'
+const DIALOG_ANIMATION_MS = 220
 
 const CODE_EDITOR_THEME_DATA: MonacoThemeData = {
   base: 'vs-dark',
@@ -533,8 +535,13 @@ export function CodeWorkspaceDialog({
   const editorDisposablesRef = useRef<MonacoDisposable[]>([])
   const selectionDraftRef = useRef<EditorSelectionState | undefined>(undefined)
   const selectionCommitTimerRef = useRef<number | undefined>(undefined)
+  const closeTimerRef = useRef<number | undefined>(undefined)
   const pointerSelectionRef = useRef(false)
   const autoBuildKeyRef = useRef('')
+  const [isRendered, setIsRendered] = useState(open)
+  const [isVisible, setIsVisible] = useState(open)
+  const [bootstrapState, setBootstrapState] = useState<DialogBootstrapState>(open ? 'loading' : 'idle')
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0)
   const [panelMode, setPanelMode] = useState<WorkspacePanelMode>('code')
   const [fileTree, setFileTree] = useState<WorkspaceFileNode[]>([])
   const [treeLoading, setTreeLoading] = useState(false)
@@ -600,6 +607,7 @@ export function CodeWorkspaceDialog({
   const workspacePreviewCapability = activePreviewMode === 'workspace' ? previewCapability : undefined
   const previewBuildStatus = previewCapability?.build?.status
   const previewBusy = previewLoading || previewBuildLoading || previewBuildStatus === 'running'
+  const dialogBusy = bootstrapState === 'loading' || treeLoading || previewLoading || deliveryLoading || versionsLoading
   const previewLogExcerpt = previewCapability?.build?.logExcerpt?.trim() ?? ''
   const deliveryBusy = Boolean(deliveryAction)
   const currentDeliveryVersionId = deliverySummary?.currentVersion?.versionId
@@ -612,6 +620,8 @@ export function CodeWorkspaceDialog({
   const currentVersion = versions.find(version => version.isCurrent) ?? versions.find(version => version.versionId === currentDeliveryVersionId)
   const selectedVersion = versions.find(version => version.versionId === selectedVersionId)
   const diffBaseVersion = versions.find(version => version.versionId === diffBaseVersionId)
+  const bootstrapErrorMessage =
+    treeError || versionsError || previewError || deliveryError || 'Failed to load workspace assets.'
 
   useEffect(() => {
     activeFilePathRef.current = activeFilePath
@@ -620,6 +630,7 @@ export function CodeWorkspaceDialog({
 
   useEffect(() => {
     return () => {
+      clearDialogCloseTimer()
       clearSelectionCommitTimer()
       disposeEditorListeners()
     }
@@ -637,6 +648,20 @@ export function CodeWorkspaceDialog({
 
     window.clearTimeout(selectionCommitTimerRef.current)
     selectionCommitTimerRef.current = undefined
+  }
+
+  /**
+   * Clears the delayed close timer used by the dialog exit animation.
+   * Input: none.
+   * Output: pending close transition callback canceled.
+   */
+  function clearDialogCloseTimer() {
+    if (closeTimerRef.current === undefined) {
+      return
+    }
+
+    window.clearTimeout(closeTimerRef.current)
+    closeTimerRef.current = undefined
   }
 
   /**
@@ -697,6 +722,101 @@ export function CodeWorkspaceDialog({
     window.requestAnimationFrame(() => {
       editorRef.current?.layout()
     })
+  }
+
+  /**
+   * Resets dialog-scoped state before a fresh bootstrap or after the close animation ends.
+   * Input: none.
+   * Output: cached selections, preview state, and panel state cleared.
+   */
+  function resetDialogState() {
+    clearSelectionCommitTimer()
+    disposeEditorListeners()
+    pointerSelectionRef.current = false
+    selectionDraftRef.current = undefined
+    editorRef.current = null
+    activeFilePathRef.current = undefined
+    activeLanguageRef.current = undefined
+    autoBuildKeyRef.current = ''
+    setEditorViewport({
+      width: 0,
+      height: 0,
+    })
+    setPanelMode('code')
+    setFileTree([])
+    setTreeLoading(false)
+    setTreeError('')
+    setFileQuery('')
+    setExpandedPaths({})
+    setActiveFilePath(undefined)
+    setFileCache({})
+    setDiffSnapshot(undefined)
+    setSelectionState(undefined)
+    setTreeRootLabel('')
+    setWrapMode('on')
+    setPreviewCapability(undefined)
+    setPreviewSurfaceMode('workspace')
+    setSelectedPreviewPath(undefined)
+    setPreviewLoading(false)
+    setPreviewError('')
+    setPreviewBuildLoading(false)
+    setDeliverySummary(undefined)
+    setDeliveryLoading(false)
+    setDeliveryError('')
+    setDeliveryAction(undefined)
+    setVersions([])
+    setVersionsLoading(false)
+    setVersionsError('')
+    setSelectedVersionId(undefined)
+    setDiffBaseVersionId(undefined)
+    setVersionDiff(undefined)
+    setVersionDiffLoading(false)
+    setVersionDiffError('')
+    setRestoreBusyVersionId(undefined)
+    setRestoreMessage('')
+    setLastRestoreResult(undefined)
+    setPreviewAttempt(0)
+    setPreviewStatus('loading')
+  }
+
+  /**
+   * Loads one workspace file into the cache so the editor can mount without a second round trip.
+   * Input: project id and repo-relative file path.
+   * Output: resolved text file content cached under the file path.
+   */
+  async function loadFileContentIntoCache(
+    currentProjectId: string,
+    filePath: string,
+  ): Promise<WorkspaceFileContent> {
+    setSelectionState(undefined)
+    setFileCache(previous => ({
+      ...previous,
+      [filePath]: {
+        loading: true,
+      },
+    }))
+
+    try {
+      const content = await fetchBusinessProjectFileContent(currentProjectId, filePath)
+      setFileCache(previous => ({
+        ...previous,
+        [filePath]: {
+          loading: false,
+          content,
+        },
+      }))
+      return content
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load file content.'
+      setFileCache(previous => ({
+        ...previous,
+        [filePath]: {
+          loading: false,
+          error: message,
+        },
+      }))
+      throw new Error(message)
+    }
   }
 
   /**
@@ -784,9 +904,9 @@ export function CodeWorkspaceDialog({
    * Input: optional silent-refresh flag.
    * Output: version list state refreshed from the backend.
    */
-  async function loadVersions(options?: { silent?: boolean }) {
+  async function loadVersions(options?: { silent?: boolean }): Promise<boolean> {
     if (!projectId) {
-      return
+      return false
     }
 
     if (!options?.silent) {
@@ -809,9 +929,11 @@ export function CodeWorkspaceDialog({
         }
         return undefined
       })
+      return true
     } catch (error) {
       setVersions([])
       setVersionsError(error instanceof Error ? error.message : 'Failed to load version history.')
+      return false
     } finally {
       if (!options?.silent) {
         setVersionsLoading(false)
@@ -851,9 +973,10 @@ export function CodeWorkspaceDialog({
   async function loadWorkspaceBrowser(
     preferredActiveFilePath?: string,
     preferredPreviewPath?: string,
-  ) {
+    options?: { prefetchInitialFileContent?: boolean },
+  ): Promise<{ success: boolean; activeFilePath?: string }> {
     if (!projectId) {
-      return
+      return { success: false }
     }
 
     setTreeLoading(true)
@@ -887,7 +1010,14 @@ export function CodeWorkspaceDialog({
         ...previous,
         ...expandAncestors(nextActiveFilePath),
       }))
+      if (options?.prefetchInitialFileContent && nextActiveFilePath) {
+        await loadFileContentIntoCache(projectId, nextActiveFilePath)
+      }
       setActiveFilePath(nextActiveFilePath)
+      return {
+        success: true,
+        activeFilePath: nextActiveFilePath,
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load workspace files.'
       setTreeError(message)
@@ -896,6 +1026,7 @@ export function CodeWorkspaceDialog({
       setPreviewCapability(undefined)
       setSelectedPreviewPath(undefined)
       setDeliverySummary(undefined)
+      return { success: false }
     } finally {
       setTreeLoading(false)
       setPreviewLoading(false)
@@ -918,59 +1049,70 @@ export function CodeWorkspaceDialog({
   }
 
   useEffect(() => {
-    if (!open) {
-      clearSelectionCommitTimer()
-      disposeEditorListeners()
-      pointerSelectionRef.current = false
-      selectionDraftRef.current = undefined
-      editorRef.current = null
-      setEditorViewport({
-        width: 0,
-        height: 0,
+    clearDialogCloseTimer()
+
+    if (open) {
+      setIsRendered(true)
+      const frame = window.requestAnimationFrame(() => {
+        setIsVisible(true)
       })
+      return () => {
+        window.cancelAnimationFrame(frame)
+      }
+    }
+
+    setIsVisible(false)
+    if (!isRendered) {
+      setBootstrapState('idle')
       return
     }
 
-    setPanelMode('code')
-    setFileTree([])
-    setFileCache({})
-    setDiffSnapshot(undefined)
-    setSelectionState(undefined)
-    setExpandedPaths({})
-    setActiveFilePath(undefined)
-    setFileQuery('')
-    setWrapMode('on')
-    setPreviewCapability(undefined)
-    setPreviewSurfaceMode('workspace')
-    setSelectedPreviewPath(undefined)
-    setPreviewError('')
-    setPreviewLoading(false)
-    setPreviewBuildLoading(false)
-    setDeliverySummary(undefined)
-    setDeliveryLoading(false)
-    setDeliveryError('')
-    setDeliveryAction(undefined)
-    setVersions([])
-    setVersionsLoading(false)
-    setVersionsError('')
-    setSelectedVersionId(undefined)
-    setDiffBaseVersionId(undefined)
-    setVersionDiff(undefined)
-    setVersionDiffLoading(false)
-    setVersionDiffError('')
-    setRestoreBusyVersionId(undefined)
-    setRestoreMessage('')
-    setLastRestoreResult(undefined)
-    setPreviewAttempt(0)
-    selectionDraftRef.current = undefined
-    pointerSelectionRef.current = false
-    autoBuildKeyRef.current = ''
+    closeTimerRef.current = window.setTimeout(() => {
+      setIsRendered(false)
+      setBootstrapState('idle')
+      resetDialogState()
+      clearDialogCloseTimer()
+    }, DIALOG_ANIMATION_MS)
 
-    if (projectId) {
-      void loadWorkspaceBrowser()
-      void loadVersions()
+    return () => {
+      clearDialogCloseTimer()
     }
-  }, [open, projectId])
+  }, [isRendered, open])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    resetDialogState()
+    setBootstrapState('loading')
+
+    if (!projectId) {
+      setTreeError('Project id is required before opening workspace assets.')
+      setBootstrapState('error')
+      return
+    }
+
+    let cancelled = false
+
+    async function bootstrapDialog() {
+      const [browserResult, versionsReady] = await Promise.all([
+        loadWorkspaceBrowser(undefined, undefined, { prefetchInitialFileContent: true }),
+        loadVersions(),
+      ])
+      if (cancelled) {
+        return
+      }
+
+      setBootstrapState(browserResult.success && versionsReady ? 'ready' : 'error')
+    }
+
+    void bootstrapDialog()
+
+    return () => {
+      cancelled = true
+    }
+  }, [bootstrapAttempt, open, projectId])
 
   useEffect(() => {
     if (!open || !activePreviewOption || activePreviewOption.mode === previewSurfaceMode) {
@@ -1029,7 +1171,7 @@ export function CodeWorkspaceDialog({
       return
     }
     const cachedEntry = fileCache[activeFilePath]
-    if (cachedEntry?.content || cachedEntry?.error) {
+    if (cachedEntry?.loading || cachedEntry?.content || cachedEntry?.error) {
       return
     }
 
@@ -1038,26 +1180,8 @@ export function CodeWorkspaceDialog({
     const currentFilePath = activeFilePath
 
     async function loadFileContent() {
-      setSelectionState(undefined)
-      setFileCache(previous => ({
-        ...previous,
-        [currentFilePath]: {
-          loading: true,
-        },
-      }))
-
       try {
-        const content = await fetchBusinessProjectFileContent(currentProjectId, currentFilePath)
-        if (cancelled) {
-          return
-        }
-        setFileCache(previous => ({
-          ...previous,
-          [currentFilePath]: {
-            loading: false,
-            content,
-          },
-        }))
+        await loadFileContentIntoCache(currentProjectId, currentFilePath)
       } catch (error) {
         if (cancelled) {
           return
@@ -1372,12 +1496,16 @@ export function CodeWorkspaceDialog({
     setPreviewAttempt(previous => previous + 1)
   }
 
-  if (!open) {
+  if (!isRendered) {
     return null
   }
 
   return (
-    <div className="code-dialog-backdrop" role="presentation" onClick={onClose}>
+    <div
+      className={`code-dialog-backdrop ${isVisible ? 'is-visible' : ''}`}
+      role="presentation"
+      onClick={onClose}
+    >
       <div className="code-dialog__surface" role="presentation" onClick={event => event.stopPropagation()}>
         <GlassPanel className="code-dialog">
           <header className="code-dialog__header">
@@ -1392,8 +1520,20 @@ export function CodeWorkspaceDialog({
               </span>
             </div>
             <div className="code-dialog__actions">
-              <button className="icon-button code-dialog__icon-button" type="button" onClick={() => void handleRefresh()} title="刷新工作区">
-                <RefreshCcw className={treeLoading || previewLoading ? 'icon-spin' : ''} size={16} />
+              <button
+                className="icon-button code-dialog__icon-button"
+                type="button"
+                onClick={() => {
+                  if (bootstrapState === 'ready') {
+                    void handleRefresh()
+                    return
+                  }
+                  setBootstrapAttempt(previous => previous + 1)
+                }}
+                disabled={bootstrapState === 'loading'}
+                title={bootstrapState === 'ready' ? '刷新工作区' : '重试加载工作区资源'}
+              >
+                <RefreshCcw className={dialogBusy ? 'icon-spin' : ''} size={16} />
               </button>
               <button className="icon-button code-dialog__icon-button" type="button" onClick={onClose} title="关闭代码面板">
                 <X size={16} />
@@ -1401,6 +1541,46 @@ export function CodeWorkspaceDialog({
             </div>
           </header>
 
+          {bootstrapState !== 'ready' ? (
+            <div className="code-dialog__loading-shell">
+              <div className={`code-dialog__loading-card ${bootstrapState === 'error' ? 'is-error' : ''}`}>
+                {bootstrapState === 'error' ? (
+                  <AlertTriangle size={22} />
+                ) : (
+                  <LoaderCircle className="icon-spin" size={22} />
+                )}
+                <strong>
+                  {bootstrapState === 'error'
+                    ? '工作区资源加载失败'
+                    : '正在准备工作区资源'}
+                </strong>
+                <p>
+                  {bootstrapState === 'error'
+                    ? bootstrapErrorMessage
+                    : '文件树、预览能力、交付状态、版本历史和首个代码文件准备完成后，再进入正式页面。'}
+                </p>
+                <div className="code-dialog__loading-meta">
+                  <span>工作区：{workspaceName ?? '当前工作区'}</span>
+                  <span>文件与差异：{treeLoading ? '加载中' : treeError ? '失败' : '就绪'}</span>
+                  <span>预览能力：{previewLoading ? '加载中' : previewError ? '失败' : '就绪'}</span>
+                  <span>交付状态：{deliveryLoading ? '加载中' : deliveryError ? '失败' : '就绪'}</span>
+                  <span>版本历史：{versionsLoading ? '加载中' : versionsError ? '失败' : '就绪'}</span>
+                </div>
+                {bootstrapState === 'error' ? (
+                  <div className="code-dialog__loading-actions">
+                    <button
+                      className="primary-button"
+                      type="button"
+                      onClick={() => setBootstrapAttempt(previous => previous + 1)}
+                    >
+                      重试
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="code-dialog__body">
           <section className="code-delivery-strip">
             <div className="code-delivery-strip__header">
               <div>
@@ -2030,6 +2210,8 @@ export function CodeWorkspaceDialog({
               )}
             </section>
           </div>
+            </div>
+          )}
         </GlassPanel>
       </div>
     </div>

@@ -7,7 +7,23 @@ import extractZip from 'extract-zip'
 import fs from 'fs-extra'
 import { LocalStorageService } from '../storage/local-storage.service'
 import { VersionsService } from '../versions/versions.service'
+import { resolveWorkspaceAppRoot } from '../workspace-app-root'
 import { BuildVersionDto } from './builds.dto'
+
+const BUILD_LOG_LIMIT = 40_000
+
+/**
+ * Appends one stdout or stderr chunk while keeping the newest tail only.
+ * Input: current buffered log and one new chunk.
+ * Output: bounded log string suitable for API responses.
+ */
+function appendBuildLog(current: string, chunk: string): string {
+  const next = `${current}${chunk}`
+  if (next.length <= BUILD_LOG_LIMIT) {
+    return next
+  }
+  return next.slice(next.length - BUILD_LOG_LIMIT)
+}
 
 @Injectable()
 export class BuildsService {
@@ -33,16 +49,34 @@ export class BuildsService {
       await fs.ensureDir(sourceDir)
       await extractZip(version.sourceZipPath, { dir: sourceDir })
 
-      const hasPackageJson = await fs.pathExists(path.join(sourceDir, 'package.json'))
+      const appRoot = await resolveWorkspaceAppRoot(sourceDir) ?? {
+        appRootPath: sourceDir,
+        appRelativePath: '',
+        appDisplayPath: 'repo',
+      }
+      const buildRoot = appRoot.appRootPath
+      const hasPackageJson = await fs.pathExists(path.join(buildRoot, 'package.json'))
       if (hasPackageJson && !input.skipDocker) {
-        buildLog = await this.runDockerBuild(sourceDir, input)
+        if (await this.hasDockerCli()) {
+          buildLog = await this.runDockerBuild(buildRoot, input)
+        } else {
+          buildLog = appendBuildLog(
+            buildLog,
+            `Docker CLI not found. Falling back to host build in ${appRoot.appDisplayPath}.\n`,
+          )
+          buildLog = appendBuildLog(buildLog, await this.runHostBuild(buildRoot, input))
+        }
       } else if (!hasPackageJson) {
-        buildLog = 'No package.json found; copied static source as build artifact.'
+        buildLog = `No package.json found in ${appRoot.appDisplayPath}; copied static source as build artifact.`
       } else {
-        buildLog = 'Docker build skipped by request; copied source as build artifact.'
+        buildLog = appendBuildLog(
+          buildLog,
+          `Docker build skipped by request. Running host build in ${appRoot.appDisplayPath}.\n`,
+        )
+        buildLog = appendBuildLog(buildLog, await this.runHostBuild(buildRoot, input))
       }
 
-      const outputDir = await this.selectBuildOutputDir(sourceDir)
+      const outputDir = await this.selectBuildOutputDir(buildRoot)
       const artifactDir = this.storage.buildArtifactDir(projectId, version.versionId)
       await this.storage.ensureCleanDir(artifactDir)
       await fs.copy(outputDir, artifactDir, {
@@ -64,6 +98,33 @@ export class BuildsService {
     } finally {
       await fs.remove(jobDir).catch(() => undefined)
     }
+  }
+
+  /**
+   * Checks whether Docker CLI is available for containerized frontend builds.
+   * Input: none.
+   * Output: true when `docker --version` can run locally.
+   */
+  private async hasDockerCli(): Promise<boolean> {
+    return new Promise(resolve => {
+      const child = spawn('docker', ['--version'], {
+        windowsHide: true,
+      })
+      let settled = false
+
+      child.on('error', () => {
+        if (!settled) {
+          settled = true
+          resolve(false)
+        }
+      })
+      child.on('close', code => {
+        if (!settled) {
+          settled = true
+          resolve(code === 0)
+        }
+      })
+    })
   }
 
   private async runDockerBuild(sourceDir: string, input: BuildVersionDto): Promise<string> {
@@ -137,19 +198,107 @@ export class BuildsService {
     })
   }
 
-  private async selectBuildOutputDir(sourceDir: string): Promise<string> {
-    const candidates = ['dist', 'build', 'out'].map(name => path.join(sourceDir, name))
+  /**
+   * Runs one host-side dependency install plus build command inside the detected app root.
+   * Input: app-root directory and optional command overrides.
+   * Output: bounded combined stdout and stderr log.
+   */
+  private async runHostBuild(appRootDir: string, input: BuildVersionDto): Promise<string> {
+    const timeoutMs = this.config.get<number>('BUILD_TIMEOUT_MS', 300_000)
+    const installCommand = input.installCommand ?? await this.defaultInstallCommand(appRootDir)
+    const buildCommand = input.buildCommand ?? 'npm run build'
+    const script = `${installCommand} && ${buildCommand}`
+
+    return new Promise((resolve, reject) => {
+      const child = spawn(
+        process.platform === 'win32' ? 'cmd.exe' : 'sh',
+        process.platform === 'win32'
+          ? ['/d', '/s', '/c', script]
+          : ['-lc', script],
+        {
+          cwd: appRootDir,
+          env: {
+            ...process.env,
+            npm_config_fund: 'false',
+            npm_config_audit: 'false',
+          },
+          windowsHide: true,
+        },
+      )
+
+      let output = ''
+      let settled = false
+      const append = (chunk: Buffer): void => {
+        output = appendBuildLog(output, chunk.toString('utf8'))
+      }
+
+      const timeout = setTimeout(() => {
+        if (!settled) {
+          settled = true
+          child.kill('SIGKILL')
+          reject(new BadRequestException(`Host build timed out after ${timeoutMs}ms\n${output}`))
+        }
+      }, timeoutMs)
+
+      child.stdout.on('data', append)
+      child.stderr.on('data', append)
+      child.on('error', error => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timeout)
+          reject(new BadRequestException(`Host build failed to start: ${error.message}`))
+        }
+      })
+      child.on('close', code => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timeout)
+          if (code === 0) {
+            resolve(output)
+          } else {
+            reject(new BadRequestException(`Host build exited with code ${code}\n${output}`))
+          }
+        }
+      })
+    })
+  }
+
+  /**
+   * Selects one default host install command from the lockfile state.
+   * Input: detected app-root directory.
+   * Output: shell-ready dependency install command.
+   */
+  private async defaultInstallCommand(appRootDir: string): Promise<string> {
+    if (await fs.pathExists(path.join(appRootDir, 'pnpm-lock.yaml'))) {
+      return 'pnpm install --frozen-lockfile --prefer-offline'
+    }
+    if (await fs.pathExists(path.join(appRootDir, 'package-lock.json'))) {
+      return 'npm ci'
+    }
+    if (await fs.pathExists(path.join(appRootDir, 'yarn.lock'))) {
+      return 'yarn install --frozen-lockfile'
+    }
+    return 'npm install'
+  }
+
+  /**
+   * Picks the build artifact directory from the detected app root after build completion.
+   * Input: detected app-root directory.
+   * Output: absolute output directory that contains the final index HTML.
+   */
+  private async selectBuildOutputDir(appRootDir: string): Promise<string> {
+    const candidates = ['dist', 'build', 'out'].map(name => path.join(appRootDir, name))
     for (const candidate of candidates) {
       if (await fs.pathExists(path.join(candidate, 'index.html'))) {
         return candidate
       }
     }
 
-    if (await fs.pathExists(path.join(sourceDir, 'index.html'))) {
-      return sourceDir
+    if (await fs.pathExists(path.join(appRootDir, 'index.html'))) {
+      return appRootDir
     }
 
-    throw new BadRequestException('Build did not produce dist/index.html, build/index.html, out/index.html, or root index.html')
+    throw new BadRequestException('Build did not produce dist/index.html, build/index.html, out/index.html, or app-root index.html')
   }
 
   private errorMessage(error: unknown): string {

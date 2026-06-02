@@ -91,6 +91,10 @@ The backend still keeps the Nest business modules for:
   - saved source version history
   - version-to-version diff
   - one-click restore with auto snapshot protection
+  - near-fullscreen modal layout with internal scrolling
+  - whole-dialog bootstrap loading before the first screen renders
+  - open and close transition animations
+  - preview iframe and artifact iframe loading overlays
 - New workspaces no longer auto-seed a placeholder `index.html`.
 - If no previewable entry exists yet, the preview panel stays empty instead of fabricating a page.
 - Chat history recovery now uses turn-safe grouping:
@@ -123,10 +127,12 @@ Supported preview modes:
 Preview runtime behavior:
 
 - user-facing source files stay in `agentHub/data/workspaces/{workspaceId}/repo`
+- frontend preview and delivery builds can auto-detect one nested app root such as `repo/voting-app`
 - shared pnpm store stays in `agentHubBackend/data/pnpm-store`
 - build sandboxes stay in `agentHubBackend/data/build-sandboxes/{workspaceId}/{manifestHash}`
 - built preview outputs stay in `agentHubBackend/data/preview-outputs/{workspaceId}/{cacheKey}`
 - preview build does not write `node_modules`, `dist`, or runtime lockfiles back into the user workspace repo
+- preview build and delivery build fall back to host-side install and build when Docker CLI is unavailable
 
 ## Dependency Management
 
@@ -218,6 +224,14 @@ Real local service smoke also passed on 2026-06-01:
   - restore metadata cleanly
 - Real group-room message stream smoke passed through `POST /api/projects/:projectId/messages/stream`:
   - explicit `@product-manager` message returned `speaker_direct`
+
+Additional local preview smoke passed on 2026-06-02:
+
+- `GET http://127.0.0.1:8790/api/projects/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/preview-capability` detected `voting-app` as the workspace app root and returned `mode: build`.
+- `POST http://127.0.0.1:8790/api/projects/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/preview-build` completed successfully and produced one preview target at `index.html`.
+- `GET http://127.0.0.1:8790/build-preview/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/47280d926db374ad/index.html` returned `200`.
+- `POST http://127.0.0.1:8790/api/projects/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/builds` rebuilt delivery version `v20260602_135651` successfully.
+- `GET http://127.0.0.1:8790/build-preview/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/v20260602_135651/index.html` returned `200`.
   - final visible reply sender was `product-manager`
   - SSE stream completed and state reload reflected the persisted reply
 
