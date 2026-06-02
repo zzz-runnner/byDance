@@ -17,6 +17,7 @@ import { StatusBar } from 'expo-status-bar'
 import { LinearGradient } from 'expo-linear-gradient'
 import { MaterialCommunityIcons } from '@expo/vector-icons'
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import Fuse from 'fuse.js'
 import { AgentGlyph } from './src/components/AgentGlyph'
 import { GlassCard } from './src/components/GlassCard'
 import { Pill } from './src/components/Pill'
@@ -98,10 +99,11 @@ function AnimatedHomeIcon({ size }: { size: number }) {
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('workbench')
   const [navExpanded, setNavExpanded] = useState(false)
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(workspaces[0]?.id ?? '')
   const { width } = useWindowDimensions()
   const layoutTier: LayoutTier = width < 380 ? 'compact' : width < 430 ? 'standard' : 'wide'
   const tightChatHeader = activeTab === 'chat' && layoutTier !== 'wide'
-  const activeWorkspace = workspaces[0]
+  const activeWorkspace = workspaces.find(workspace => workspace.id === activeWorkspaceId) ?? workspaces[0]
   const runningAgents = agents.filter(agent => agent.status !== 'idle').length
   const title = useMemo(() => {
     if (activeTab === 'workbench') return '工作台'
@@ -188,7 +190,18 @@ export default function App() {
             </View>
           ) : (
             <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} showsVerticalScrollIndicator={false}>
-              {activeTab === 'workbench' ? <WorkbenchScreen runningAgents={runningAgents} workspace={activeWorkspace} layoutTier={layoutTier} /> : null}
+              {activeTab === 'workbench' ? (
+                <WorkbenchScreen
+                  runningAgents={runningAgents}
+                  workspace={activeWorkspace}
+                  layoutTier={layoutTier}
+                  onOpenWorkspace={nextWorkspace => {
+                    setActiveWorkspaceId(nextWorkspace.id)
+                    setActiveTab('chat')
+                    setNavExpanded(false)
+                  }}
+                />
+              ) : null}
               {activeTab === 'agents' ? <AgentScreen layoutTier={layoutTier} /> : null}
             </ScrollView>
           )}
@@ -200,10 +213,39 @@ export default function App() {
   )
 }
 
-function WorkbenchScreen({ runningAgents, workspace, layoutTier }: { runningAgents: number; workspace: Workspace; layoutTier: LayoutTier }) {
+type WorkspaceFilter = 'active' | 'updated' | 'pinned' | 'archived'
+
+function WorkbenchScreen({
+  runningAgents,
+  workspace,
+  layoutTier,
+  onOpenWorkspace,
+}: {
+  runningAgents: number
+  workspace: Workspace
+  layoutTier: LayoutTier
+  onOpenWorkspace: (workspace: Workspace) => void
+}) {
   const isCompact = layoutTier === 'compact'
-  const pinnedWorkspaces = workspaces.filter(item => item.pinned)
-  const recentWorkspaces = workspaces.filter(item => !item.archived)
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<WorkspaceFilter>('active')
+  const workspaceSearch = useMemo(
+    () => new Fuse(workspaces, { keys: ['name', 'goal', 'latestEventLabel', 'type'], threshold: 0.36 }),
+    [],
+  )
+  const searchedWorkspaces = query.trim() ? workspaceSearch.search(query.trim()).map(result => result.item) : workspaces
+  const filteredWorkspaces = searchedWorkspaces.filter(item => {
+    if (filter === 'archived') return item.archived
+    if (filter === 'pinned') return item.pinned && !item.archived
+    return !item.archived
+  })
+  const sortedWorkspaces = [...filteredWorkspaces].sort((a, b) => {
+    if (filter === 'pinned') return Number(b.pinned) - Number(a.pinned)
+    if (filter === 'updated') return b.updatedAt.localeCompare(a.updatedAt)
+    return Number(b.status === 'running') - Number(a.status === 'running')
+  })
+  const pinnedWorkspaces = sortedWorkspaces.filter(item => item.pinned)
+  const recentWorkspaces = sortedWorkspaces.filter(item => !item.pinned)
 
   return (
     <View style={[styles.workbenchScreen, isCompact && styles.workspaceScreenCompact]}>
@@ -250,13 +292,27 @@ function WorkbenchScreen({ runningAgents, workspace, layoutTier }: { runningAgen
 
       <GlassCard style={styles.searchCard}>
         <MaterialCommunityIcons name="magnify" size={24} color="#64748b" />
-        <TextInput placeholder="搜索工作区" placeholderTextColor="#94a3b8" style={styles.searchInput} />
+        <TextInput
+          placeholder="搜索工作区"
+          placeholderTextColor="#94a3b8"
+          value={query}
+          onChangeText={setQuery}
+          style={styles.searchInput}
+        />
       </GlassCard>
       <View style={styles.workspaceFilterLine}>
-        <Pill label="Active" tone="blue" icon="check-circle-outline" />
-        <Pill label="Updated" tone="muted" icon="sort-clock-descending-outline" />
-        <Pill label="Pinned first" tone="amber" icon="pin-outline" />
-        <Pill label="归档" tone="muted" icon="archive-outline" />
+        <Pressable onPress={() => setFilter('active')}>
+          <Pill label="Active" tone={filter === 'active' ? 'blue' : 'muted'} icon="check-circle-outline" />
+        </Pressable>
+        <Pressable onPress={() => setFilter('updated')}>
+          <Pill label="Updated" tone={filter === 'updated' ? 'blue' : 'muted'} icon="sort-clock-descending-outline" />
+        </Pressable>
+        <Pressable onPress={() => setFilter('pinned')}>
+          <Pill label="Pinned first" tone={filter === 'pinned' ? 'amber' : 'muted'} icon="pin-outline" />
+        </Pressable>
+        <Pressable onPress={() => setFilter('archived')}>
+          <Pill label="归档" tone={filter === 'archived' ? 'blue' : 'muted'} icon="archive-outline" />
+        </Pressable>
       </View>
 
       <View style={styles.workbenchSectionHead}>
@@ -264,7 +320,7 @@ function WorkbenchScreen({ runningAgents, workspace, layoutTier }: { runningAgen
         <Text style={styles.workbenchSectionMeta}>{pinnedWorkspaces.length} 个</Text>
       </View>
       {pinnedWorkspaces.map(item => (
-        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} />
+        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} onPress={() => onOpenWorkspace(item)} />
       ))}
 
       <View style={styles.workbenchSectionHead}>
@@ -272,8 +328,16 @@ function WorkbenchScreen({ runningAgents, workspace, layoutTier }: { runningAgen
         <Text style={styles.workbenchSectionMeta}>按活跃度排序</Text>
       </View>
       {recentWorkspaces.slice(0, 3).map(item => (
-        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} />
+        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} onPress={() => onOpenWorkspace(item)} />
       ))}
+
+      {sortedWorkspaces.length === 0 ? (
+        <GlassCard style={styles.emptyStateCard}>
+          <MaterialCommunityIcons name="database-search-outline" size={28} color="#64748b" />
+          <Text style={styles.cardTitle}>没有匹配的工作区</Text>
+          <Text style={styles.bodyText}>换一个关键词或筛选条件试试。</Text>
+        </GlassCard>
+      ) : null}
 
       <GlassCard style={styles.activityCard}>
         <View style={styles.sectionHead}>
@@ -792,7 +856,7 @@ function Feature({ icon, label }: { icon: IconName; label: string }) {
   )
 }
 
-function WorkspaceCard({ workspace, layoutTier }: { workspace: Workspace; layoutTier: LayoutTier }) {
+function WorkspaceCard({ workspace, layoutTier, onPress }: { workspace: Workspace; layoutTier: LayoutTier; onPress?: () => void }) {
   const isCompact = layoutTier === 'compact'
   const iconName = workspace.kind === 'group' ? 'school-outline' : 'account-group-outline'
   const typeLabel = workspace.type === 'dev' ? 'dev' : workspace.type === 'chat' ? 'chat' : workspace.type === 'research' ? 'research' : 'writing'
@@ -801,7 +865,8 @@ function WorkspaceCard({ workspace, layoutTier }: { workspace: Workspace; layout
   const extraAgents = Math.max(0, workspace.agents.length - 4)
 
   return (
-    <GlassCard style={[styles.workspaceCard, isCompact && styles.workspaceCardCompact]}>
+    <Pressable onPress={onPress} disabled={!onPress}>
+      <GlassCard style={[styles.workspaceCard, isCompact && styles.workspaceCardCompact]}>
       <View style={styles.workspaceTopRow}>
         <LinearGradient colors={workspace.kind === 'group' ? ['#4f8dfc', '#6ea5ff'] : ['#8f71f6', '#a98df8']} start={{ x: 0.08, y: 0.1 }} end={{ x: 1, y: 1 }} style={styles.workspaceIconTile}>
           <MaterialCommunityIcons name={iconName} size={48} color="#fff" />
@@ -856,7 +921,8 @@ function WorkspaceCard({ workspace, layoutTier }: { workspace: Workspace; layout
         </View>
         <MaterialCommunityIcons name="chevron-right" size={22} color="#64748b" />
       </View>
-    </GlassCard>
+      </GlassCard>
+    </Pressable>
   )
 }
 
@@ -1205,6 +1271,11 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 12,
     fontWeight: '900',
+  },
+  emptyStateCard: {
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 22,
   },
   workspaceScreen: {
     gap: 14,
