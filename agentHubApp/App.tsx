@@ -1108,6 +1108,7 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
     return agent.status === filter
   })
   const deleteAgent = (agentId: string) => {
+    if (agentId === 'orchestrator' || agentId === 'engineer') return
     setVisibleAgents(current => current.filter(agent => agent.id !== agentId))
     if (selectedAgent?.id === agentId) setSelectedAgent(null)
   }
@@ -1493,15 +1494,17 @@ function AgentCard({ agent, layoutTier, onPress, onDelete }: { agent: Agent; lay
         <View style={styles.agentCardTop}>
           <Text style={styles.agentName} numberOfLines={1}>{agent.name}</Text>
           <View style={styles.agentCardActions}>
-            <Pressable
-              style={styles.agentDeleteButton}
-              onPress={event => {
-                event.stopPropagation()
-                onDelete?.()
-              }}
-            >
-              <MaterialCommunityIcons name="trash-can-outline" size={19} color="#ef4444" />
-            </Pressable>
+            {!isBuiltin ? (
+              <Pressable
+                style={styles.agentDeleteButton}
+                onPress={event => {
+                  event.stopPropagation()
+                  onDelete?.()
+                }}
+              >
+                <MaterialCommunityIcons name="trash-can-outline" size={19} color="#ef4444" />
+              </Pressable>
+            ) : null}
             <MaterialCommunityIcons name="chevron-right" size={26} color="#64748b" />
           </View>
         </View>
