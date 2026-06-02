@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Animated,
   Easing,
+  Image,
   ImageBackground,
   KeyboardAvoidingView,
   Platform,
@@ -82,9 +83,7 @@ function AnimatedHomeIcon({ size }: { size: number }) {
   })
 
   return (
-    <Animated.Image
-      source={homeIcon}
-      resizeMode="contain"
+    <Animated.View
       style={[
         styles.animatedHomeIcon,
         {
@@ -93,7 +92,9 @@ function AnimatedHomeIcon({ size }: { size: number }) {
           transform: [{ translateY }, { scale }],
         },
       ]}
-    />
+    >
+      <Image source={homeIcon} resizeMode="contain" style={styles.animatedHomeIconImage} />
+    </Animated.View>
   )
 }
 
@@ -1035,9 +1036,17 @@ const styles = StyleSheet.create({
   homeHeroOrb: {
     alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 116,
+    minWidth: 124,
   },
-  animatedHomeIcon: {},
+  animatedHomeIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
+  animatedHomeIconImage: {
+    width: '100%',
+    height: '100%',
+  },
   homeStatGrid: {
     flexDirection: 'row',
     gap: 10,
