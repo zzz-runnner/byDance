@@ -815,6 +815,7 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
   const runningCount = agents.filter(agent => agent.status !== 'idle').length
   const builtinCount = agents.filter(agent => agent.id === 'orchestrator' || agent.id === 'engineer').length
   const showFullRegistry = layoutTier === 'wide'
+  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
 
   return (
     <View style={styles.agentScreen}>
@@ -865,9 +866,10 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
       </View>
 
       {agents.slice(0, 4).map(agent => (
-        <AgentCard key={agent.id} agent={agent} layoutTier={layoutTier} />
+        <AgentCard key={agent.id} agent={agent} layoutTier={layoutTier} onPress={() => setSelectedAgent(agent)} />
       ))}
       <Text style={styles.agentLoadedText}>已加载全部 {agents.length} 个 Agent</Text>
+      <AgentDetailModal agent={selectedAgent} onClose={() => setSelectedAgent(null)} />
     </View>
   )
 }
@@ -1066,7 +1068,94 @@ function ArtifactStrip({ artifacts: items }: { artifacts: Artifact[] }) {
   )
 }
 
-function AgentCard({ agent, layoutTier }: { agent: Agent; layoutTier: LayoutTier }) {
+function AgentDetailModal({ agent, onClose }: { agent: Agent | null; onClose: () => void }) {
+  if (!agent) return null
+
+  const isBuiltin = agent.id === 'orchestrator' || agent.id === 'engineer'
+  const statusLabel = agent.status === 'running' ? '运行中' : agent.status === 'reviewing' ? '审查中' : '空闲中'
+  const recentWorkspaces = workspaces.filter(workspace => workspace.agents.includes(agent.id)).slice(0, 2)
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={styles.modalScrim} onPress={onClose} />
+        <GlassCard style={styles.agentDetailSheet}>
+          <View style={styles.artifactDetailHandle} />
+          <View style={styles.artifactDetailHead}>
+            <View style={styles.agentDetailTitleRow}>
+              <AgentGlyph agentId={agent.id} size={58} />
+              <View style={styles.artifactDetailTitleCopy}>
+                <Text style={styles.homeWorkspaceEyebrow}>{isBuiltin ? 'BUILT-IN AGENT' : 'CUSTOM AGENT'}</Text>
+                <Text style={styles.artifactDetailTitle}>{agent.name}</Text>
+              </View>
+            </View>
+            <Pressable style={styles.artifactCloseButton} onPress={onClose}>
+              <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
+            </Pressable>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.artifactDetailContent}>
+            <View style={styles.agentDetailStatusRow}>
+              <View style={[styles.agentStatusBadge, styles[agent.status === 'running' ? 'running' : agent.status === 'reviewing' ? 'reviewing' : 'idle']]}>
+                <View style={[styles.agentStatusDot, styles[`${agent.status === 'running' ? 'running' : agent.status === 'reviewing' ? 'reviewing' : 'idle'}Dot`]]} />
+                <Text style={[styles.agentStatusText, styles[`${agent.status === 'running' ? 'running' : agent.status === 'reviewing' ? 'reviewing' : 'idle'}Text`]]}>{statusLabel}</Text>
+              </View>
+              <View style={styles.homeMetaChip}>
+                <Text style={styles.homeMetaTextBlue}>{agent.provider}</Text>
+              </View>
+              <View style={styles.homeMetaChip}>
+                <Text style={styles.homeMetaTextGray}>model mock</Text>
+              </View>
+            </View>
+
+            <View style={styles.artifactSection}>
+              <Text style={styles.sectionTitle}>角色说明</Text>
+              <Text style={styles.artifactHeroSummary}>{agent.role}</Text>
+            </View>
+
+            <View style={styles.artifactSection}>
+              <Text style={styles.sectionTitle}>技能标签</Text>
+              <View style={styles.agentSkillLine}>
+                {agent.skills.map(skill => (
+                  <View key={skill} style={styles.agentSkillChip}>
+                    <Text style={styles.agentSkillText}>{skill}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.artifactSection}>
+              <Text style={styles.sectionTitle}>最近参与</Text>
+              {recentWorkspaces.map(workspace => (
+                <View key={workspace.id} style={styles.activityRow}>
+                  <View style={styles.activityDot} />
+                  <View style={styles.activityCopy}>
+                    <Text style={styles.cardTitle}>{workspace.name}</Text>
+                    <Text style={styles.bodyText} numberOfLines={1}>{workspace.latestEventLabel}</Text>
+                  </View>
+                  <Text style={styles.activityTime}>{workspace.updatedAt}</Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.artifactSectionGrid}>
+              <View style={styles.artifactMiniPanel}>
+                <Text style={styles.sectionTitle}>轻管理</Text>
+                <Text style={styles.bodyText}>{isBuiltin ? '内置 Agent 仅支持查看资料。' : '可编辑名称、简介、provider、model 与技能标签。'}</Text>
+              </View>
+              <Pressable style={[styles.agentEditMockButton, isBuiltin && styles.agentEditMockButtonDisabled]}>
+                <MaterialCommunityIcons name={isBuiltin ? 'lock-outline' : 'pencil-outline'} size={20} color={isBuiltin ? '#94a3b8' : '#fff'} />
+                <Text style={[styles.agentEditMockText, isBuiltin && styles.agentEditMockTextDisabled]}>{isBuiltin ? '不可编辑' : '基础编辑'}</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
+        </GlassCard>
+      </View>
+    </Modal>
+  )
+}
+
+function AgentCard({ agent, layoutTier, onPress }: { agent: Agent; layoutTier: LayoutTier; onPress?: () => void }) {
   const isBuiltin = agent.id === 'orchestrator' || agent.id === 'engineer'
   const statusLabel = agent.status === 'running' ? '运行中' : agent.status === 'reviewing' ? '审查中' : '空闲中'
   const statusTone = agent.status === 'running' ? 'running' : agent.status === 'reviewing' ? 'reviewing' : 'idle'
@@ -1075,7 +1164,8 @@ function AgentCard({ agent, layoutTier }: { agent: Agent; layoutTier: LayoutTier
   const avatarSize = isCompact ? 54 : isStandard ? 60 : 78
 
   return (
-    <GlassCard style={[styles.agentCard, (isCompact || isStandard) && styles.agentCardResponsive]}>
+    <Pressable onPress={onPress} disabled={!onPress}>
+      <GlassCard style={[styles.agentCard, (isCompact || isStandard) && styles.agentCardResponsive]}>
       <AgentGlyph agentId={agent.id} size={avatarSize} />
       <View style={styles.agentCopy}>
         <View style={styles.agentCardTop}>
@@ -1115,7 +1205,8 @@ function AgentCard({ agent, layoutTier }: { agent: Agent; layoutTier: LayoutTier
           </View>
         </View>
       </View>
-    </GlassCard>
+      </GlassCard>
+    </Pressable>
   )
 }
 
@@ -2170,6 +2261,49 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     fontSize: 13,
     fontWeight: '900',
+  },
+  agentDetailSheet: {
+    maxHeight: '78%',
+    marginHorizontal: 12,
+    marginBottom: Platform.select({ ios: 18, android: 12, default: 16 }),
+    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.select({ ios: 24, android: 18, default: 22 }),
+    borderRadius: 28,
+    gap: 12,
+  },
+  agentDetailTitleRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  agentDetailStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  agentEditMockButton: {
+    flex: 1,
+    minHeight: 88,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: 18,
+    backgroundColor: '#2563eb',
+  },
+  agentEditMockButtonDisabled: {
+    backgroundColor: 'rgba(226,232,240,0.82)',
+  },
+  agentEditMockText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  agentEditMockTextDisabled: {
+    color: '#94a3b8',
   },
   chatComposer: {
     minHeight: 68,
