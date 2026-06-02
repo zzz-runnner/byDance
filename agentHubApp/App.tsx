@@ -215,6 +215,7 @@ export default function App() {
 }
 
 type WorkspaceFilter = 'active' | 'updated' | 'pinned' | 'archived'
+type AgentFilter = 'all' | 'running' | 'reviewing' | 'idle' | 'builtin'
 
 function WorkbenchScreen({
   runningAgents,
@@ -816,6 +817,18 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
   const builtinCount = agents.filter(agent => agent.id === 'orchestrator' || agent.id === 'engineer').length
   const showFullRegistry = layoutTier === 'wide'
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<AgentFilter>('all')
+  const agentSearch = useMemo(
+    () => new Fuse(agents, { keys: ['name', 'role', 'provider', 'skills'], threshold: 0.34 }),
+    [],
+  )
+  const searchedAgents = query.trim() ? agentSearch.search(query.trim()).map(result => result.item) : agents
+  const filteredAgents = searchedAgents.filter(agent => {
+    if (filter === 'all') return true
+    if (filter === 'builtin') return agent.id === 'orchestrator' || agent.id === 'engineer'
+    return agent.status === filter
+  })
 
   return (
     <View style={styles.agentScreen}>
@@ -856,19 +869,46 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
       <View style={[styles.agentSearchRow, layoutTier === 'compact' && styles.agentSearchRowCompact]}>
         <GlassCard compact style={styles.agentSearchBox}>
           <MaterialCommunityIcons name="magnify" size={22} color="#64748b" />
-          <Text style={styles.agentSearchPlaceholder}>搜索 Agent</Text>
+          <TextInput
+            placeholder="搜索 Agent"
+            placeholderTextColor="#94a3b8"
+            value={query}
+            onChangeText={setQuery}
+            style={styles.agentSearchInput}
+          />
         </GlassCard>
         <GlassCard compact style={styles.agentFilterButton}>
           <MaterialCommunityIcons name="filter-outline" size={21} color="#475569" />
-          <Text style={styles.agentFilterText}>全部状态</Text>
+          <Text style={styles.agentFilterText}>{filter === 'all' ? '全部状态' : filter === 'running' ? '运行中' : filter === 'reviewing' ? '审查中' : filter === 'idle' ? '空闲' : '内置'}</Text>
           <MaterialCommunityIcons name="menu-down" size={19} color="#64748b" />
         </GlassCard>
       </View>
 
-      {agents.slice(0, 4).map(agent => (
+      <View style={styles.agentFilterChips}>
+        {[
+          { key: 'all' as AgentFilter, label: '全部', icon: 'apps' as IconName },
+          { key: 'running' as AgentFilter, label: '运行中', icon: 'play-circle-outline' as IconName },
+          { key: 'reviewing' as AgentFilter, label: '审查中', icon: 'shield-check-outline' as IconName },
+          { key: 'idle' as AgentFilter, label: '空闲', icon: 'sleep' as IconName },
+          { key: 'builtin' as AgentFilter, label: '内置', icon: 'layers-triple' as IconName },
+        ].map(item => (
+          <Pressable key={item.key} onPress={() => setFilter(item.key)}>
+            <Pill label={item.label} tone={filter === item.key ? 'blue' : 'muted'} icon={item.icon} />
+          </Pressable>
+        ))}
+      </View>
+
+      {filteredAgents.map(agent => (
         <AgentCard key={agent.id} agent={agent} layoutTier={layoutTier} onPress={() => setSelectedAgent(agent)} />
       ))}
-      <Text style={styles.agentLoadedText}>已加载全部 {agents.length} 个 Agent</Text>
+      {filteredAgents.length === 0 ? (
+        <GlassCard style={styles.emptyStateCard}>
+          <MaterialCommunityIcons name="account-search-outline" size={28} color="#64748b" />
+          <Text style={styles.cardTitle}>没有匹配的 Agent</Text>
+          <Text style={styles.bodyText}>换一个关键词或状态筛选试试。</Text>
+        </GlassCard>
+      ) : null}
+      <Text style={styles.agentLoadedText}>已显示 {filteredAgents.length} / {agents.length} 个 Agent</Text>
       <AgentDetailModal agent={selectedAgent} onClose={() => setSelectedAgent(null)} />
     </View>
   )
@@ -3018,6 +3058,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
   },
+  agentSearchInput: {
+    flex: 1,
+    minWidth: 0,
+    color: '#0f172a',
+    fontSize: 16,
+    fontWeight: '800',
+  },
   agentFilterButton: {
     minHeight: 56,
     flexDirection: 'row',
@@ -3030,6 +3077,11 @@ const styles = StyleSheet.create({
     color: '#475569',
     fontSize: 13,
     fontWeight: '900',
+  },
+  agentFilterChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   agentCard: {
     minHeight: 144,
