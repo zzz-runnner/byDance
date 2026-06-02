@@ -298,7 +298,7 @@ export function buildAgentSessionContextPackage(input: AgentSessionContextInput)
   return JSON.stringify(
     {
       userMessage: input.userMessage,
-      replyContext: buildReplyContextPayload(input.replyTo, [input.agent]),
+      replyContext: buildReplyContextPayload(input.replyTo, input.state.agents),
       codeSelection: input.codeSelection
         ? {
             filePath: input.codeSelection.filePath,

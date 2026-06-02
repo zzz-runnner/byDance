@@ -21,6 +21,7 @@ type AgentSessionReplyInput = {
   workspace: Workspace
   conversation: Conversation
   agent: AgentDefinition
+  agents?: AgentDefinition[]
   userMessage: string
   replyTo?: ReplyReference
   codeSelection?: CodeSelectionReference
@@ -141,7 +142,7 @@ export function buildAgentSessionReplyRequest(input: AgentSessionReplyInput): Mo
     ].join('\n'),
     userPrompt: jsonBlock({
       userMessage: input.userMessage,
-      replyContext: buildReplyContextPayload(input.replyTo, [input.agent]),
+      replyContext: buildReplyContextPayload(input.replyTo, input.agents ?? [input.agent]),
       codeSelection: buildCodeSelectionPayload(input.codeSelection),
       workspace: {
         id: input.workspace.id,

@@ -1,4 +1,5 @@
 import type { AgentDefinition, Conversation, ReplyReference } from '@shared/contracts'
+import { resolveAgentDisplayName } from '../agents/agent-presentation'
 
 export type ReplyContextPayload = {
   messageId: string
@@ -15,20 +16,15 @@ export type ReplyContextPayload = {
  * Input: reply reference plus the current agent registry. Output: readable sender name.
  */
 function resolveReplySenderName(replyTo: ReplyReference, agents: AgentDefinition[]): string {
-  const explicitName = replyTo.senderName?.trim()
-  if (explicitName) {
-    return explicitName
+  if (
+    replyTo.senderId === 'user' ||
+    replyTo.senderId === 'orchestrator' ||
+    agents.some(agent => agent.id === replyTo.senderId)
+  ) {
+    return resolveAgentDisplayName(agents, replyTo.senderId)
   }
 
-  if (replyTo.senderId === 'user') {
-    return 'User'
-  }
-
-  if (replyTo.senderId === 'orchestrator') {
-    return 'Project Orchestrator'
-  }
-
-  return agents.find(agent => agent.id === replyTo.senderId)?.name ?? replyTo.senderId
+  return replyTo.senderName?.trim() || replyTo.senderId
 }
 
 /**

@@ -69,7 +69,11 @@ The backend still keeps the Nest business modules for:
   - quoted child-agent reply follow-up
   - code selection, which defaults to `engineer` when no explicit target is given
 - Direct rooms stay fixed to one agent and do not show the mention picker.
-- Visible speaker identity comes from runtime routing and is no longer flattened to Orchestrator.
+- The built-in orchestrator keeps the stable id `orchestrator`, while its default display name is now `项目经理 Agent`.
+- Agent `name` is now the editable display identity, while `id` stays the stable key for routing, storage, session binding, and conversation participants.
+- Visible speaker identity now resolves from the current agent registry instead of flattening replies to one built-in coordinator label.
+- Editing an agent name now refreshes direct-room titles, agent-session titles, direct-room composer copy, and reply sender labels that can still resolve through the live agent registry.
+- Group-room explicit child-agent mentions now match stable ids, full current display names, and short display-name aliases.
 - Built-in and custom child agents can now be viewed, created, edited, provider-switched, and deleted from the frontend through the business backend API.
 - The left workspace rail uses server-backed paging through `/api/workbench`.
 - The left workspace rail also supports backend-backed search, status filtering, sorting, pinning, and archiving.

@@ -21,6 +21,7 @@ import {
   createZipArtifact,
   createZipReadyEvent,
 } from './orchestrator/artifacts'
+import { syncAgentDerivedTitles } from './agents/agent-presentation'
 import { handleUserMessage, type WorkflowServices } from './orchestrator/workflow'
 
 const CreateConversationInputSchema = z.object({
@@ -587,18 +588,20 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
   app.patch('/api/agents/:agentId', async (request, reply) => {
     const params = AgentParamsSchema.parse(request.params)
     const input = UpdateAgentInputSchema.parse(request.body)
-    const updated = services.store.updateAgent
-      ? await services.store.updateAgent(
-          params.agentId,
-          agent => updateAgentDefinition(agent, input),
-        )
-      : await services.store.update(state => {
-          const agent = state.agents.find(item => item.id === params.agentId)
-          if (!agent) {
-            return undefined
-          }
-          return updateAgentDefinition(agent, input)
-        })
+    const updated = await services.store.update(state => {
+      const agent = state.agents.find(item => item.id === params.agentId)
+      if (!agent) {
+        return undefined
+      }
+
+      const previousAgent = {
+        id: agent.id,
+        name: agent.name,
+      }
+      const updatedAgent = updateAgentDefinition(agent, input)
+      syncAgentDerivedTitles(state, previousAgent, updatedAgent, updatedAgent.updatedAt)
+      return updatedAgent
+    })
     if (!updated) {
       reply.status(404)
       return reply.send({ error: `Agent not found: ${params.agentId}` })

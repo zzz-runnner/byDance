@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react'
 import {
+  agentDisplayName,
   buildAgentMap,
   formatTime,
   workspaceRoomKindLabel,
@@ -188,7 +189,7 @@ function groupMentionOptions(room: WorkspaceRoom | undefined, agentMap: Map<stri
     .filter(agentId => agentId !== 'orchestrator')
     .map(agentId => ({
       id: agentId,
-      name: agentMap.get(agentId)?.name ?? agentId,
+      name: agentDisplayName(agentMap.get(agentId), agentId),
     }))
 }
 
@@ -293,6 +294,7 @@ export function ChatPane({
 }: ChatPaneProps) {
   const agentMap = buildAgentMap(state)
   const activeAgent = room?.targetAgentId ? agentMap.get(room.targetAgentId) : undefined
+  const activeAgentName = agentDisplayName(activeAgent, room?.targetAgentId)
   const mentionOptions = groupMentionOptions(room, agentMap)
   const timelineItems = useMemo(
     () =>
@@ -566,7 +568,7 @@ export function ChatPane({
             <h1>{room?.title ?? '选择一个工作区'}</h1>
             <span className="chat-subtitle">
               {room?.kind === 'direct'
-                ? `固定发给 ${activeAgent?.name ?? room.targetAgentId ?? 'Agent'}`
+                ? `固定发给 ${activeAgentName}`
                 : '支持 @ 指定子 Agent，执行过程、产物和最终结果都会直接落在聊天记录里'}
             </span>
           </div>
@@ -617,7 +619,7 @@ export function ChatPane({
               <MessageBubble
                 key={item.id}
                 message={item.message}
-                senderName={item.message.senderType === 'agent' ? agentMap.get(item.message.senderId)?.name : undefined}
+                senderName={item.message.senderType === 'agent' ? agentDisplayName(agentMap.get(item.message.senderId), item.message.senderId) : undefined}
                 onReply={onReplyToMessage}
                 onCopy={onCopyMessage}
               />
@@ -647,6 +649,7 @@ export function ChatPane({
 
       <ChatComposer
         room={room}
+        targetAgentName={activeAgentName}
         sending={sending}
         mentionOptions={mentionOptions}
         replyTarget={replyTarget}
@@ -694,12 +697,12 @@ function TurnBlock({
   const finalMessage = turn.finalMessage
   const streamingMessage = turn.streamingMessage
   const settlingMessage = turn.settlingMessage
-  const finalSpeakerName = finalMessage?.senderType === 'agent' ? agentMap.get(finalMessage.senderId)?.name : undefined
+  const finalSpeakerName = finalMessage?.senderType === 'agent' ? agentDisplayName(agentMap.get(finalMessage.senderId), finalMessage.senderId) : undefined
   const streamingSpeakerName = streamingMessage?.senderType === 'agent'
-    ? agentMap.get(streamingMessage.senderId)?.name
+    ? agentDisplayName(agentMap.get(streamingMessage.senderId), streamingMessage.senderId)
     : undefined
   const settlingSpeakerName = settlingMessage?.senderType === 'agent'
-    ? agentMap.get(settlingMessage.senderId)?.name
+    ? agentDisplayName(agentMap.get(settlingMessage.senderId), settlingMessage.senderId)
     : undefined
 
   return (
@@ -735,7 +738,7 @@ function TurnBlock({
                   <ProcessEntryCard
                     key={entry.id}
                     entry={entry}
-                    agentName={entry.agentId ? agentMap.get(entry.agentId)?.name : undefined}
+                    agentName={entry.agentId ? agentDisplayName(agentMap.get(entry.agentId), entry.agentId) : undefined}
                     enterDelayMs={Math.min(index, 4) * 36}
                     animate={turn.status === 'running'}
                   />
@@ -1487,6 +1490,7 @@ function EmptyChatState({ room, loading }: EmptyChatStateProps) {
 
 type ChatComposerProps = {
   room: WorkspaceRoom | undefined
+  targetAgentName?: string
   sending: boolean
   mentionOptions: AgentMentionOption[]
   replyTarget?: ReplyReference
@@ -1504,6 +1508,7 @@ type ChatComposerProps = {
  */
 function ChatComposer({
   room,
+  targetAgentName,
   sending,
   mentionOptions,
   replyTarget,
@@ -1525,7 +1530,7 @@ function ChatComposer({
   const placeholder =
     disabledReason ||
     (room?.kind === 'direct'
-      ? `发送给 ${room.targetAgentId ?? 'Agent'}，例如：/run 检查当前产物并给出结论`
+      ? `发送给 ${targetAgentName ?? room.targetAgentId ?? 'Agent'}，例如：/run 检查当前产物并给出结论`
       : '给群聊工作区发送任务，例如：@engineer 实现页面，并让 @reviewer 验收')
   const filteredMentionOptions =
     room?.kind === 'group' && mentionMatch

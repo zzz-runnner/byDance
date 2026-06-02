@@ -1,5 +1,6 @@
 import type { AgentDefinition, AppState } from '@shared/contracts'
 import { isoNow } from '@shared/contracts'
+import { DEFAULT_ORCHESTRATOR_AGENT_NAME } from '../agents/agent-presentation'
 
 /**
  * Creates a built-in agent definition with the shared AgentHub defaults.
@@ -47,7 +48,7 @@ export function createSeedState(): AppState {
         runtimeType: 'local',
         runtimeStatus: 'ready',
         projectBrief:
-          '第一版只做 dev 工作区，采用 IM 聊天入口，由 Orchestrator 调度 Claude Code 与 Codex 子 Agent。',
+          '第一版只做 dev 工作区，采用 IM 聊天入口，由主脑调度 Claude Code 与 Codex 子 Agent。',
         pinnedMessageIds: ['msg-seed-system'],
         createdAt: now,
         updatedAt: now,
@@ -100,7 +101,7 @@ export function createSeedState(): AppState {
         conversationId: groupConversationId,
         senderType: 'agent',
         senderId: 'orchestrator',
-        content: 'Orchestrator 会先把需求整理为任务包，再按串行方式调用工程与审查 Agent。右侧产物面板会展示预览和运行摘要。',
+        content: '主脑会先把需求整理为任务包，再按串行方式调用工程与审查 Agent。右侧产物面板会展示预览和运行摘要。',
         artifacts: [
           {
             id: artifactId,
@@ -120,7 +121,7 @@ export function createSeedState(): AppState {
     agents: [
       createAgent({
         id: 'orchestrator',
-        name: '项目协调 Agent',
+        name: DEFAULT_ORCHESTRATOR_AGENT_NAME,
         role: '负责理解用户请求、拆任务、调度子 Agent 并汇总结果。',
         description: 'AgentHub 主脑，借鉴 Claude Code 的主循环、工具权限和上下文包范式。',
         whenToUse: '群聊任务、跨 Agent 协作、任务拆解和结果汇总时调用。',

@@ -5,6 +5,7 @@ import fs from 'fs-extra'
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { AgentHubClientService } from '../agent-hub/agent-hub.service'
 import { AgentHubState, AgentHubWorkspace } from '../agent-hub/agent-hub.types'
+import { agentDisplayName, findMentionedAgentId } from '../common/agent-presentation'
 import { isoNow } from '../common/time'
 import { readConfig } from '../config'
 import { PreviewAsset, PreviewService } from '../preview-service'
@@ -815,11 +816,10 @@ function requireAgent(state: AgentHubState, agentId: string) {
  * Output: AgentHub conversation creation payload.
  */
 function buildDirectConversationInput(workspaceId: string, agent: AgentHubState['agents'][number]) {
-  const agentName = typeof agent.name === 'string' && agent.name.length > 0 ? agent.name : agent.id
   return {
     workspaceId,
     type: 'direct' as const,
-    title: `${agentName} direct`,
+    title: `${agentDisplayName(agent)} 私聊`,
     participants: ['user', agent.id],
   }
 }
@@ -847,17 +847,5 @@ function resolveMentionTargetAgentId(
   content: string,
   agents: AgentHubState['agents'],
 ): string | undefined {
-  const normalized = content.toLowerCase()
-  const matches = [...new Set(
-    agents
-      .filter(agent => agent.id !== 'orchestrator')
-      .filter(agent => {
-        const agentId = agent.id.toLowerCase()
-        const agentName = typeof agent.name === 'string' ? agent.name.toLowerCase() : undefined
-        return normalized.includes(`@${agentId}`) || Boolean(agentName && normalized.includes(`@${agentName}`))
-      })
-      .map(agent => agent.id),
-  )]
-
-  return matches.length === 1 ? matches[0] : undefined
+  return findMentionedAgentId(content, agents, { includeOrchestrator: false })
 }

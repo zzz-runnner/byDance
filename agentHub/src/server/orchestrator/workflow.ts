@@ -20,6 +20,11 @@ import type {
 import { isoNow } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import { createAdapterForAgent, runAgentWithFallback } from '../adapters'
+import {
+  ORCHESTRATOR_AGENT_ID,
+  agentMentionAliases,
+  resolveAgentDisplayName,
+} from '../agents/agent-presentation'
 import type { StateStore } from '../store/types'
 import { WorkspaceRuntimeManager } from '../runtime/workspace'
 import type { LocalToolGateway } from '../tool-gateway'
@@ -94,6 +99,15 @@ type TaskRunSessionScope = {
 }
 
 /**
+ * Resolves the current orchestrator display name from the active agent registry.
+ * Input: current agent definitions.
+ * Output: display-ready orchestrator name.
+ */
+function orchestratorDisplayName(agents: AgentDefinition[]): string {
+  return resolveAgentDisplayName(agents, ORCHESTRATOR_AGENT_ID)
+}
+
+/**
  * Returns whether this stage should still go through the planner and handoff path.
  * Input: current task stage. Output: true when direct child-speaker shortcut should be skipped.
  */
@@ -159,8 +173,8 @@ function applyExecutionSafety(
     workspaceId: workspace.id,
     conversationId: conversation.id,
     runId: `routing-${conversation.id}`,
-    agentId: 'orchestrator',
-    agentName: 'Project Orchestrator',
+    agentId: ORCHESTRATOR_AGENT_ID,
+    agentName: orchestratorDisplayName(state.agents),
     message: `Parallel execution downgraded to serial because file-writing agents require exclusive workspace writes: ${fileWritingAgents
       .map(agent => agent.id)
       .join(', ')}.`,
@@ -211,8 +225,8 @@ function applyTaskStageGuard(
       workspaceId: workspace.id,
       conversationId: conversation.id,
       runId: `routing-${conversation.id}`,
-      agentId: 'orchestrator',
-      agentName: '项目协调 Agent',
+      agentId: ORCHESTRATOR_AGENT_ID,
+      agentName: orchestratorDisplayName(state.agents),
       message: `当前处于${route.taskStage === 'requirements_intake' ? '需求对接' : '方案规划'}阶段，已改为由产品经理先接管本轮澄清。`,
     })
 
@@ -258,8 +272,8 @@ function applyTaskStageGuard(
         workspaceId: workspace.id,
         conversationId: conversation.id,
         runId: `routing-${conversation.id}`,
-        agentId: 'orchestrator',
-        agentName: '项目协调 Agent',
+        agentId: ORCHESTRATOR_AGENT_ID,
+        agentName: orchestratorDisplayName(state.agents),
         message: `当前处于${route.taskStage === 'requirements_intake' ? '需求对接' : '方案规划'}阶段，已暂缓工程实现：${removedDispatches
           .map(brief => brief.agentId)
           .join(', ')}。`,
@@ -437,19 +451,6 @@ async function buildReviewerEvidence(
 }
 
 /**
- * Builds lowercase aliases that can match one leading @ mention for an agent.
- * Input: agent definition.
- * Output: normalized alias strings ordered later by the caller when needed.
- */
-function agentMentionAliases(agent: AgentDefinition): string[] {
-  const name = agent.name?.trim() ?? ''
-  const shortName = name ? name.split(/\s+/)[0] : ''
-  return [...new Set([agent.id, name, shortName]
-    .map(alias => alias.trim().toLowerCase())
-    .filter(Boolean))]
-}
-
-/**
  * Removes one leading self-mention before sending content into a direct agent turn.
  * Input: raw user content and the target agent definition.
  * Output: content without the leading @alias when it matches the target agent.
@@ -515,8 +516,8 @@ function applyReviewSafety(
     workspaceId: workspace.id,
     conversationId: conversation.id,
     runId: `routing-${conversation.id}`,
-    agentId: 'orchestrator',
-    agentName: 'Project Orchestrator',
+    agentId: ORCHESTRATOR_AGENT_ID,
+    agentName: orchestratorDisplayName(state.agents),
     message: 'Added reviewer dispatch because an engineer execution requires review before final synthesis.',
   })
 
@@ -1463,8 +1464,8 @@ async function runSynthesis(
       workspaceId: workspace.id,
       conversationId: conversation.id,
       runId: `synthesis-${conversation.id}`,
-      agentId: 'orchestrator',
-      agentName: '项目协调 Agent',
+      agentId: ORCHESTRATOR_AGENT_ID,
+      agentName: orchestratorDisplayName(state.agents),
       message: `主脑正在综合子 Agent 结果，第 ${tick} 次刷新。`,
     }),
     async () => {
@@ -2081,8 +2082,8 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       workspaceId: input.workspaceId,
       conversationId: input.conversationId,
       runId: `routing-${input.conversationId}`,
-      agentId: 'orchestrator',
-      agentName: '项目协调 Agent',
+      agentId: ORCHESTRATOR_AGENT_ID,
+      agentName: orchestratorDisplayName(state.agents),
       message: `主脑正在规划本轮调度，第 ${tick} 次刷新。`,
     }),
     async () => {

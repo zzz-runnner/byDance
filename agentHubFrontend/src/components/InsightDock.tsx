@@ -15,7 +15,7 @@ import {
   Sparkles,
   Wrench,
 } from 'lucide-react'
-import { buildAgentMap, eventLabel, formatTime, stageLabel, workspaceRoomKindLabel } from '../appModel'
+import { agentDisplayName, buildAgentMap, eventLabel, formatTime, stageLabel, workspaceRoomKindLabel } from '../appModel'
 import type { AppState, DiagnosticLog, LiveWorkflowEvent, WorkspaceRoom } from '../types'
 import { AgentAvatar } from './AgentAvatar'
 import { GlassPanel } from './GlassPanel'
@@ -47,6 +47,7 @@ export function InsightDock({ state, room, events }: InsightDockProps) {
   const workspace = room?.workspace
   const conversation = room?.conversation
   const targetAgent = room?.targetAgentId ? agentMap.get(room.targetAgentId) : undefined
+  const targetAgentName = agentDisplayName(targetAgent, room?.targetAgentId)
 
   const workspaceEvents = useMemo(
     () => (workspace ? events.filter(event => event.workspaceId === workspace.id).slice(0, 10) : []),
@@ -108,8 +109,8 @@ export function InsightDock({ state, room, events }: InsightDockProps) {
           <h3>{stageLabel(taskStage)}</h3>
           <span>
             {room?.kind === 'group'
-              ? 'Orchestrator 正在协调群聊工作区，工程和审查可以并行推进。'
-              : `${targetAgent?.name ?? room?.targetAgentId ?? 'Agent'} 会使用单聊上下文持续跟进这条任务线。`}
+              ? '主脑正在协调群聊工作区，工程和审查可以并行推进。'
+              : `${targetAgentName} 会使用单聊上下文持续跟进这条任务线。`}
           </span>
         </div>
       </section>
@@ -126,10 +127,10 @@ export function InsightDock({ state, room, events }: InsightDockProps) {
 
       {room?.kind === 'direct' && targetAgent ? (
         <section className="dock-section agent-profile-card">
-          <AgentAvatar agentId={targetAgent.id} name={targetAgent.name} />
+          <AgentAvatar agentId={targetAgent.id} name={targetAgentName} />
           <div>
             <p className="eyebrow">{workspaceRoomKindLabel(room.kind)}</p>
-            <h3>{targetAgent.name}</h3>
+            <h3>{targetAgentName}</h3>
             <span>{targetAgent.role}</span>
             <div className="agent-skill-row">
               {targetAgent.skills.slice(0, 4).map(skill => (
@@ -149,10 +150,10 @@ export function InsightDock({ state, room, events }: InsightDockProps) {
 
               return (
                 <article className="handoff-item" key={handoff.id}>
-                  <AgentAvatar agentId={handoff.agentId} name={agent?.name} size="sm" />
+                  <AgentAvatar agentId={handoff.agentId} name={agentDisplayName(agent, handoff.agentId)} size="sm" />
                   <div>
                     <div className="handoff-item__topline">
-                      <strong>{agent?.name ?? handoff.agentId}</strong>
+                      <strong>{agentDisplayName(agent, handoff.agentId)}</strong>
                       <small>{formatTime(handoff.updatedAt)}</small>
                     </div>
                     <p>{handoff.task}</p>
@@ -324,7 +325,7 @@ export function InsightDock({ state, room, events }: InsightDockProps) {
                   <article className="dock-note-card" key={session.id}>
                     <div className="dock-note-card__header">
                       <strong>{session.title}</strong>
-                      <small>{agent?.name ?? session.agentId}</small>
+                      <small>{agentDisplayName(agent, session.agentId)}</small>
                     </div>
                     <p>
                       {session.status === 'active' ? '会话仍在持续更新。' : '会话已归档，可回看执行上下文。'}
@@ -347,7 +348,7 @@ export function InsightDock({ state, room, events }: InsightDockProps) {
       <section className="dock-section">
         <SectionLabel icon={<ShieldCheck size={15} />} label="工作区规则" />
         <div className="rule-list">
-          <span>{room?.kind === 'group' ? '不 @ 时由 Orchestrator 统一判断任务走向。' : '输入默认发给单聊目标 Agent。'}</span>
+          <span>{room?.kind === 'group' ? '不 @ 时由主脑统一判断任务走向。' : '输入默认发给单聊目标 Agent。'}</span>
           <span>{room?.kind === 'group' ? '@ 单个 Agent 时，会在群聊上下文中定向回复。' : '依然保留工作区产物、上下文和运行记录。'}</span>
         </div>
       </section>

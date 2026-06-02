@@ -1,7 +1,7 @@
 import { createAvatar } from '@dicebear/core'
 import { botttsNeutral } from '@dicebear/collection'
 import { UserRound } from 'lucide-react'
-import { agentTone } from '../appModel'
+import { DEFAULT_ORCHESTRATOR_NAME, agentTone } from '../appModel'
 import { OrbMark } from './OrbMark'
 
 type AgentAvatarProps = {
@@ -62,7 +62,7 @@ function childAgentAvatarSrc(agentId: string): string {
 export function AgentAvatar({ agentId, name, size = 'md' }: AgentAvatarProps) {
   if (agentId === 'orchestrator') {
     return (
-      <span className={`agent-avatar agent-avatar--${size} agent-avatar--orb`} title={name ?? 'Orchestrator'}>
+      <span className={`agent-avatar agent-avatar--${size} agent-avatar--orb`} title={name ?? DEFAULT_ORCHESTRATOR_NAME}>
         <OrbMark size={size === 'sm' ? 'sm' : 'md'} pulse />
       </span>
     )

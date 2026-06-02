@@ -1,4 +1,5 @@
 import type { AgentDefinition, CodeSelectionReference, Conversation, MainBrainTurn, ReplyReference, RoutingTaskBrief } from '@shared/contracts'
+import { findMentionedAgentId } from '../agents/agent-presentation'
 import { resolveReplyTargetAgentId } from './reply-context'
 
 export type RoutingInput = {
@@ -15,9 +16,7 @@ export type RoutingInput = {
  * Input: raw message text and available agents. Output: matched agent id or undefined.
  */
 function findMentionedAgent(content: string, agents: AgentDefinition[]): string | undefined {
-  const normalized = content.toLowerCase()
-  return agents.find(agent => normalized.includes(`@${agent.id}`) || normalized.includes(`@${agent.name.toLowerCase()}`))
-    ?.id
+  return findMentionedAgentId(content, agents, { includeOrchestrator: false })
 }
 
 /**
