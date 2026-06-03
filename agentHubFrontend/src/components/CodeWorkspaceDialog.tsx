@@ -34,6 +34,7 @@ import {
 import type {
   CodeWorkspaceDialogRequest,
   CodeWorkspaceDialogTab,
+  CodeWorkspaceDialogTurnArtifact,
   CodeWorkspaceDialogTurnResult,
   CodeSelectionReference,
   WorkspaceDeliveryAsset,
@@ -544,6 +545,96 @@ function previewSurfaceEmptyMessage(mode: PreviewSurfaceMode): string {
 }
 
 /**
+ * Builds the result-tab helpers used by the workspace dialog turn summary view.
+ * Input: turn-result artifact data.
+ * Output: external labels and inline result sections.
+ */
+/**
+ * Returns the external action label for one turn-result artifact when it exposes a real URL.
+ * Input: one turn-result artifact.
+ * Output: localized action label or undefined when the artifact stays inline.
+ */
+function turnResultArtifactLinkLabel(artifact: CodeWorkspaceDialogTurnArtifact): string | undefined {
+  if (!artifact.url) {
+    return undefined
+  }
+  if (artifact.kind === 'zip') {
+    return '下载源代码'
+  }
+  if (artifact.kind === 'deploy') {
+    return '打开部署'
+  }
+  if (artifact.kind === 'preview') {
+    return '打开预览'
+  }
+  return '新窗口打开'
+}
+
+type TurnResultArtifactSectionProps = {
+  artifact: CodeWorkspaceDialogTurnArtifact
+}
+
+/**
+ * Renders one aggregated turn-result artifact inside the workspace dialog result view.
+ * Input: one normalized turn artifact.
+ * Output: one inline detail section for review, diff, text, or delivery metadata.
+ */
+function TurnResultArtifactSection({ artifact }: TurnResultArtifactSectionProps) {
+  const linkLabel = turnResultArtifactLinkLabel(artifact)
+  const detailContent = artifact.detailText ?? artifact.summary
+
+  return (
+    <article className="code-diff-review">
+      <strong>{artifact.title}</strong>
+      {artifact.verdict ? (
+        <StatusPill
+          status={artifact.verdict === 'PASS' ? 'success' : artifact.verdict === 'FAIL' ? 'failed' : 'ready'}
+          label={artifact.verdict}
+        />
+      ) : null}
+      {artifact.kind === 'text' || artifact.kind === 'artifact' ? (
+        <MarkdownRenderer
+          content={detailContent}
+          mode="document"
+          className="markdown-content--document markdown-content--panel"
+        />
+      ) : (
+        <MarkdownRenderer content={artifact.summary} mode="panel" className="markdown-content--panel" />
+      )}
+      {artifact.issues?.length ? (
+        <ul className="artifact-issue-list">
+          {artifact.issues.map((issue, index) => (
+            <li key={`${artifact.id}-${index}`}>{issue}</li>
+          ))}
+        </ul>
+      ) : null}
+      {artifact.files?.length ? (
+        <div className="code-diff-files">
+          {artifact.files.map(file => (
+            <div className="code-diff-file-row" key={`${artifact.id}-${file.path}`}>
+              <span className={`diff-file-badge diff-file-badge--${file.status}`}>{file.status}</span>
+              <code>{file.path}</code>
+              <em>
+                +{file.additions} / -{file.deletions}
+              </em>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {artifact.patch ? <pre className="code-diff-patch">{artifact.patch}</pre> : null}
+      {artifact.url && linkLabel ? (
+        <div className="artifact-dialog__footer">
+          <a className="artifact-dialog__link" href={artifact.url} target="_blank" rel="noreferrer">
+            {linkLabel}
+            <ExternalLink size={14} />
+          </a>
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
+/**
  * Renders the full-screen code workspace dialog for one project workspace.
  * Input: open state, project identity, and quote callback.
  * Output: file tree, read-only code browser, and static preview panel.
@@ -648,6 +739,7 @@ export function CodeWorkspaceDialog({
   const dialogBusy = bootstrapState === 'loading' || treeLoading || previewLoading || deliveryLoading || versionsLoading
   const previewLogExcerpt = previewCapability?.build?.logExcerpt?.trim() ?? ''
   const deliveryBusy = Boolean(deliveryAction)
+  const turnArtifacts = turnResultContext?.artifacts ?? []
   const turnDiff = turnResultContext?.diff
   const turnReview = turnResultContext?.review
   const diffPatch = turnDiff?.patch ?? diffSnapshot?.patch ?? ''
@@ -1425,6 +1517,12 @@ export function CodeWorkspaceDialog({
   }, [panelMode])
 
   useEffect(() => {
+    if (panelMode === 'result' && !turnResultContext) {
+      setPanelMode('code')
+    }
+  }, [panelMode, turnResultContext])
+
+  useEffect(() => {
     if (!open || !projectId || !selectedVersionId || !diffBaseVersionId || selectedVersionId === diffBaseVersionId) {
       setVersionDiff(undefined)
       setVersionDiffError('')
@@ -2088,6 +2186,15 @@ export function CodeWorkspaceDialog({
               <div className="code-editor-panel__top">
                 <div className="code-panel-tabs">
                   <button
+                    className={`code-panel-tab ${panelMode === 'result' ? 'is-active' : ''}`}
+                    type="button"
+                    onClick={() => setPanelMode('result')}
+                    disabled={!turnResultContext}
+                  >
+                    <FileCode2 size={15} />
+                    结果
+                  </button>
+                  <button
                     className={`code-panel-tab ${panelMode === 'code' ? 'is-active' : ''}`}
                     type="button"
                     onClick={() => setPanelMode('code')}
@@ -2113,7 +2220,38 @@ export function CodeWorkspaceDialog({
                   </button>
                 </div>
 
-                {panelMode === 'code' ? (
+                {panelMode === 'result' ? (
+                  <div className="code-editor-toolbar code-editor-toolbar--preview">
+                    <div className="code-editor-toolbar__meta">
+                      <strong>{turnResultContext?.title ?? '本轮结果'}</strong>
+                      <span>本轮产物概览</span>
+                      <span>{turnResultContext?.summary ?? '这里会展示本轮产物摘要、审查结论和文本产物详情。'}</span>
+                    </div>
+                    <div className="code-editor-toolbar__actions code-editor-toolbar__actions--preview">
+                      {turnDiff ? (
+                        <button
+                          className="secondary-button code-preview-open"
+                          type="button"
+                          onClick={() => setPanelMode('diff')}
+                        >
+                          查看 Diff
+                          <ChevronRight size={14} />
+                        </button>
+                      ) : null}
+                      {turnResultContext?.sourceArchiveUrl ? (
+                        <a
+                          className="secondary-button code-preview-open"
+                          href={turnResultContext.sourceArchiveUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          下载源代码快照
+                          <ExternalLink size={14} />
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : panelMode === 'code' ? (
                   <div className="code-editor-toolbar">
                     <div className="code-editor-toolbar__meta">
                       <strong>{activeFileContent?.path ?? activeFilePath ?? '未选择文件'}</strong>
@@ -2236,7 +2374,22 @@ export function CodeWorkspaceDialog({
                 )}
               </div>
 
-              {panelMode === 'code' ? (
+              {panelMode === 'result' ? (
+                <div className="code-diff-shell">
+                  {turnArtifacts.length ? (
+                    <div className="artifact-detail-stack">
+                      {turnArtifacts.map(artifact => (
+                        <TurnResultArtifactSection artifact={artifact} key={artifact.id} />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="code-preview-empty">
+                      <FileCode2 size={18} />
+                      当前还没有可展示的本轮产物结果。
+                    </div>
+                  )}
+                </div>
+              ) : panelMode === 'code' ? (
                 <div className="code-editor-shell" ref={editorShellRef}>
                   {activeFileEntry?.loading ? (
                     <div className="code-editor-empty">

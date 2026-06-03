@@ -49,6 +49,7 @@ The frontend is now `live-only`. If the business backend API is unavailable, the
 - `本轮过程` now shows structured execution cards for routing, dispatch, progress, logs, validation, synthesis, and reply output, with readable log excerpts inside the chat stream.
 - Artifact cards inside the chat stream stay compact by default and surface only the key summary, while the full preview, diff, review, and long text remain in the artifact dialog.
 - Preview, diff, review, zip, and text artifacts live inside the main chat stream.
+- Artifact entries without a real URL now stay non-openable instead of pretending to jump to an external page.
 - Preview dialogs now show `loading / slow / error` states before the iframe becomes ready.
 - The first page load now shows a blocking loading screen, and backend disconnection shows a blocking error screen with retry.
 - AI Markdown output is lightly normalized before rendering, so noisy separators, empty bullets, empty headings, incomplete fences, and conversational soft line breaks do not break the chat layout.

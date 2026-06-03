@@ -40,6 +40,7 @@ import type {
   Artifact,
   CodeWorkspaceDialogRequest,
   CodeWorkspaceDialogTab,
+  CodeWorkspaceDialogTurnArtifact,
   CodeWorkspaceDialogTurnResult,
   CodeSelectionReference,
   ConnectionStatus,
@@ -277,15 +278,27 @@ function buildTurnResultBundle(artifacts: ChatTurnArtifact[]): TurnResultBundle 
 
   const defaultTab: CodeWorkspaceDialogTab = latestPreview || latestDeploy
     ? 'preview'
-    : latestDiff
-      ? 'diff'
-      : 'code'
+    : 'result'
+
+  const resultArtifacts: CodeWorkspaceDialogTurnArtifact[] = dedupedArtifacts.map(artifact => ({
+    id: artifact.id,
+    kind: artifact.kind,
+    title: artifact.title,
+    summary: artifact.summary,
+    url: artifact.url,
+    verdict: artifact.verdict,
+    issues: artifact.issues,
+    detailText: artifact.detailText,
+    patch: artifact.patch,
+    files: artifact.files,
+  }))
 
   const turnResult: CodeWorkspaceDialogTurnResult = {
     title: '查看本轮产物',
     summary: primarySummary,
     badges: metaItems,
     defaultTab,
+    artifacts: resultArtifacts,
     preview: latestPreview?.url ? {
       title: latestPreview.title,
       summary: latestPreview.summary,
@@ -391,6 +404,7 @@ function findActiveMention(value: string, selectionStart: number | null, selecti
  */
 function shouldDefaultExpandTurn(turn: ChatTurn): boolean {
   return (
+
     ((turn.status === 'running' || turn.status === 'awaiting_commit') && turn.processEntries.length > 0) ||
     turn.status === 'failed' ||
     turn.status === 'partial'
@@ -1209,11 +1223,6 @@ function InlineArtifactCard({ artifact, onOpenCodeDialog }: InlineArtifactCardPr
       : artifact.type === 'deploy-status'
         ? '打开部署'
         : '查看'
-  const resolvedActionLabel = deliverySurface === 'build'
-    ? '查看产物'
-    : deliverySurface === 'deployment'
-      ? '查看部署'
-      : actionLabel
   const summary = buildInlineArtifactCardSummary(artifact)
   const content = (
     <>
@@ -1225,7 +1234,7 @@ function InlineArtifactCard({ artifact, onOpenCodeDialog }: InlineArtifactCardPr
         <ArtifactCardSummary preview={summary} />
       </div>
       <em>
-        {resolvedActionLabel}
+        {actionLabel}
         <ExternalLink size={13} />
       </em>
     </>
@@ -1282,11 +1291,6 @@ function TurnArtifactCard({ artifact, agentName, onOpenArtifact, onOpenWorkspace
       : artifact.kind === 'deploy'
         ? '打开部署'
       : '查看详情'
-  const resolvedActionLabel = deliverySurface === 'build'
-    ? '查看产物'
-    : deliverySurface === 'deployment'
-      ? '查看部署'
-      : actionLabel
   const isExternalOnly = (artifact.kind === 'zip' || (artifact.kind === 'deploy' && !deliverySurface)) && Boolean(artifact.url)
 
   const content = (
@@ -1301,7 +1305,7 @@ function TurnArtifactCard({ artifact, agentName, onOpenArtifact, onOpenWorkspace
         {agentName ? <i>{agentName}</i> : null}
       </div>
       <em>
-        {resolvedActionLabel}
+        {actionLabel}
         {isExternalOnly ? <Download size={13} /> : <ExternalLink size={13} />}
       </em>
     </>
@@ -1366,7 +1370,7 @@ function TurnResultCard({ bundle, onOpenCodeDialog }: TurnResultCardProps) {
         />
       </div>
       <em>
-        {actionLabel}
+        {bundle.defaultTab === 'result' ? '查看结果' : actionLabel}
         <ExternalLink size={13} />
       </em>
     </button>

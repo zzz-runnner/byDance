@@ -153,7 +153,22 @@ export type WorkspaceDiffSnapshot = {
   patch: string
 }
 
-export type CodeWorkspaceDialogTab = 'code' | 'diff' | 'preview'
+export type CodeWorkspaceDialogTab = 'result' | 'code' | 'diff' | 'preview'
+
+export type CodeWorkspaceDialogTurnArtifactKind = 'preview' | 'diff' | 'review' | 'zip' | 'deploy' | 'text' | 'artifact'
+
+export type CodeWorkspaceDialogTurnArtifact = {
+  id: string
+  kind: CodeWorkspaceDialogTurnArtifactKind
+  title: string
+  summary: string
+  url?: string
+  verdict?: string
+  issues?: string[]
+  detailText?: string
+  patch?: string
+  files?: ChangedFile[]
+}
 
 export type CodeWorkspaceDialogTurnPreview = {
   title: string
@@ -180,6 +195,7 @@ export type CodeWorkspaceDialogTurnResult = {
   summary?: string
   badges: string[]
   defaultTab: CodeWorkspaceDialogTab
+  artifacts: CodeWorkspaceDialogTurnArtifact[]
   preview?: CodeWorkspaceDialogTurnPreview
   diff?: CodeWorkspaceDialogTurnDiff
   review?: CodeWorkspaceDialogTurnReview
