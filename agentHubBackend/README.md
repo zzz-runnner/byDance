@@ -19,7 +19,7 @@ The old `locateBackend` compatibility layer has been removed. Local startup and 
 - proxy workspace zip, preview, file tree, file content, diff, and preview-target APIs
 - run local preview capability detection and local preview builds
 - keep project metadata in local storage or PostgreSQL
-- keep version, build, and deployment service modules available for later product flows
+- keep version, diff, restore, build, and deployment service modules available for local product flows
 
 ## Local Preview Behavior
 
@@ -85,6 +85,7 @@ Start `agentHub` first, then start this backend.
 - `GET /api/projects/:projectId/diff`
 - `GET /api/projects/:projectId/preview-targets`
 - `GET /api/projects/:projectId/preview-capability`
+- `GET /api/projects/:projectId/delivery`
 - `POST /api/projects/:projectId/preview-build`
 - `POST /api/projects/:projectId/messages/stream`
 - `GET /api/workspaces/:workspaceId/zip`
@@ -97,12 +98,13 @@ Business-module endpoints still kept for later flows:
 - `POST /api/projects/:projectId/versions`
 - `GET /api/projects/:projectId/versions`
 - `GET /api/projects/:projectId/version-diff?v1=...&v2=...`
+- `POST /api/projects/:projectId/versions/:versionId/restore`
 - `GET /api/projects/:projectId/source.zip?versionId=...`
 - `POST /api/projects/:projectId/builds`
 - `POST /api/projects/:projectId/deploy`
 
 ## Current Limits
 
-- local frontend does not yet expose deployment UI
+- current frontend only exposes the first local version/delivery workflow, not a full release console
 - preview does not yet support Angular or broader framework matrix
-- local flow is focused on one active workbench window plus code/preview dialog, not multi-window desktop clients
+- local flow is focused on one active workbench window plus code/preview/version dialog, not multi-window desktop clients

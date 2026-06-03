@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, Braces, LayoutDashboard, LoaderCircle, PlugZap, RefreshCcw, ServerCrash, Wifi } from 'lucide-react'
 import {
-  createBusinessAgent,
+  createBusinessProjectAgent,
   createBusinessWorkspace,
   createEmptyWorkbenchState,
-  deleteBusinessAgent,
+  deleteBusinessProjectAgent,
   fetchBusinessProjectState,
   fetchBusinessWorkbenchOverview,
+  pinBusinessProjectMessage,
   streamBusinessProjectMessage,
-  updateBusinessAgent,
+  unpinBusinessProjectMessage,
+  updateBusinessProjectAgent,
   updateBusinessWorkspaceMetadata,
   type CreateBusinessAgentInput,
   type UpdateBusinessAgentInput,
@@ -29,6 +31,7 @@ import { StatusPill } from './components/StatusPill'
 import { WorkspaceRail } from './components/WorkspaceRail'
 import type {
   AppState,
+  CodeWorkspaceDialogRequest,
   CodeSelectionReference,
   ConnectionStatus,
   LiveWorkflowEvent,
@@ -243,6 +246,10 @@ export function App() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [agentDialogOpen, setAgentDialogOpen] = useState(false)
   const [codeDialogOpen, setCodeDialogOpen] = useState(false)
+  const [codeDialogRequest, setCodeDialogRequest] = useState<{
+    request: CodeWorkspaceDialogRequest
+    requestId: number
+  }>()
   const [creatingWorkspace, setCreatingWorkspace] = useState(false)
   const [createWorkspaceError, setCreateWorkspaceError] = useState('')
   const [agentMutationSaving, setAgentMutationSaving] = useState(false)
@@ -251,6 +258,7 @@ export function App() {
   const [metadataUpdatingWorkspaceId, setMetadataUpdatingWorkspaceId] = useState<string>()
   const overviewRequestRef = useRef(0)
   const detailRequestRef = useRef(0)
+  const codeDialogRequestRef = useRef(0)
   const overviewRef = useRef<WorkbenchOverview>(emptyWorkbenchOverview())
   const loadedWorkspaceCountRef = useRef(INITIAL_WORKSPACE_PAGE_LIMIT)
   const workbenchReadyRef = useRef(false)
@@ -871,10 +879,13 @@ export function App() {
   }
 
   async function handleCreateAgent(input: CreateBusinessAgentInput) {
+    if (!activeProjectId) {
+      return undefined
+    }
     setAgentMutationError('')
     setAgentMutationSaving(true)
     try {
-      const agent = await createBusinessAgent(input)
+      const agent = await createBusinessProjectAgent(activeProjectId, input)
       await reloadWorkbench(activeWorkspaceId, 'refresh')
       return agent
     } catch (error) {
@@ -886,10 +897,13 @@ export function App() {
   }
 
   async function handleUpdateAgent(agentId: string, input: UpdateBusinessAgentInput) {
+    if (!activeProjectId) {
+      return undefined
+    }
     setAgentMutationError('')
     setAgentMutationSaving(true)
     try {
-      const agent = await updateBusinessAgent(agentId, input)
+      const agent = await updateBusinessProjectAgent(activeProjectId, agentId, input)
       await reloadWorkbench(activeWorkspaceId, 'refresh')
       return agent
     } catch (error) {
@@ -901,10 +915,13 @@ export function App() {
   }
 
   async function handleDeleteAgent(agentId: string) {
+    if (!activeProjectId) {
+      return
+    }
     setAgentMutationError('')
     setDeletingAgentId(agentId)
     try {
-      await deleteBusinessAgent(agentId)
+      await deleteBusinessProjectAgent(activeProjectId, agentId)
       await reloadWorkbench(activeWorkspaceId, 'refresh')
     } catch (error) {
       setAgentMutationError(errorMessageOf(error))
@@ -960,6 +977,33 @@ export function App() {
   }
 
   /**
+   * Toggles one workspace message in or out of the pinned long-term context list.
+   * Input: persisted message id and current pinned state.
+   * Output: refreshes the active workspace detail after the mutation succeeds.
+   */
+  async function handleToggleMessagePin(messageId: string, pinned: boolean) {
+    if (!activeRoom?.workspace.projectId) {
+      return
+    }
+
+    try {
+      if (pinned) {
+        await unpinBusinessProjectMessage(activeRoom.workspace.projectId, messageId)
+      } else {
+        await pinBusinessProjectMessage(activeRoom.workspace.projectId, messageId)
+      }
+      await loadProjectRoomState(
+        activeRoom,
+        messageLimitByWorkspace[activeRoom.id] ?? messagePage.limit ?? INITIAL_MESSAGE_PAGE_LIMIT,
+        'refresh',
+      )
+    } catch (error) {
+      setConnectionStatus('error')
+      setConnectionErrorMessage(errorMessageOf(error))
+    }
+  }
+
+  /**
    * Stores one quoted message reference for the next outgoing user message.
    * Input: reply reference from the selected message bubble.
    * Output: updates the quote bar state in the composer.
@@ -969,13 +1013,41 @@ export function App() {
   }
 
   /**
+   * Opens the code dialog and optionally focuses one requested result tab or preview surface.
+   * Input: optional dialog request payload.
+   * Output: dialog open state and requested tab intent updated together.
+   */
+  function handleOpenCodeDialog(request?: CodeWorkspaceDialogRequest) {
+    if (!activeProjectId) {
+      return
+    }
+
+    codeDialogRequestRef.current += 1
+    setCodeDialogRequest({
+      request: request ?? {},
+      requestId: codeDialogRequestRef.current,
+    })
+    setCodeDialogOpen(true)
+  }
+
+  /**
+   * Closes the code dialog and clears any pending dialog request intent.
+   * Input: none.
+   * Output: dialog state reset for the next manual open.
+   */
+  function handleCloseCodeDialog() {
+    setCodeDialogOpen(false)
+    setCodeDialogRequest(undefined)
+  }
+
+  /**
    * Stores one quoted code selection for the next outgoing user message.
    * Input: file path, line range, and selected code payload.
    * Output: updates the code quote bar in the composer.
    */
   function handleQuoteCodeSelection(selection: CodeSelectionReference) {
     setPendingCodeSelection(selection)
-    setCodeDialogOpen(false)
+    handleCloseCodeDialog()
   }
 
   const connectionPillStatus =
@@ -1009,7 +1081,7 @@ export function App() {
             </GlassPanel>
             <GlassPanel compact className="metric-chip">
               <PlugZap size={15} />
-              {overview.agents.length || state.agents.length} Agents
+              {state.agents.length || overview.agents.length} Agents
             </GlassPanel>
             <button
               className="secondary-button topbar-agent-button"
@@ -1026,7 +1098,7 @@ export function App() {
             <button
               className="secondary-button topbar-code-button"
               type="button"
-              onClick={() => setCodeDialogOpen(true)}
+              onClick={() => handleOpenCodeDialog()}
               disabled={!activeProjectId || loadingState || creatingWorkspace}
             >
               <Braces size={15} />
@@ -1106,6 +1178,8 @@ export function App() {
               onCancelReply={() => setPendingReplyTo(undefined)}
               onCancelCodeSelection={() => setPendingCodeSelection(undefined)}
               onCopyMessage={content => void handleCopyMessage(content)}
+              onToggleMessagePin={(messageId, pinned) => void handleToggleMessagePin(messageId, pinned)}
+              onOpenCodeDialog={request => handleOpenCodeDialog(request)}
               onSend={handleSend}
             />
           </section>
@@ -1114,7 +1188,7 @@ export function App() {
 
       <CreateWorkspaceDialog
         open={createDialogOpen}
-        agents={overview.agents.length > 0 ? overview.agents : state.agents}
+        agents={(overview.agents.length > 0 ? overview.agents : state.agents).filter(agent => agent.source === 'built-in')}
         submitting={creatingWorkspace}
         errorMessage={createWorkspaceError}
         sourceTargetLabel={connectionTargetLabel}
@@ -1127,7 +1201,7 @@ export function App() {
       />
       <AgentManagementDialog
         open={agentDialogOpen}
-        agents={overview.agents.length > 0 ? overview.agents : state.agents}
+        agents={state.agents}
         saving={agentMutationSaving}
         deletingAgentId={deletingAgentId}
         errorMessage={agentMutationError}
@@ -1144,9 +1218,11 @@ export function App() {
         open={codeDialogOpen}
         projectId={activeProjectId}
         workspaceName={activeRoom?.workspace.name}
-        onClose={() => setCodeDialogOpen(false)}
+        onClose={handleCloseCodeDialog}
         onQuoteSelection={handleQuoteCodeSelection}
         onProjectDeliveryUpdated={() => reloadWorkbench(activeWorkspaceId, 'refresh')}
+        requestedDialogState={codeDialogRequest?.request}
+        requestedDialogStateKey={codeDialogRequest?.requestId}
       />
     </main>
   )

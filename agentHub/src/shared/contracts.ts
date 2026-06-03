@@ -306,10 +306,25 @@ export const AgentDefinitionSchema = z.object({
   skills: z.array(z.string()),
   routingProfile: AgentRoutingProfileSchema.optional(),
   source: z.enum(['built-in', 'workspace', 'custom']),
+  workspaceId: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 })
 export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>
+
+export const WorkspaceAgentMemberSchema = z.object({
+  workspaceId: z.string(),
+  agentId: z.string(),
+  displayName: z.string(),
+  modelProviderOverride: AgentProviderSchema.optional(),
+  modelOverride: z.string().optional(),
+  sortOrder: z.number().int().nonnegative(),
+  locked: z.boolean(),
+  enabled: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+export type WorkspaceAgentMember = z.infer<typeof WorkspaceAgentMemberSchema>
 
 export const AgentRunSchema = z.object({
   id: z.string(),
@@ -899,6 +914,7 @@ export const AppStateSchema = z.object({
   conversations: z.array(ConversationSchema),
   messages: z.array(MessageSchema),
   agents: z.array(AgentDefinitionSchema),
+  workspaceAgentMembers: z.array(WorkspaceAgentMemberSchema),
   agentSessions: z.array(AgentSessionSchema),
   agentSessionMessages: z.array(AgentSessionMessageSchema),
   taskHandoffs: z.array(TaskHandoffSchema),

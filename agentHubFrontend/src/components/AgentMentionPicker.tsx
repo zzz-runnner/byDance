@@ -3,6 +3,7 @@ import { AgentAvatar } from './AgentAvatar'
 export type AgentMentionOption = {
   id: string
   name: string
+  insertText?: string
 }
 
 type AgentMentionPickerProps = {
@@ -34,7 +35,7 @@ export function AgentMentionPicker({ options, activeIndex, onSelect }: AgentMent
           <AgentAvatar agentId={option.id} name={option.name} size="sm" />
           <span className="mention-picker__copy">
             <strong>{option.name}</strong>
-            <small>@{option.id}</small>
+            <small>@{option.insertText ?? option.id}</small>
           </span>
         </button>
       ))}

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentDefinition, AgentRun, AppState, DiagnosticLog } from '@shared/contracts'
 import { isoNow } from '@shared/contracts'
+import { resolveWorkspaceAgent } from '../agents/workspace-agents'
 import type { StateStore } from './types'
 
 const DEFAULT_STALE_SECONDS = 900
@@ -66,7 +67,7 @@ export async function recoverStaleAgentRuns(store: StateStore): Promise<number> 
       if (run.status !== 'running') {
         continue
       }
-      const agent = state.agents.find(candidate => candidate.id === run.agentId)
+      const agent = resolveWorkspaceAgent(state, run.workspaceId, run.agentId)
       if (!isStaleRun(run, agent, nowMs)) {
         continue
       }

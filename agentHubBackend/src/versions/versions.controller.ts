@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query, StreamableFile } from '@nestjs/common'
-import { CreateVersionDto, DiffQueryDto } from './versions.dto'
+import { CreateVersionDto, DiffQueryDto, RestoreVersionDto } from './versions.dto'
 import { VersionsService } from './versions.service'
 
 @Controller('api/projects/:projectId')
@@ -25,6 +25,15 @@ export class VersionsController {
     @Query() query: DiffQueryDto,
   ) {
     return this.versions.getDiff(projectId, query.v1, query.v2)
+  }
+
+  @Post('versions/:versionId/restore')
+  restoreVersion(
+    @Param('projectId') projectId: string,
+    @Param('versionId') versionId: string,
+    @Body() input: RestoreVersionDto,
+  ) {
+    return this.versions.restoreVersion(projectId, versionId, input)
   }
 
   @Get('source.zip')

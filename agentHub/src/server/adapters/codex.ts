@@ -38,19 +38,19 @@ function resolveCodexHome(codexHome: string): string {
 
 /**
  * Builds Codex CLI config overrides for the optional DeepSeek bridge.
- * Input: server environment. Output: extra CLI arguments for codex exec.
+ * Input: server environment and the resolved model name. Output: extra CLI arguments for codex exec.
  */
-function buildCodexBridgeArgs(env: ServerEnv): string[] {
+function buildCodexBridgeArgs(env: ServerEnv, model: string): string[] {
   const providerPrefix = `model_providers.${env.AGENTHUB_CODEX_MODEL_PROVIDER}`
   const providerName = 'AgentHub DeepSeek Bridge'
   return [
     '--ignore-user-config',
     '-m',
-    env.AGENTHUB_CODEX_MODEL,
+    model,
     '-c',
     `model_provider=${JSON.stringify(env.AGENTHUB_CODEX_MODEL_PROVIDER)}`,
     '-c',
-    `model=${JSON.stringify(env.AGENTHUB_CODEX_MODEL)}`,
+    `model=${JSON.stringify(model)}`,
     '-c',
     `${providerPrefix}.name=${JSON.stringify(providerName)}`,
     '-c',
@@ -75,6 +75,19 @@ async function buildCodexProcessEnv(env: ServerEnv): Promise<NodeJS.ProcessEnv> 
     CODEX_HOME: codexHome,
     AGENTHUB_CODEX_BRIDGE_API_KEY: env.AGENTHUB_CODEX_BRIDGE_API_KEY,
   }
+}
+
+/**
+ * Resolves the Codex model for one child-agent run.
+ * Input: server environment and agent definition.
+ * Output: explicit model override or the configured AgentHub default.
+ */
+function resolveCodexModel(env: ServerEnv, agent: AgentAdapterInput['agent']): string {
+  const model = agent.model?.trim()
+  if (model && model.toLowerCase() !== 'default') {
+    return model
+  }
+  return env.AGENTHUB_CODEX_MODEL
 }
 
 /**
@@ -309,9 +322,10 @@ export function createCodexAdapter(env: ServerEnv, toolGateway: LocalToolGateway
       const outputPath = path.join(tmpdir(), `agenthub-codex-${randomUUID()}.txt`)
       const prompt = buildAgentPrompt(input.task, input.contextPackage, input.agent.outputSchema)
       const processEnv = await buildCodexProcessEnv(env)
+      const model = resolveCodexModel(env, input.agent)
       const args = [
         'exec',
-        ...buildCodexBridgeArgs(env),
+        ...buildCodexBridgeArgs(env, model),
         '--json',
         '--color',
         'never',

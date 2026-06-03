@@ -11,12 +11,15 @@ import type {
   WorkspaceDiffSnapshot,
   WorkspaceDeliverySummary,
   WorkspaceDeploymentRecord,
+  WorkspaceDocumentPreview,
   WorkspaceFileContent,
   WorkspaceListStatus,
   WorkspacePreviewCapability,
   WorkspacePreviewTargets,
   WorkspaceSortField,
+  WorkspaceVersionDiff,
   WorkspaceVersionRecord,
+  WorkspaceVersionRestoreResult,
   WorkflowEvent,
 } from '../types'
 
@@ -101,6 +104,7 @@ export function createEmptyWorkbenchState(agents: AgentDefinition[] = []): AppSt
     conversations: [],
     messages: [],
     agents,
+    workspaceAgentMembers: [],
     agentSessions: [],
     agentSessionMessages: [],
     taskHandoffs: [],
@@ -193,6 +197,47 @@ export async function createBusinessAgent(input: CreateBusinessAgentInput): Prom
     body: JSON.stringify(input),
   })
   return readJson<AgentDefinition>(response, 'Create business agent')
+}
+
+export async function fetchBusinessProjectAgents(projectId: string): Promise<AgentDefinition[]> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/agents`)
+  return readJson<AgentDefinition[]>(response, 'Load project agents')
+}
+
+export async function createBusinessProjectAgent(
+  projectId: string,
+  input: CreateBusinessAgentInput,
+): Promise<AgentDefinition> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/agents`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  return readJson<AgentDefinition>(response, 'Create project agent')
+}
+
+export async function updateBusinessProjectAgent(
+  projectId: string,
+  agentId: string,
+  input: UpdateBusinessAgentInput,
+): Promise<AgentDefinition> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentId)}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  return readJson<AgentDefinition>(response, 'Update project agent')
+}
+
+export async function deleteBusinessProjectAgent(projectId: string, agentId: string): Promise<void> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentId)}`, {
+    method: 'DELETE',
+  })
+  await readJson<{ deleted: boolean; agentId: string; workspaceId: string }>(response, 'Delete project agent')
 }
 
 export async function updateBusinessAgent(
@@ -366,6 +411,20 @@ export async function fetchBusinessProjectFileContent(projectId: string, filePat
 }
 
 /**
+ * Loads one local document preview payload for PDF, Word, or PowerPoint files.
+ * Input: project id and repo-relative file path.
+ * Output: lightweight document preview data for the workspace dialog.
+ */
+export async function fetchBusinessProjectFilePreview(
+  projectId: string,
+  filePath: string,
+): Promise<WorkspaceDocumentPreview> {
+  const query = new URLSearchParams({ path: filePath })
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files/preview?${query.toString()}`)
+  return readJson<WorkspaceDocumentPreview>(response, 'Load business project file preview')
+}
+
+/**
  * Loads the current diff snapshot for one project workspace.
  * Input: project id.
  * Output: git status summary and unified patch text.
@@ -373,6 +432,54 @@ export async function fetchBusinessProjectFileContent(projectId: string, filePat
 export async function fetchBusinessProjectDiff(projectId: string): Promise<WorkspaceDiffSnapshot> {
   const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/diff`)
   return readJson<WorkspaceDiffSnapshot>(response, 'Load business project diff')
+}
+
+/**
+ * Applies one recorded AgentHub change set onto the current workspace repo.
+ * Input: project id and change-set id.
+ * Output: apply status plus a short backend summary.
+ */
+export async function applyBusinessProjectChangeSet(
+  projectId: string,
+  changeSetId: string,
+): Promise<{ status: 'applied' | 'already_applied'; changeSetId: string; summary: string }> {
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/change-sets/${encodeURIComponent(changeSetId)}/apply`,
+    {
+      method: 'POST',
+    },
+  )
+  return readJson(response, 'Apply business project change set')
+}
+
+/**
+ * Pins one persisted chat message into the workspace-level long-term context list.
+ * Input: project id and runtime message id.
+ * Output: updated pin payload from the backend.
+ */
+export async function pinBusinessProjectMessage(
+  projectId: string,
+  messageId: string,
+): Promise<{ workspaceId: string; messageId: string; pinnedMessageIds: string[] }> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/messages/${encodeURIComponent(messageId)}/pin`, {
+    method: 'PUT',
+  })
+  return readJson(response, 'Pin business project message')
+}
+
+/**
+ * Removes one persisted chat message from the workspace-level pinned list.
+ * Input: project id and runtime message id.
+ * Output: updated pin payload from the backend.
+ */
+export async function unpinBusinessProjectMessage(
+  projectId: string,
+  messageId: string,
+): Promise<{ workspaceId: string; messageId: string; pinnedMessageIds: string[] }> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/messages/${encodeURIComponent(messageId)}/pin`, {
+    method: 'DELETE',
+  })
+  return readJson(response, 'Unpin business project message')
 }
 
 /**
@@ -446,6 +553,57 @@ export async function createBusinessProjectVersion(
     }),
   })
   return readJson<WorkspaceVersionRecord>(response, 'Create business project version')
+}
+
+/**
+ * Loads saved source versions for one workspace-backed project.
+ * Input: project id.
+ * Output: version history ordered by backend default.
+ */
+export async function fetchBusinessProjectVersions(projectId: string): Promise<WorkspaceVersionRecord[]> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/versions`)
+  return readJson<WorkspaceVersionRecord[]>(response, 'Load business project versions')
+}
+
+/**
+ * Loads the unified diff between two saved project versions.
+ * Input: project id and two version ids.
+ * Output: backend version diff payload.
+ */
+export async function fetchBusinessProjectVersionDiff(
+  projectId: string,
+  v1: string,
+  v2: string,
+): Promise<WorkspaceVersionDiff> {
+  const query = new URLSearchParams({
+    v1,
+    v2,
+  })
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/version-diff?${query.toString()}`)
+  return readJson<WorkspaceVersionDiff>(response, 'Load business project version diff')
+}
+
+/**
+ * Restores the current workspace repo to one saved version.
+ * Input: project id, target version id, and optional restore guard settings.
+ * Output: restore result with optional auto snapshot.
+ */
+export async function restoreBusinessProjectVersion(
+  projectId: string,
+  versionId: string,
+  input: {
+    createSnapshotBeforeRestore?: boolean
+    message?: string
+  } = {},
+): Promise<WorkspaceVersionRestoreResult> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}/restore`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+  return readJson<WorkspaceVersionRestoreResult>(response, 'Restore business project version')
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   type DiagnosticLog,
   type Message,
   type TaskHandoff,
+  type WorkspaceAgentMember,
   type WorkflowEventRecord,
   type Workspace,
   WorkflowEventRecordSchema,
@@ -25,6 +26,7 @@ const TABLES = {
   conversations: 'agenthub_conversations',
   messages: 'agenthub_messages',
   agents: 'agenthub_agents',
+  workspaceAgentMembers: 'agenthub_workspace_agent_members',
   agentSessions: 'agenthub_agent_sessions',
   agentSessionMessages: 'agenthub_agent_session_messages',
   taskHandoffs: 'agenthub_task_handoffs',
@@ -160,6 +162,7 @@ function toAgent(row: Record<string, unknown>): AgentDefinition {
       ? undefined
       : asObject<NonNullable<AgentDefinition['routingProfile']>>(row.routing_profile),
     source: row.source as AgentDefinition['source'],
+    workspaceId: row.workspace_id === null || row.workspace_id === undefined ? undefined : String(row.workspace_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
@@ -186,9 +189,33 @@ function agentParams(agent: AgentDefinition): unknown[] {
     toJsonParam(agent.skills),
     toJsonParam(agent.routingProfile),
     agent.source,
+    agent.workspaceId ?? null,
     agent.createdAt,
     agent.updatedAt,
   ]
+}
+
+/**
+ * Maps a database row into a workspace agent member entity.
+ * Input: raw SQL row. Output: validated workspace member entity.
+ */
+function toWorkspaceAgentMember(row: Record<string, unknown>): WorkspaceAgentMember {
+  return {
+    workspaceId: String(row.workspace_id),
+    agentId: String(row.agent_id),
+    displayName: String(row.display_name),
+    modelProviderOverride:
+      row.model_provider_override === null || row.model_provider_override === undefined
+        ? undefined
+        : row.model_provider_override as WorkspaceAgentMember['modelProviderOverride'],
+    modelOverride:
+      row.model_override === null || row.model_override === undefined ? undefined : String(row.model_override),
+    sortOrder: Number(row.sort_order),
+    locked: Boolean(row.locked),
+    enabled: Boolean(row.enabled),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  }
 }
 
 async function insertAgentToClient(client: QueryClient, agent: AgentDefinition): Promise<AgentDefinition> {
@@ -198,10 +225,10 @@ async function insertAgentToClient(client: QueryClient, agent: AgentDefinition):
         insert into ${TABLES.agents} (
           id, name, role, description, when_to_use, system_prompt, model_provider, model,
           context_policy, tools, permissions, disallowed_tools, permission_mode, runtime_policy,
-          output_schema, isolation, skills, routing_profile, source, created_at, updated_at
+          output_schema, isolation, skills, routing_profile, source, workspace_id, created_at, updated_at
         ) values (
           $1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14::jsonb,
-          $15,$16,$17::jsonb,$18::jsonb,$19,$20,$21
+          $15,$16,$17::jsonb,$18::jsonb,$19,$20,$21,$22
         )
         returning *
       `,
@@ -235,14 +262,43 @@ async function updateAgentInClient(client: QueryClient, agent: AgentDefinition):
           skills = $17::jsonb,
           routing_profile = $18::jsonb,
           source = $19,
-          created_at = $20,
-          updated_at = $21
+          workspace_id = $20,
+          created_at = $21,
+          updated_at = $22
         where id = $1
         returning *
       `,
       params,
   )
   return toAgent(result.rows[0] as Record<string, unknown>)
+}
+
+async function insertWorkspaceAgentMemberToClient(
+  client: QueryClient,
+  member: WorkspaceAgentMember,
+): Promise<WorkspaceAgentMember> {
+  const result = await client.query(
+      `
+        insert into ${TABLES.workspaceAgentMembers} (
+          workspace_id, agent_id, display_name, model_provider_override, model_override, sort_order,
+          locked, enabled, created_at, updated_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        returning *
+      `,
+      [
+        member.workspaceId,
+        member.agentId,
+        member.displayName,
+        member.modelProviderOverride ?? null,
+        member.modelOverride ?? null,
+        member.sortOrder,
+        member.locked,
+        member.enabled,
+        member.createdAt,
+        member.updatedAt,
+      ],
+  )
+  return toWorkspaceAgentMember(result.rows[0] as Record<string, unknown>)
 }
 
 /**
@@ -486,8 +542,23 @@ async function createSchema(pool: Pool): Promise<void> {
       skills jsonb not null,
       routing_profile jsonb,
       source text not null,
+      workspace_id text,
       created_at text not null,
       updated_at text not null
+    );
+
+    create table if not exists ${TABLES.workspaceAgentMembers} (
+      workspace_id text not null,
+      agent_id text not null,
+      display_name text not null,
+      model_provider_override text,
+      model_override text,
+      sort_order integer not null,
+      locked boolean not null,
+      enabled boolean not null,
+      created_at text not null,
+      updated_at text not null,
+      primary key (workspace_id, agent_id)
     );
 
     create table if not exists ${TABLES.agentSessions} (
@@ -622,6 +693,7 @@ async function createSchema(pool: Pool): Promise<void> {
   await pool.query(`alter table ${TABLES.agentRuns} add column if not exists session_id text`)
   await pool.query(`alter table ${TABLES.agentRuns} add column if not exists handoff_id text`)
   await pool.query(`alter table ${TABLES.agents} add column if not exists routing_profile jsonb`)
+  await pool.query(`alter table ${TABLES.agents} add column if not exists workspace_id text`)
 }
 
 /**
@@ -633,6 +705,9 @@ async function readStateFromDatabase(client: QueryClient): Promise<AppState> {
   const conversations = await client.query(`select * from ${TABLES.conversations} order by created_at asc`)
   const messages = await client.query(`select * from ${TABLES.messages} order by created_at asc`)
   const agents = await client.query(`select * from ${TABLES.agents} order by created_at asc`)
+  const workspaceAgentMembers = await client.query(
+    `select * from ${TABLES.workspaceAgentMembers} order by workspace_id asc, sort_order asc, created_at asc`,
+  )
   const agentSessions = await client.query(`select * from ${TABLES.agentSessions} order by created_at asc`)
   const agentSessionMessages = await client.query(`select * from ${TABLES.agentSessionMessages} order by created_at asc`)
   const taskHandoffs = await client.query(`select * from ${TABLES.taskHandoffs} order by created_at asc`)
@@ -648,6 +723,7 @@ async function readStateFromDatabase(client: QueryClient): Promise<AppState> {
     conversations: conversations.rows.map(row => toConversation(row as Record<string, unknown>)),
     messages: messages.rows.map(row => toMessage(row as Record<string, unknown>)),
     agents: agents.rows.map(row => toAgent(row as Record<string, unknown>)),
+    workspaceAgentMembers: workspaceAgentMembers.rows.map(row => toWorkspaceAgentMember(row as Record<string, unknown>)),
     agentSessions: agentSessions.rows.map(row => toAgentSession(row as Record<string, unknown>)),
     agentSessionMessages: agentSessionMessages.rows.map(row => toAgentSessionMessage(row as Record<string, unknown>)),
     taskHandoffs: taskHandoffs.rows.map(row => toTaskHandoff(row as Record<string, unknown>)),
@@ -695,6 +771,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
   await client.query(`delete from ${TABLES.agentSessions}`)
   await client.query(`delete from ${TABLES.messages}`)
   await client.query(`delete from ${TABLES.conversations}`)
+  await client.query(`delete from ${TABLES.workspaceAgentMembers}`)
   await client.query(`delete from ${TABLES.agents}`)
   await client.query(`delete from ${TABLES.workspaces}`)
 
@@ -765,6 +842,10 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
 
   for (const agent of state.agents) {
     await insertAgentToClient(client, agent)
+  }
+
+  for (const member of state.workspaceAgentMembers) {
+    await insertWorkspaceAgentMemberToClient(client, member)
   }
 
   for (const session of state.agentSessions) {

@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res } from '@nestjs/common'
 import { Response } from 'express'
 import { toProjectResponse } from '../state-bridge'
+import { CreateAgentDto, UpdateAgentDto } from '../agents/agents.dto'
 import {
   CreateProjectDto,
   FileContentQueryDto,
@@ -29,6 +30,44 @@ export class ProjectsController {
   @Get(':projectId')
   async getProject(@Param('projectId') projectId: string) {
     return toProjectResponse(await this.projects.getProject(projectId))
+  }
+
+  @Get(':projectId/agents')
+  getProjectAgents(@Param('projectId') projectId: string) {
+    return this.projects.listProjectAgents(projectId)
+  }
+
+  @Get(':projectId/agents/:agentId')
+  getProjectAgent(
+    @Param('projectId') projectId: string,
+    @Param('agentId') agentId: string,
+  ) {
+    return this.projects.getProjectAgent(projectId, agentId)
+  }
+
+  @Post(':projectId/agents')
+  createProjectAgent(
+    @Param('projectId') projectId: string,
+    @Body() input: CreateAgentDto,
+  ) {
+    return this.projects.createProjectAgent(projectId, input)
+  }
+
+  @Patch(':projectId/agents/:agentId')
+  updateProjectAgent(
+    @Param('projectId') projectId: string,
+    @Param('agentId') agentId: string,
+    @Body() input: UpdateAgentDto,
+  ) {
+    return this.projects.updateProjectAgent(projectId, agentId, input)
+  }
+
+  @Delete(':projectId/agents/:agentId')
+  deleteProjectAgent(
+    @Param('projectId') projectId: string,
+    @Param('agentId') agentId: string,
+  ) {
+    return this.projects.deleteProjectAgent(projectId, agentId)
   }
 
   @Patch(':projectId/metadata')
@@ -85,9 +124,25 @@ export class ProjectsController {
     return this.projects.getProjectFileContent(projectId, query)
   }
 
+  @Get(':projectId/files/preview')
+  getProjectFilePreview(
+    @Param('projectId') projectId: string,
+    @Query() query: FileContentQueryDto,
+  ) {
+    return this.projects.getProjectFilePreview(projectId, query)
+  }
+
   @Get(':projectId/diff')
   getProjectDiff(@Param('projectId') projectId: string) {
     return this.projects.getProjectDiff(projectId)
+  }
+
+  @Post(':projectId/change-sets/:changeSetId/apply')
+  applyProjectChangeSet(
+    @Param('projectId') projectId: string,
+    @Param('changeSetId') changeSetId: string,
+  ) {
+    return this.projects.applyProjectChangeSet(projectId, changeSetId)
   }
 
   @Get(':projectId/preview-targets')
@@ -114,6 +169,22 @@ export class ProjectsController {
     @Body() input: WriteWorkspaceFileDto,
   ) {
     return this.projects.writeWorkspaceFile(projectId, input)
+  }
+
+  @Put(':projectId/messages/:messageId/pin')
+  pinProjectMessage(
+    @Param('projectId') projectId: string,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.projects.pinProjectMessage(projectId, messageId)
+  }
+
+  @Delete(':projectId/messages/:messageId/pin')
+  unpinProjectMessage(
+    @Param('projectId') projectId: string,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.projects.unpinProjectMessage(projectId, messageId)
   }
 
   @Post(':projectId/messages/stream')
