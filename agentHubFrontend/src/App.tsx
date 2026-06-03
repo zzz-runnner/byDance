@@ -651,6 +651,9 @@ export function App() {
       await reloadWorkbench(project.workspaceId ?? activeWorkspaceId, 'refresh', {
         limit: INITIAL_WORKSPACE_PAGE_LIMIT,
         query: '',
+        status: workspaceStatusFilter,
+        sortBy: workspaceSortBy,
+        sortDirection: workspaceSortDirection,
       })
       setCreateDialogOpen(false)
     } catch (error) {
