@@ -17,7 +17,6 @@ import type {
 } from '@shared/contracts'
 import { AgentSessionTurnSchema, isoNow } from '@shared/contracts'
 import type { ServerEnv } from '../env'
-import { createModelGateway } from '../model-gateway'
 import type { StateStore } from '../store/types'
 import {
   routeAllowsExecution,
@@ -28,6 +27,10 @@ import {
   type TurnRoute,
 } from './turn-router'
 import { buildReplyContextPayload } from './reply-context'
+import { resolveWorkspaceAgents } from '../agents/workspace-agents'
+import { generateAgentModelResponse, resolveAgentConfiguredModel } from './agent-model'
+import type { WorkspaceRuntimeManager } from '../runtime/workspace'
+import type { LocalToolGateway } from '../tool-gateway'
 
 export type PlannedAgentSessionTurn = {
   session: AgentSession
@@ -62,6 +65,8 @@ export type AgentReplyPersistenceInput = {
 type AgentSessionServices = {
   env: ServerEnv
   store: StateStore
+  runtime: WorkspaceRuntimeManager
+  toolGateway: LocalToolGateway
   streamAgentReply?: (input: AgentReplyPersistenceInput) => Promise<Message>
 }
 
@@ -298,7 +303,7 @@ export function buildAgentSessionContextPackage(input: AgentSessionContextInput)
   return JSON.stringify(
     {
       userMessage: input.userMessage,
-      replyContext: buildReplyContextPayload(input.replyTo, [input.agent]),
+      replyContext: buildReplyContextPayload(input.replyTo, resolveWorkspaceAgents(input.state, input.workspace.id)),
       codeSelection: input.codeSelection
         ? {
             filePath: input.codeSelection.filePath,
@@ -627,7 +632,6 @@ export async function decideAgentSessionTurn(input: AgentSessionTurnInput): Prom
       }
     }
 
-    const gateway = createModelGateway(input.services.env)
     const contextPackage = buildAgentSessionContextPackage({
       state: input.state,
       workspace: input.workspace,
@@ -642,21 +646,29 @@ export async function decideAgentSessionTurn(input: AgentSessionTurnInput): Prom
     contextTokenEstimate = estimateTokenCount(contextPackage)
     modelStartedAt = Date.now()
     const modelSelection = selectModelForRoute(input.services.env, routed.route)
-    const response = await gateway.generate({
-      systemPrompt: buildAgentSessionSystemPrompt(input.agent, routed.route),
-      userPrompt: buildAgentSessionUserPrompt(contextPackage),
-      model: modelSelection.model,
-      thinking: modelSelection.thinking,
-      timeoutMs:
-        routed.route.modelProfile === 'router'
-          ? input.services.env.AGENTHUB_ROUTER_TIMEOUT_MS
-          : Math.min(input.services.env.AGENTHUB_ORCHESTRATOR_TIMEOUT_MS, 30_000),
-      maxTokens:
-        routed.route.modelProfile === 'router'
-          ? Math.max(input.services.env.AGENTHUB_ROUTER_MAX_TOKENS, 900)
-          : Math.min(input.services.env.AGENTHUB_ORCHESTRATOR_MAX_TOKENS, 1_200),
-      temperature: 0.2,
-      responseFormat: 'json_object',
+    const response = await generateAgentModelResponse({
+      env: input.services.env,
+      runtime: input.services.runtime,
+      toolGateway: input.services.toolGateway,
+      workspace: input.workspace,
+      conversation: input.conversation,
+      agent: input.agent,
+      request: {
+        systemPrompt: buildAgentSessionSystemPrompt(input.agent, routed.route),
+        userPrompt: buildAgentSessionUserPrompt(contextPackage),
+        model: resolveAgentConfiguredModel(input.agent, modelSelection.model),
+        thinking: modelSelection.thinking,
+        timeoutMs:
+          routed.route.modelProfile === 'router'
+            ? input.services.env.AGENTHUB_ROUTER_TIMEOUT_MS
+            : Math.min(input.services.env.AGENTHUB_ORCHESTRATOR_TIMEOUT_MS, 30_000),
+        maxTokens:
+          routed.route.modelProfile === 'router'
+            ? Math.max(input.services.env.AGENTHUB_ROUTER_MAX_TOKENS, 900)
+            : Math.min(input.services.env.AGENTHUB_ORCHESTRATOR_MAX_TOKENS, 1_200),
+        temperature: 0.2,
+        responseFormat: 'json_object',
+      },
     })
 
     return {

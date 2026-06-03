@@ -16,6 +16,7 @@ import type {
   TaskHandoff,
   WorkflowEvent,
   WorkflowEventRecord,
+  WorkspaceAgentMember,
   Workspace,
 } from './contracts'
 
@@ -37,6 +38,7 @@ export type {
   TaskHandoff,
   WorkflowEvent,
   WorkflowEventRecord,
+  WorkspaceAgentMember,
   Workspace,
 }
 
@@ -130,10 +132,65 @@ export type WorkspaceFileContent = {
   lineCount: number
 }
 
+export type WorkspaceDocumentPreview = {
+  kind: 'pdf' | 'docx' | 'pptx'
+  path: string
+  name: string
+  byteLength: number
+  updatedAt: string
+  sourceUrl: string
+  summary: string
+  textContent?: string
+  sections?: Array<{
+    title: string
+    content: string
+  }>
+}
+
 export type WorkspaceDiffSnapshot = {
   baseCommit: string
   status: string
   patch: string
+}
+
+export type CodeWorkspaceDialogTab = 'code' | 'diff' | 'preview'
+
+export type CodeWorkspaceDialogTurnPreview = {
+  title: string
+  summary: string
+  url: string
+}
+
+export type CodeWorkspaceDialogTurnDiff = {
+  changeSetId?: string
+  title: string
+  summary: string
+  patch?: string
+  files?: ChangedFile[]
+}
+
+export type CodeWorkspaceDialogTurnReview = {
+  verdict?: string
+  summary: string
+  issues?: string[]
+}
+
+export type CodeWorkspaceDialogTurnResult = {
+  title: string
+  summary?: string
+  badges: string[]
+  defaultTab: CodeWorkspaceDialogTab
+  preview?: CodeWorkspaceDialogTurnPreview
+  diff?: CodeWorkspaceDialogTurnDiff
+  review?: CodeWorkspaceDialogTurnReview
+  sourceArchiveUrl?: string
+  deploymentUrl?: string
+}
+
+export type CodeWorkspaceDialogRequest = {
+  tab?: CodeWorkspaceDialogTab
+  previewSurface?: WorkspaceDeliverySurface
+  turnResult?: CodeWorkspaceDialogTurnResult
 }
 
 export type WorkspacePreviewTarget = {
@@ -184,6 +241,7 @@ export type WorkspacePreviewCapability = {
 }
 
 export type DeliveryAssetStatus = 'idle' | 'ready' | 'failed'
+export type WorkspaceDeliverySurface = 'build' | 'deployment'
 
 export type WorkspaceDeliveryVersion = {
   versionId: string
@@ -221,6 +279,7 @@ export type WorkspaceVersionRecord = {
   buildLog?: string
   createdAt: string
   updatedAt: string
+  isCurrent?: boolean
 }
 
 export type WorkspaceDeploymentRecord = {
@@ -229,6 +288,23 @@ export type WorkspaceDeploymentRecord = {
   deployPath: string
   deployUrl: string
   createdAt: string
+}
+
+export type WorkspaceVersionDiff = {
+  v1: string
+  v2: string
+  diff: string
+  fromVersion: WorkspaceVersionRecord
+  toVersion: WorkspaceVersionRecord
+}
+
+export type WorkspaceVersionRestoreResult = {
+  projectId: string
+  workspaceId: string
+  restoredVersion: WorkspaceVersionRecord
+  snapshotVersion?: WorkspaceVersionRecord
+  currentVersionId: string
+  restoredAt: string
 }
 
 export type StreamMessageInput = {

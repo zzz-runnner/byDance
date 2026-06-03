@@ -292,6 +292,19 @@ function buildAllowedToolArgs(agent: AgentAdapterInput['agent']): string[] {
 }
 
 /**
+ * Resolves the Claude model flag for one AgentHub child-agent run.
+ * Input: child-agent definition.
+ * Output: CLI arguments that keep the default model unless an explicit override exists.
+ */
+function buildClaudeModelArgs(agent: AgentAdapterInput['agent']): string[] {
+  const model = agent.model?.trim()
+  if (!model || model.toLowerCase() === 'default') {
+    return []
+  }
+  return ['--model', model]
+}
+
+/**
  * Creates a Claude Code adapter backed by the local claude CLI.
  * Input: server environment. Output: AgentHub adapter implementation.
  */
@@ -307,6 +320,7 @@ export function createClaudeCodeAdapter(env: ServerEnv, toolGateway: LocalToolGa
         '--include-partial-messages',
         '--verbose',
         '--no-session-persistence',
+        ...buildClaudeModelArgs(input.agent),
         '--permission-mode',
         toClaudePermissionMode(input.agent.permissionMode),
         ...buildAllowedToolArgs(input.agent),

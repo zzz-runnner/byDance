@@ -16,28 +16,41 @@ import {
   X,
 } from 'lucide-react'
 import {
+  applyBusinessProjectChangeSet,
   buildBusinessProjectVersion,
   createBusinessProjectVersion,
   deployBusinessProjectVersion,
   fetchBusinessProjectDeliverySummary,
+  fetchBusinessProjectVersionDiff,
+  fetchBusinessProjectVersions,
   fetchBusinessProjectPreviewCapability,
-  triggerBusinessProjectPreviewBuild,
   fetchBusinessProjectDiff,
   fetchBusinessProjectFileContent,
+  fetchBusinessProjectFilePreview,
   fetchBusinessProjectFiles,
+  restoreBusinessProjectVersion,
+  triggerBusinessProjectPreviewBuild,
 } from '../api/businessBackend'
 import type {
+  CodeWorkspaceDialogRequest,
+  CodeWorkspaceDialogTab,
+  CodeWorkspaceDialogTurnResult,
   CodeSelectionReference,
   WorkspaceDeliveryAsset,
+  WorkspaceDeliverySurface,
   WorkspaceDeliverySummary,
+  WorkspaceDocumentPreview,
   WorkspacePreviewCapability,
   WorkspacePreviewTarget,
   WorkspaceDiffSnapshot,
   WorkspaceFileContent,
   WorkspaceFileNode,
+  WorkspaceVersionDiff,
   WorkspaceVersionRecord,
+  WorkspaceVersionRestoreResult,
 } from '../types'
 import { GlassPanel } from './GlassPanel'
+import { MarkdownRenderer } from './MarkdownRenderer'
 import { StatusPill } from './StatusPill'
 
 type CodeWorkspaceDialogProps = {
@@ -47,11 +60,19 @@ type CodeWorkspaceDialogProps = {
   onClose: () => void
   onQuoteSelection: (selection: CodeSelectionReference) => void
   onProjectDeliveryUpdated?: () => void | Promise<void>
+  requestedDialogState?: CodeWorkspaceDialogRequest
+  requestedDialogStateKey?: number
 }
 
 type FileCacheEntry = {
   loading: boolean
   content?: WorkspaceFileContent
+  error?: string
+}
+
+type DocumentPreviewCacheEntry = {
+  loading: boolean
+  preview?: WorkspaceDocumentPreview
   error?: string
 }
 
@@ -68,10 +89,11 @@ type EditorSelectionState = {
 }
 
 type CodeWrapMode = 'on' | 'off'
-type WorkspacePanelMode = 'code' | 'preview'
+type WorkspacePanelMode = CodeWorkspaceDialogTab
 type PreviewSurfaceMode = 'workspace' | 'build' | 'deployment'
 type PreviewFrameStatus = 'loading' | 'slow' | 'ready' | 'error'
 type DeliveryAction = 'save' | 'build' | 'deploy' | undefined
+type DialogBootstrapState = 'idle' | 'loading' | 'ready' | 'error'
 
 type PreviewSurfaceOption = {
   mode: PreviewSurfaceMode
@@ -87,6 +109,7 @@ type MonacoThemeData = import('monaco-editor').editor.IStandaloneThemeData
 type MonacoDisposable = import('monaco-editor').IDisposable
 
 const CODE_EDITOR_THEME = 'agenthub-dark'
+const DIALOG_ANIMATION_MS = 220
 
 const CODE_EDITOR_THEME_DATA: MonacoThemeData = {
   base: 'vs-dark',
@@ -184,6 +207,18 @@ function firstTextFilePath(nodes: WorkspaceFileNode[]): string | undefined {
     }
   }
   return undefined
+}
+
+/**
+ * Returns whether one file path can use the document preview MVP instead of the text editor.
+ * Input: repo-relative file path.
+ * Output: true for PDF, DOCX, and PPTX files.
+ */
+function isDocumentPreviewableFile(filePath: string | undefined): boolean {
+  if (!filePath) {
+    return false
+  }
+  return /\.(pdf|docx|pptx)$/i.test(filePath)
 }
 
 /**
@@ -520,16 +555,24 @@ export function CodeWorkspaceDialog({
   onClose,
   onQuoteSelection,
   onProjectDeliveryUpdated,
+  requestedDialogState,
+  requestedDialogStateKey,
 }: CodeWorkspaceDialogProps) {
   const editorRef = useRef<MonacoEditorInstance | null>(null)
   const editorShellRef = useRef<HTMLDivElement | null>(null)
+  const workspaceLayoutRef = useRef<HTMLDivElement | null>(null)
   const activeFilePathRef = useRef<string | undefined>(undefined)
   const activeLanguageRef = useRef<string | undefined>(undefined)
   const editorDisposablesRef = useRef<MonacoDisposable[]>([])
   const selectionDraftRef = useRef<EditorSelectionState | undefined>(undefined)
   const selectionCommitTimerRef = useRef<number | undefined>(undefined)
+  const closeTimerRef = useRef<number | undefined>(undefined)
   const pointerSelectionRef = useRef(false)
   const autoBuildKeyRef = useRef('')
+  const [isRendered, setIsRendered] = useState(open)
+  const [isVisible, setIsVisible] = useState(open)
+  const [bootstrapState, setBootstrapState] = useState<DialogBootstrapState>(open ? 'loading' : 'idle')
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0)
   const [panelMode, setPanelMode] = useState<WorkspacePanelMode>('code')
   const [fileTree, setFileTree] = useState<WorkspaceFileNode[]>([])
   const [treeLoading, setTreeLoading] = useState(false)
@@ -538,11 +581,15 @@ export function CodeWorkspaceDialog({
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({})
   const [activeFilePath, setActiveFilePath] = useState<string>()
   const [fileCache, setFileCache] = useState<Record<string, FileCacheEntry>>({})
+  const [documentPreviewCache, setDocumentPreviewCache] = useState<Record<string, DocumentPreviewCacheEntry>>({})
   const [diffSnapshot, setDiffSnapshot] = useState<WorkspaceDiffSnapshot>()
+  const [applyingChangeSet, setApplyingChangeSet] = useState(false)
+  const [changeSetNotice, setChangeSetNotice] = useState('')
   const [selectionState, setSelectionState] = useState<EditorSelectionState | undefined>(undefined)
   const [treeRootLabel, setTreeRootLabel] = useState('')
   const [wrapMode, setWrapMode] = useState<CodeWrapMode>('on')
   const [previewCapability, setPreviewCapability] = useState<WorkspacePreviewCapability>()
+  const [turnResultContext, setTurnResultContext] = useState<CodeWorkspaceDialogTurnResult>()
   const [previewSurfaceMode, setPreviewSurfaceMode] = useState<PreviewSurfaceMode>('workspace')
   const [selectedPreviewPath, setSelectedPreviewPath] = useState<string>()
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -552,6 +599,17 @@ export function CodeWorkspaceDialog({
   const [deliveryLoading, setDeliveryLoading] = useState(false)
   const [deliveryError, setDeliveryError] = useState('')
   const [deliveryAction, setDeliveryAction] = useState<DeliveryAction>()
+  const [versions, setVersions] = useState<WorkspaceVersionRecord[]>([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [versionsError, setVersionsError] = useState('')
+  const [selectedVersionId, setSelectedVersionId] = useState<string>()
+  const [diffBaseVersionId, setDiffBaseVersionId] = useState<string>()
+  const [versionDiff, setVersionDiff] = useState<WorkspaceVersionDiff>()
+  const [versionDiffLoading, setVersionDiffLoading] = useState(false)
+  const [versionDiffError, setVersionDiffError] = useState('')
+  const [restoreBusyVersionId, setRestoreBusyVersionId] = useState<string>()
+  const [restoreMessage, setRestoreMessage] = useState('')
+  const [lastRestoreResult, setLastRestoreResult] = useState<WorkspaceVersionRestoreResult>()
   const [previewAttempt, setPreviewAttempt] = useState(0)
   const [previewStatus, setPreviewStatus] = useState<PreviewFrameStatus>('loading')
   const [editorViewport, setEditorViewport] = useState({
@@ -565,6 +623,9 @@ export function CodeWorkspaceDialog({
   )
   const activeFileEntry = activeFilePath ? fileCache[activeFilePath] : undefined
   const activeFileContent = activeFileEntry?.content
+  const activeDocumentPreviewEntry = activeFilePath ? documentPreviewCache[activeFilePath] : undefined
+  const activeDocumentPreview = activeDocumentPreviewEntry?.preview
+  const activeFileIsDocumentPreview = isDocumentPreviewableFile(activeFilePath)
   const changedFileCount = countChangedFiles(diffSnapshot?.status)
   const canMountEditor = Boolean(activeFileContent && editorViewport.width >= 240 && editorViewport.height >= 220)
   const previewTargets = previewCapability?.targets ?? []
@@ -584,8 +645,15 @@ export function CodeWorkspaceDialog({
   const workspacePreviewCapability = activePreviewMode === 'workspace' ? previewCapability : undefined
   const previewBuildStatus = previewCapability?.build?.status
   const previewBusy = previewLoading || previewBuildLoading || previewBuildStatus === 'running'
+  const dialogBusy = bootstrapState === 'loading' || treeLoading || previewLoading || deliveryLoading || versionsLoading
   const previewLogExcerpt = previewCapability?.build?.logExcerpt?.trim() ?? ''
   const deliveryBusy = Boolean(deliveryAction)
+  const turnDiff = turnResultContext?.diff
+  const turnReview = turnResultContext?.review
+  const diffPatch = turnDiff?.patch ?? diffSnapshot?.patch ?? ''
+  const diffFiles = turnDiff?.files ?? []
+  const diffSummary = turnDiff?.summary ?? turnReview?.summary ?? ''
+  const diffStatusSummary = diffSnapshot?.status?.trim() ?? ''
   const currentDeliveryVersionId = deliverySummary?.currentVersion?.versionId
   const canShowPreviewFrame = Boolean(activePreviewTarget?.url) && (
     activePreviewMode !== 'workspace' ||
@@ -593,6 +661,11 @@ export function CodeWorkspaceDialog({
     previewCapability?.mode === 'module-shell' ||
     previewBuildStatus === 'success'
   )
+  const currentVersion = versions.find(version => version.isCurrent) ?? versions.find(version => version.versionId === currentDeliveryVersionId)
+  const selectedVersion = versions.find(version => version.versionId === selectedVersionId)
+  const diffBaseVersion = versions.find(version => version.versionId === diffBaseVersionId)
+  const bootstrapErrorMessage =
+    treeError || versionsError || previewError || deliveryError || 'Failed to load workspace assets.'
 
   useEffect(() => {
     activeFilePathRef.current = activeFilePath
@@ -601,6 +674,7 @@ export function CodeWorkspaceDialog({
 
   useEffect(() => {
     return () => {
+      clearDialogCloseTimer()
       clearSelectionCommitTimer()
       disposeEditorListeners()
     }
@@ -618,6 +692,20 @@ export function CodeWorkspaceDialog({
 
     window.clearTimeout(selectionCommitTimerRef.current)
     selectionCommitTimerRef.current = undefined
+  }
+
+  /**
+   * Clears the delayed close timer used by the dialog exit animation.
+   * Input: none.
+   * Output: pending close transition callback canceled.
+   */
+  function clearDialogCloseTimer() {
+    if (closeTimerRef.current === undefined) {
+      return
+    }
+
+    window.clearTimeout(closeTimerRef.current)
+    closeTimerRef.current = undefined
   }
 
   /**
@@ -678,6 +766,144 @@ export function CodeWorkspaceDialog({
     window.requestAnimationFrame(() => {
       editorRef.current?.layout()
     })
+  }
+
+  /**
+   * Resets dialog-scoped state before a fresh bootstrap or after the close animation ends.
+   * Input: none.
+   * Output: cached selections, preview state, and panel state cleared.
+   */
+  function resetDialogState() {
+    clearSelectionCommitTimer()
+    disposeEditorListeners()
+    pointerSelectionRef.current = false
+    selectionDraftRef.current = undefined
+    editorRef.current = null
+    activeFilePathRef.current = undefined
+    activeLanguageRef.current = undefined
+    autoBuildKeyRef.current = ''
+    setEditorViewport({
+      width: 0,
+      height: 0,
+    })
+    setPanelMode('code')
+    setFileTree([])
+    setTreeLoading(false)
+    setTreeError('')
+    setFileQuery('')
+    setExpandedPaths({})
+    setActiveFilePath(undefined)
+    setFileCache({})
+    setDocumentPreviewCache({})
+    setDiffSnapshot(undefined)
+    setApplyingChangeSet(false)
+    setChangeSetNotice('')
+    setSelectionState(undefined)
+    setTreeRootLabel('')
+    setWrapMode('on')
+    setPreviewCapability(undefined)
+    setTurnResultContext(undefined)
+    setPreviewSurfaceMode('workspace')
+    setSelectedPreviewPath(undefined)
+    setPreviewLoading(false)
+    setPreviewError('')
+    setPreviewBuildLoading(false)
+    setDeliverySummary(undefined)
+    setDeliveryLoading(false)
+    setDeliveryError('')
+    setDeliveryAction(undefined)
+    setVersions([])
+    setVersionsLoading(false)
+    setVersionsError('')
+    setSelectedVersionId(undefined)
+    setDiffBaseVersionId(undefined)
+    setVersionDiff(undefined)
+    setVersionDiffLoading(false)
+    setVersionDiffError('')
+    setRestoreBusyVersionId(undefined)
+    setRestoreMessage('')
+    setLastRestoreResult(undefined)
+    setPreviewAttempt(0)
+    setPreviewStatus('loading')
+  }
+
+  /**
+   * Loads one workspace file into the cache so the editor can mount without a second round trip.
+   * Input: project id and repo-relative file path.
+   * Output: resolved text file content cached under the file path.
+   */
+  async function loadFileContentIntoCache(
+    currentProjectId: string,
+    filePath: string,
+  ): Promise<WorkspaceFileContent> {
+    setSelectionState(undefined)
+    setFileCache(previous => ({
+      ...previous,
+      [filePath]: {
+        loading: true,
+      },
+    }))
+
+    try {
+      const content = await fetchBusinessProjectFileContent(currentProjectId, filePath)
+      setFileCache(previous => ({
+        ...previous,
+        [filePath]: {
+          loading: false,
+          content,
+        },
+      }))
+      return content
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load file content.'
+      setFileCache(previous => ({
+        ...previous,
+        [filePath]: {
+          loading: false,
+          error: message,
+        },
+      }))
+      throw new Error(message)
+    }
+  }
+
+  /**
+   * Loads one document preview payload into the local cache for supported binary files.
+   * Input: project id and repo-relative file path.
+   * Output: resolved document preview cached under the file path.
+   */
+  async function loadDocumentPreviewIntoCache(
+    currentProjectId: string,
+    filePath: string,
+  ): Promise<WorkspaceDocumentPreview> {
+    setDocumentPreviewCache(previous => ({
+      ...previous,
+      [filePath]: {
+        loading: true,
+      },
+    }))
+
+    try {
+      const preview = await fetchBusinessProjectFilePreview(currentProjectId, filePath)
+      setDocumentPreviewCache(previous => ({
+        ...previous,
+        [filePath]: {
+          loading: false,
+          preview,
+        },
+      }))
+      return preview
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load document preview.'
+      setDocumentPreviewCache(previous => ({
+        ...previous,
+        [filePath]: {
+          loading: false,
+          error: message,
+        },
+      }))
+      throw new Error(message)
+    }
   }
 
   /**
@@ -761,6 +987,72 @@ export function CodeWorkspaceDialog({
   }
 
   /**
+   * Loads saved version history for the selected project.
+   * Input: optional silent-refresh flag.
+   * Output: version list state refreshed from the backend.
+   */
+  async function loadVersions(options?: { silent?: boolean }): Promise<boolean> {
+    if (!projectId) {
+      return false
+    }
+
+    if (!options?.silent) {
+      setVersionsLoading(true)
+      setVersionsError('')
+    }
+
+    try {
+      const nextVersions = await fetchBusinessProjectVersions(projectId)
+      setVersions(nextVersions)
+      setSelectedVersionId(previous => {
+        if (previous && nextVersions.some(version => version.versionId === previous)) {
+          return previous
+        }
+        return nextVersions[0]?.versionId
+      })
+      setDiffBaseVersionId(previous => {
+        if (previous && nextVersions.some(version => version.versionId === previous)) {
+          return previous
+        }
+        return undefined
+      })
+      return true
+    } catch (error) {
+      setVersions([])
+      setVersionsError(error instanceof Error ? error.message : 'Failed to load version history.')
+      return false
+    } finally {
+      if (!options?.silent) {
+        setVersionsLoading(false)
+      }
+    }
+  }
+
+  /**
+   * Loads one saved-version diff from the business backend.
+   * Input: base and target version ids.
+   * Output: version diff state refreshed from the backend.
+   */
+  async function loadVersionDiff(baseVersionId: string, targetVersionId: string) {
+    if (!projectId) {
+      return
+    }
+
+    setVersionDiffLoading(true)
+    setVersionDiffError('')
+
+    try {
+      const nextDiff = await fetchBusinessProjectVersionDiff(projectId, baseVersionId, targetVersionId)
+      setVersionDiff(nextDiff)
+    } catch (error) {
+      setVersionDiff(undefined)
+      setVersionDiffError(error instanceof Error ? error.message : 'Failed to load version diff.')
+    } finally {
+      setVersionDiffLoading(false)
+    }
+  }
+
+  /**
    * Loads the current project file browser snapshot from the local backend.
    * Input: optional preferred active file path and preview target path.
    * Output: updates file tree, diff state, preview state, and active selections.
@@ -768,9 +1060,10 @@ export function CodeWorkspaceDialog({
   async function loadWorkspaceBrowser(
     preferredActiveFilePath?: string,
     preferredPreviewPath?: string,
-  ) {
+    options?: { prefetchInitialFileContent?: boolean },
+  ): Promise<{ success: boolean; activeFilePath?: string }> {
     if (!projectId) {
-      return
+      return { success: false }
     }
 
     setTreeLoading(true)
@@ -804,7 +1097,14 @@ export function CodeWorkspaceDialog({
         ...previous,
         ...expandAncestors(nextActiveFilePath),
       }))
+      if (options?.prefetchInitialFileContent && nextActiveFilePath) {
+        await loadFileContentIntoCache(projectId, nextActiveFilePath)
+      }
       setActiveFilePath(nextActiveFilePath)
+      return {
+        success: true,
+        activeFilePath: nextActiveFilePath,
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load workspace files.'
       setTreeError(message)
@@ -813,6 +1113,7 @@ export function CodeWorkspaceDialog({
       setPreviewCapability(undefined)
       setSelectedPreviewPath(undefined)
       setDeliverySummary(undefined)
+      return { success: false }
     } finally {
       setTreeLoading(false)
       setPreviewLoading(false)
@@ -820,48 +1121,108 @@ export function CodeWorkspaceDialog({
     }
   }
 
-  useEffect(() => {
-    if (!open) {
-      clearSelectionCommitTimer()
-      disposeEditorListeners()
-      pointerSelectionRef.current = false
-      selectionDraftRef.current = undefined
-      editorRef.current = null
-      setEditorViewport({
-        width: 0,
-        height: 0,
-      })
+  /**
+   * Reloads every project-scoped browser surface after one restore or delivery mutation.
+   * Input: optional preferred active file and preview target.
+   * Output: tree, preview, diff, delivery, and version states refreshed.
+   */
+  async function refreshWorkspaceSurfaces(
+    preferredActiveFilePath?: string,
+    preferredPreviewPath?: string,
+  ) {
+    await loadWorkspaceBrowser(preferredActiveFilePath, preferredPreviewPath)
+    await loadVersions({ silent: true })
+    await onProjectDeliveryUpdated?.()
+  }
+
+  /**
+   * Applies the currently focused change set onto the workspace repo and refreshes visible surfaces.
+   * Input: none.
+   * Output: diff, file tree, preview, and delivery panels reloaded after the patch mutation.
+   */
+  async function handleApplyCurrentChangeSet() {
+    if (!projectId || !turnDiff?.changeSetId || applyingChangeSet) {
       return
     }
 
-    setPanelMode('code')
-    setFileTree([])
-    setFileCache({})
-    setDiffSnapshot(undefined)
-    setSelectionState(undefined)
-    setExpandedPaths({})
-    setActiveFilePath(undefined)
-    setFileQuery('')
-    setWrapMode('on')
-    setPreviewCapability(undefined)
-    setPreviewSurfaceMode('workspace')
-    setSelectedPreviewPath(undefined)
-    setPreviewError('')
-    setPreviewLoading(false)
-    setPreviewBuildLoading(false)
-    setDeliverySummary(undefined)
-    setDeliveryLoading(false)
-    setDeliveryError('')
-    setDeliveryAction(undefined)
-    setPreviewAttempt(0)
-    selectionDraftRef.current = undefined
-    pointerSelectionRef.current = false
-    autoBuildKeyRef.current = ''
-
-    if (projectId) {
-      void loadWorkspaceBrowser()
+    setApplyingChangeSet(true)
+    setChangeSetNotice('')
+    try {
+      const result = await applyBusinessProjectChangeSet(projectId, turnDiff.changeSetId)
+      setChangeSetNotice(result.summary)
+      await refreshWorkspaceSurfaces(activeFilePath, selectedPreviewPath)
+    } catch (error) {
+      setChangeSetNotice(error instanceof Error ? error.message : 'Apply diff failed.')
+    } finally {
+      setApplyingChangeSet(false)
     }
-  }, [open, projectId])
+  }
+
+  useEffect(() => {
+    clearDialogCloseTimer()
+
+    if (open) {
+      setIsRendered(true)
+      const frame = window.requestAnimationFrame(() => {
+        setIsVisible(true)
+      })
+      return () => {
+        window.cancelAnimationFrame(frame)
+      }
+    }
+
+    setIsVisible(false)
+    if (!isRendered) {
+      setBootstrapState('idle')
+      return
+    }
+
+    closeTimerRef.current = window.setTimeout(() => {
+      setIsRendered(false)
+      setBootstrapState('idle')
+      resetDialogState()
+      clearDialogCloseTimer()
+    }, DIALOG_ANIMATION_MS)
+
+    return () => {
+      clearDialogCloseTimer()
+    }
+  }, [isRendered, open])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    resetDialogState()
+    setBootstrapState('loading')
+
+    if (!projectId) {
+      setTreeError('Project id is required before opening workspace assets.')
+      setBootstrapState('error')
+      return
+    }
+
+    let cancelled = false
+
+    async function bootstrapDialog() {
+      const [browserResult, versionsReady] = await Promise.all([
+        loadWorkspaceBrowser(undefined, undefined, { prefetchInitialFileContent: true }),
+        loadVersions(),
+      ])
+      if (cancelled) {
+        return
+      }
+
+      setBootstrapState(browserResult.success && versionsReady ? 'ready' : 'error')
+    }
+
+    void bootstrapDialog()
+
+    return () => {
+      cancelled = true
+    }
+  }, [bootstrapAttempt, open, projectId])
 
   useEffect(() => {
     if (!open || !activePreviewOption || activePreviewOption.mode === previewSurfaceMode) {
@@ -919,36 +1280,48 @@ export function CodeWorkspaceDialog({
     if (!open || !projectId || !activeFilePath) {
       return
     }
-    const cachedEntry = fileCache[activeFilePath]
-    if (cachedEntry?.content || cachedEntry?.error) {
-      return
-    }
 
     let cancelled = false
     const currentProjectId = projectId
     const currentFilePath = activeFilePath
 
-    async function loadFileContent() {
-      setSelectionState(undefined)
-      setFileCache(previous => ({
-        ...previous,
-        [currentFilePath]: {
-          loading: true,
-        },
-      }))
+    if (isDocumentPreviewableFile(currentFilePath)) {
+      const cachedPreview = documentPreviewCache[currentFilePath]
+      if (cachedPreview?.loading || cachedPreview?.preview || cachedPreview?.error) {
+        return
+      }
 
-      try {
-        const content = await fetchBusinessProjectFileContent(currentProjectId, currentFilePath)
-        if (cancelled) {
-          return
+      async function loadDocumentPreview() {
+        try {
+          await loadDocumentPreviewIntoCache(currentProjectId, currentFilePath)
+        } catch (error) {
+          if (cancelled) {
+            return
+          }
+          setDocumentPreviewCache(previous => ({
+            ...previous,
+            [currentFilePath]: {
+              loading: false,
+              error: error instanceof Error ? error.message : 'Failed to load document preview.',
+            },
+          }))
         }
-        setFileCache(previous => ({
-          ...previous,
-          [currentFilePath]: {
-            loading: false,
-            content,
-          },
-        }))
+      }
+
+      void loadDocumentPreview()
+      return () => {
+        cancelled = true
+      }
+    }
+
+    const cachedEntry = fileCache[currentFilePath]
+    if (cachedEntry?.loading || cachedEntry?.content || cachedEntry?.error) {
+      return
+    }
+
+    async function loadFileContent() {
+      try {
+        await loadFileContentIntoCache(currentProjectId, currentFilePath)
       } catch (error) {
         if (cancelled) {
           return
@@ -968,7 +1341,7 @@ export function CodeWorkspaceDialog({
     return () => {
       cancelled = true
     }
-  }, [activeFilePath, open, projectId])
+  }, [activeFilePath, documentPreviewCache, fileCache, open, projectId])
 
   useEffect(() => {
     clearSelectionCommitTimer()
@@ -1051,6 +1424,16 @@ export function CodeWorkspaceDialog({
     }
   }, [panelMode])
 
+  useEffect(() => {
+    if (!open || !projectId || !selectedVersionId || !diffBaseVersionId || selectedVersionId === diffBaseVersionId) {
+      setVersionDiff(undefined)
+      setVersionDiffError('')
+      return
+    }
+
+    void loadVersionDiff(diffBaseVersionId, selectedVersionId)
+  }, [diffBaseVersionId, open, projectId, selectedVersionId])
+
   /**
    * Starts or retries the current preview build through the business backend.
    * Input: optional force flag.
@@ -1080,8 +1463,7 @@ export function CodeWorkspaceDialog({
    * Output: workspace browser and parent room state reloaded.
    */
   async function refreshAfterDeliveryAction() {
-    await loadWorkspaceBrowser(activeFilePath, selectedPreviewPath)
-    await onProjectDeliveryUpdated?.()
+    await refreshWorkspaceSurfaces(activeFilePath, selectedPreviewPath)
   }
 
   /**
@@ -1203,7 +1585,92 @@ export function CodeWorkspaceDialog({
    * Output: reloads browser data from the local backend.
    */
   async function handleRefresh() {
-    await loadWorkspaceBrowser(activeFilePath, selectedPreviewPath)
+    await refreshWorkspaceSurfaces(activeFilePath, selectedPreviewPath)
+  }
+
+  /**
+   * Opens one preview surface inside the main code workspace area.
+   * Input: target preview surface mode.
+   * Output: dialog scrolls to the code area and switches to preview.
+   */
+  function openPreviewSurface(mode: PreviewSurfaceMode) {
+    setPanelMode('preview')
+    setPreviewSurfaceMode(mode)
+    setPreviewAttempt(0)
+    window.requestAnimationFrame(() => {
+      workspaceLayoutRef.current?.scrollIntoView({
+        block: 'start',
+        behavior: 'smooth',
+      })
+    })
+  }
+
+  /**
+   * Applies one external dialog-open request from the chat surface.
+   * Input: optional requested tab, preview surface, and turn-result payload.
+   * Output: dialog tab state and preview source updated in place.
+   */
+  function applyDialogRequest(request: CodeWorkspaceDialogRequest | undefined) {
+    setTurnResultContext(request?.turnResult)
+
+    const nextTab = request?.tab ?? request?.turnResult?.defaultTab ?? 'code'
+    setPanelMode(nextTab)
+
+    if (nextTab === 'preview') {
+      if (request?.previewSurface) {
+        setPreviewSurfaceMode(request.previewSurface)
+      } else {
+        setPreviewSurfaceMode('workspace')
+      }
+      setPreviewAttempt(0)
+    }
+  }
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    applyDialogRequest(requestedDialogState)
+  }, [open, requestedDialogState, requestedDialogStateKey])
+
+  /**
+   * Restores the workspace repo to the selected saved version and refreshes every dependent panel.
+   * Input: target version record.
+   * Output: version restore result stored for user feedback.
+   */
+  async function handleRestoreVersion(version: WorkspaceVersionRecord) {
+    if (!projectId || restoreBusyVersionId) {
+      return
+    }
+
+    const confirmed = window.confirm(
+      `确定恢复到版本 ${version.versionId} 吗？\n\n这会覆盖当前工作区源码。\n恢复前会自动保存当前快照，避免丢失现在的内容。`,
+    )
+
+    if (!confirmed) {
+      return
+    }
+
+    setRestoreBusyVersionId(version.versionId)
+    setVersionsError('')
+    setVersionDiffError('')
+
+    try {
+      const result = await restoreBusinessProjectVersion(projectId, version.versionId, {
+        createSnapshotBeforeRestore: true,
+        ...(restoreMessage.trim() ? { message: restoreMessage.trim() } : {}),
+      })
+      setLastRestoreResult(result)
+      setSelectedVersionId(result.restoredVersion.versionId)
+      setDiffBaseVersionId(undefined)
+      setVersionDiff(undefined)
+      await refreshWorkspaceSurfaces(activeFilePath, selectedPreviewPath)
+    } catch (error) {
+      setVersionsError(error instanceof Error ? error.message : 'Failed to restore version.')
+    } finally {
+      setRestoreBusyVersionId(undefined)
+    }
   }
 
   /**
@@ -1215,12 +1682,16 @@ export function CodeWorkspaceDialog({
     setPreviewAttempt(previous => previous + 1)
   }
 
-  if (!open) {
+  if (!isRendered) {
     return null
   }
 
   return (
-    <div className="code-dialog-backdrop" role="presentation" onClick={onClose}>
+    <div
+      className={`code-dialog-backdrop ${isVisible ? 'is-visible' : ''}`}
+      role="presentation"
+      onClick={onClose}
+    >
       <div className="code-dialog__surface" role="presentation" onClick={event => event.stopPropagation()}>
         <GlassPanel className="code-dialog">
           <header className="code-dialog__header">
@@ -1235,8 +1706,20 @@ export function CodeWorkspaceDialog({
               </span>
             </div>
             <div className="code-dialog__actions">
-              <button className="icon-button code-dialog__icon-button" type="button" onClick={() => void handleRefresh()} title="刷新工作区">
-                <RefreshCcw className={treeLoading || previewLoading ? 'icon-spin' : ''} size={16} />
+              <button
+                className="icon-button code-dialog__icon-button"
+                type="button"
+                onClick={() => {
+                  if (bootstrapState === 'ready') {
+                    void handleRefresh()
+                    return
+                  }
+                  setBootstrapAttempt(previous => previous + 1)
+                }}
+                disabled={bootstrapState === 'loading'}
+                title={bootstrapState === 'ready' ? '刷新工作区' : '重试加载工作区资源'}
+              >
+                <RefreshCcw className={dialogBusy ? 'icon-spin' : ''} size={16} />
               </button>
               <button className="icon-button code-dialog__icon-button" type="button" onClick={onClose} title="关闭代码面板">
                 <X size={16} />
@@ -1244,6 +1727,46 @@ export function CodeWorkspaceDialog({
             </div>
           </header>
 
+          {bootstrapState !== 'ready' ? (
+            <div className="code-dialog__loading-shell">
+              <div className={`code-dialog__loading-card ${bootstrapState === 'error' ? 'is-error' : ''}`}>
+                {bootstrapState === 'error' ? (
+                  <AlertTriangle size={22} />
+                ) : (
+                  <LoaderCircle className="icon-spin" size={22} />
+                )}
+                <strong>
+                  {bootstrapState === 'error'
+                    ? '工作区资源加载失败'
+                    : '正在准备工作区资源'}
+                </strong>
+                <p>
+                  {bootstrapState === 'error'
+                    ? bootstrapErrorMessage
+                    : '文件树、预览能力、交付状态、版本历史和首个代码文件准备完成后，再进入正式页面。'}
+                </p>
+                <div className="code-dialog__loading-meta">
+                  <span>工作区：{workspaceName ?? '当前工作区'}</span>
+                  <span>文件与差异：{treeLoading ? '加载中' : treeError ? '失败' : '就绪'}</span>
+                  <span>预览能力：{previewLoading ? '加载中' : previewError ? '失败' : '就绪'}</span>
+                  <span>交付状态：{deliveryLoading ? '加载中' : deliveryError ? '失败' : '就绪'}</span>
+                  <span>版本历史：{versionsLoading ? '加载中' : versionsError ? '失败' : '就绪'}</span>
+                </div>
+                {bootstrapState === 'error' ? (
+                  <div className="code-dialog__loading-actions">
+                    <button
+                      className="primary-button"
+                      type="button"
+                      onClick={() => setBootstrapAttempt(previous => previous + 1)}
+                    >
+                      重试
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="code-dialog__body">
           <section className="code-delivery-strip">
             <div className="code-delivery-strip__header">
               <div>
@@ -1295,6 +1818,7 @@ export function CodeWorkspaceDialog({
                 onAction={() => void handleBuildDelivery()}
                 linkLabel={deliverySummary?.build.url ? '打开产物' : undefined}
                 linkUrl={deliverySummary?.build.url}
+                onLinkAction={deliverySummary?.build.url ? () => openPreviewSurface('build') : undefined}
               />
               <DeliveryStatusCard
                 title="本地部署"
@@ -1310,6 +1834,7 @@ export function CodeWorkspaceDialog({
                 onAction={() => void handleDeployDelivery()}
                 linkLabel={deliverySummary?.deployment.url ? '打开部署' : undefined}
                 linkUrl={deliverySummary?.deployment.url}
+                onLinkAction={deliverySummary?.deployment.url ? () => openPreviewSurface('deployment') : undefined}
               />
             </div>
 
@@ -1321,7 +1846,198 @@ export function CodeWorkspaceDialog({
             ) : null}
           </section>
 
-          <div className="code-dialog__layout">
+          <section className="code-version-strip">
+            <div className="code-version-strip__header">
+              <div>
+                <p className="eyebrow">Version History</p>
+                <strong>版本历史 / Diff / 恢复</strong>
+                <span>
+                  {versionsLoading
+                    ? '正在同步版本列表...'
+                    : versions.length > 0
+                      ? `当前共 ${versions.length} 个版本`
+                      : '当前还没有保存过源码版本'}
+                </span>
+              </div>
+              <div className="code-version-strip__actions">
+                <input
+                  className="code-version-message-input"
+                  type="text"
+                  placeholder="可选：恢复提交说明"
+                  value={restoreMessage}
+                  onChange={event => setRestoreMessage(event.currentTarget.value)}
+                />
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void loadVersions()}
+                  disabled={versionsLoading}
+                >
+                  {versionsLoading ? <LoaderCircle className="icon-spin" size={14} /> : <RefreshCcw size={14} />}
+                  刷新版本
+                </button>
+              </div>
+            </div>
+
+            <div className="code-version-strip__layout">
+              <section className="code-versions-list">
+                <div className="code-versions-list__header">
+                  <strong>版本列表</strong>
+                  <span>{currentVersion ? `当前版本：${currentVersion.versionId}` : '当前还没有版本'}</span>
+                </div>
+
+                {versionsError ? (
+                  <div className="code-versions-list__error">{versionsError}</div>
+                ) : null}
+
+                {lastRestoreResult ? (
+                  <div className="code-versions-list__success">
+                    已恢复到 {lastRestoreResult.restoredVersion.versionId}
+                    {lastRestoreResult.snapshotVersion ? `，并自动保存快照 ${lastRestoreResult.snapshotVersion.versionId}` : ''}
+                  </div>
+                ) : null}
+
+                {versionsLoading ? (
+                  <div className="code-versions-list__empty">
+                    <LoaderCircle className="icon-spin" size={18} />
+                    正在加载版本列表...
+                  </div>
+                ) : versions.length === 0 ? (
+                  <div className="code-versions-list__empty">
+                    <RefreshCcw size={18} />
+                    当前还没有可用的源码版本
+                  </div>
+                ) : panelMode === 'diff' ? (
+                  <div className="code-editor-toolbar code-editor-toolbar--preview">
+                    <div className="code-editor-toolbar__meta">
+                      <strong>{turnDiff?.title ?? '当前代码 Diff'}</strong>
+                      <span>{turnResultContext ? '本轮产物差异视图' : '当前工作区实时差异视图'}</span>
+                      <span>{diffSummary || turnResultContext?.summary || diffStatusSummary || '这里会展示当前本轮或当前工作区的代码差异。'}</span>
+                    </div>
+                    <div className="code-editor-toolbar__actions code-editor-toolbar__actions--preview">
+                      {turnDiff?.changeSetId ? (
+                        <button
+                          className="primary-button code-preview-build-button"
+                          type="button"
+                          onClick={() => void handleApplyCurrentChangeSet()}
+                          disabled={applyingChangeSet}
+                        >
+                          {applyingChangeSet ? (
+                            <>
+                              <LoaderCircle className="icon-spin" size={14} />
+                              正在应用 Diff...
+                            </>
+                          ) : (
+                            '一键应用 Diff'
+                          )}
+                        </button>
+                      ) : null}
+                      {turnResultContext?.sourceArchiveUrl ? (
+                        <a
+                          className="secondary-button code-preview-open"
+                          href={turnResultContext.sourceArchiveUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          下载源码快照
+                          <ExternalLink size={14} />
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="code-version-cards">
+                    {versions.map(version => {
+                      const isSelected = version.versionId === selectedVersionId
+                      const isBase = version.versionId === diffBaseVersionId
+                      const isRestoring = restoreBusyVersionId === version.versionId
+
+                      return (
+                        <div
+                          className={`code-version-card ${isSelected ? 'is-selected' : ''} ${version.isCurrent ? 'is-current' : ''}`}
+                          key={version.versionId}
+                        >
+                          <button
+                            className="code-version-card__body"
+                            type="button"
+                            onClick={() => setSelectedVersionId(version.versionId)}
+                          >
+                            <div className="code-version-card__header">
+                              <strong>{version.versionId}</strong>
+                              <div className="code-version-card__badges">
+                                {version.isCurrent ? <StatusPill status="success" label="当前" /> : null}
+                                {isBase ? <StatusPill status="ready" label="Diff 基线" /> : null}
+                              </div>
+                            </div>
+                            <span>{new Date(version.createdAt).toLocaleString('zh-CN', { hour12: false })}</span>
+                            <span>{version.commitSha ? `commit ${version.commitSha.slice(0, 12)}` : '未记录 commitSha'}</span>
+                          </button>
+                          <div className="code-version-card__actions">
+                            <button
+                              className="secondary-button"
+                              type="button"
+                              onClick={() => setDiffBaseVersionId(version.versionId)}
+                              disabled={isSelected}
+                            >
+                              设为对比基线
+                            </button>
+                            <a className="secondary-button" href={version.sourceZipUrl} target="_blank" rel="noreferrer">
+                              下载源码
+                              <ExternalLink size={14} />
+                            </a>
+                            <button
+                              className="primary-button"
+                              type="button"
+                              onClick={() => void handleRestoreVersion(version)}
+                              disabled={isRestoring || version.isCurrent}
+                            >
+                              {isRestoring ? <LoaderCircle className="icon-spin" size={14} /> : null}
+                              {version.isCurrent ? '当前版本' : '恢复到此版本'}
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <section className="code-version-diff">
+                <div className="code-version-diff__header">
+                  <strong>版本 Diff</strong>
+                  <span>
+                    {diffBaseVersion && selectedVersion && diffBaseVersion.versionId !== selectedVersion.versionId
+                      ? `${diffBaseVersion.versionId} -> ${selectedVersion.versionId}`
+                      : '先选一个版本，再选一个 Diff 基线'}
+                  </span>
+                </div>
+
+                {versionDiffError ? (
+                  <div className="code-versions-list__error">{versionDiffError}</div>
+                ) : versionDiffLoading ? (
+                  <div className="code-versions-list__empty">
+                    <LoaderCircle className="icon-spin" size={18} />
+                    正在加载版本差异...
+                  </div>
+                ) : versionDiff ? (
+                  <div className="code-version-diff__content">
+                    <div className="code-version-diff__meta">
+                      <span>从 {versionDiff.fromVersion.versionId}</span>
+                      <span>到 {versionDiff.toVersion.versionId}</span>
+                    </div>
+                    <pre className="code-version-diff__patch">{versionDiff.diff || '两个版本之间没有文本差异。'}</pre>
+                  </div>
+                ) : (
+                  <div className="code-versions-list__empty">
+                    <Braces size={18} />
+                    选择两个不同版本后，这里会显示它们之间的源码 Diff
+                  </div>
+                )}
+              </section>
+            </div>
+          </section>
+
+          <div className="code-dialog__layout" ref={workspaceLayoutRef}>
             <aside className="code-sidebar">
               <label className="search-box">
                 <Search size={15} />
@@ -1378,6 +2094,14 @@ export function CodeWorkspaceDialog({
                   >
                     <Braces size={15} />
                     代码
+                  </button>
+                  <button
+                    className={`code-panel-tab ${panelMode === 'diff' ? 'is-active' : ''}`}
+                    type="button"
+                    onClick={() => setPanelMode('diff')}
+                  >
+                    <ChevronRight size={15} />
+                    Diff
                   </button>
                   <button
                     className={`code-panel-tab ${panelMode === 'preview' ? 'is-active' : ''}`}
@@ -1490,6 +2214,11 @@ export function CodeWorkspaceDialog({
                             )}
                           </select>
                         ) : null}
+                        {activePreviewMode !== 'workspace' ? (
+                          <div className="code-preview-toolbar__workspace-placeholder">
+                            当前预览模式无需选择文件入口
+                          </div>
+                        ) : null}
                         {activePreviewTarget?.url ? (
                           <a
                             className="secondary-button code-preview-open"
@@ -1516,6 +2245,36 @@ export function CodeWorkspaceDialog({
                     </div>
                   ) : activeFileEntry?.error ? (
                     <div className="code-editor-empty code-editor-empty--error">{activeFileEntry.error}</div>
+                  ) : activeFileIsDocumentPreview && activeDocumentPreviewEntry?.loading ? (
+                    <div className="code-editor-empty">
+                      <LoaderCircle className="icon-spin" size={18} />
+                      正在加载文档预览...
+                    </div>
+                  ) : activeFileIsDocumentPreview && activeDocumentPreviewEntry?.error ? (
+                    <div className="code-editor-empty code-editor-empty--error">{activeDocumentPreviewEntry.error}</div>
+                  ) : activeDocumentPreview?.kind === 'pdf' ? (
+                    <div className="code-document-preview">
+                      <iframe
+                        className="code-document-preview__frame"
+                        src={activeDocumentPreview.sourceUrl}
+                        title={activeDocumentPreview.path}
+                      />
+                    </div>
+                  ) : activeDocumentPreview ? (
+                    <article className="code-document-preview code-document-preview--text">
+                      <header className="code-document-preview__header">
+                        <strong>{activeDocumentPreview.name}</strong>
+                        <span>{activeDocumentPreview.summary}</span>
+                      </header>
+                      <div className="code-document-preview__body">
+                        {(activeDocumentPreview.sections ?? []).map(section => (
+                          <section className="code-document-preview__section" key={`${activeDocumentPreview.path}-${section.title}`}>
+                            <h4>{section.title}</h4>
+                            <p>{section.content}</p>
+                          </section>
+                        ))}
+                      </div>
+                    </article>
                   ) : activeFileContent && canMountEditor ? (
                     <Editor
                       height="100%"
@@ -1601,6 +2360,54 @@ export function CodeWorkspaceDialog({
                     <div className="code-editor-empty">
                       <Braces size={18} />
                       从左侧文件树选择一个文本文件开始查看。
+                    </div>
+                  )}
+                </div>
+              ) : panelMode === 'diff' ? (
+                <div className="code-diff-shell">
+                  {turnReview ? (
+                    <div className="code-diff-review">
+                      {turnReview.verdict ? (
+                        <StatusPill status={turnReview.verdict === 'PASS' ? 'success' : turnReview.verdict === 'FAIL' ? 'failed' : 'ready'} label={turnReview.verdict} />
+                      ) : null}
+                      <MarkdownRenderer content={turnReview.summary} mode="panel" className="markdown-content--panel" />
+                      {turnReview.issues?.length ? (
+                        <ul className="code-diff-issues">
+                          {turnReview.issues.map((issue, index) => (
+                            <li key={`${issue}-${index}`}>{issue}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {changeSetNotice ? (
+                    <div className="code-diff-review">
+                      <strong>Diff 应用结果</strong>
+                      <p>{changeSetNotice}</p>
+                    </div>
+                  ) : null}
+
+                  {diffFiles.length ? (
+                    <div className="code-diff-files">
+                      {diffFiles.map(file => (
+                        <div className="code-diff-file-row" key={file.path}>
+                          <span className={`diff-file-badge diff-file-badge--${file.status}`}>{file.status}</span>
+                          <code>{file.path}</code>
+                          <em>
+                            +{file.additions} / -{file.deletions}
+                          </em>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {diffPatch ? (
+                    <pre className="code-diff-patch">{diffPatch}</pre>
+                  ) : (
+                    <div className="code-preview-empty">
+                      <ChevronRight size={18} />
+                      {diffStatusSummary || '当前还没有可展示的代码差异。'}
                     </div>
                   )}
                 </div>
@@ -1720,6 +2527,8 @@ export function CodeWorkspaceDialog({
               )}
             </section>
           </div>
+            </div>
+          )}
         </GlassPanel>
       </div>
     </div>
@@ -1736,6 +2545,10 @@ type DeliveryStatusCardProps = {
   onAction: () => void
   linkLabel?: string
   linkUrl?: string
+  onLinkAction?: () => void
+  secondaryActionLabel?: string
+  onSecondaryAction?: () => void
+  secondaryActionDisabled?: boolean
 }
 
 /**
@@ -1753,8 +2566,17 @@ function DeliveryStatusCard({
   onAction,
   linkLabel,
   linkUrl,
+  onLinkAction,
+  secondaryActionLabel,
+  onSecondaryAction,
+  secondaryActionDisabled,
 }: DeliveryStatusCardProps) {
   const logExcerpt = clipDeliveryLog(asset?.log)
+  const inlinePreviewMode = linkLabel === '打开产物'
+    ? 'build'
+    : linkLabel === '打开部署'
+      ? 'deployment'
+      : undefined
 
   return (
     <div className={`code-delivery-card ${busy ? 'is-busy' : ''} ${asset?.status === 'failed' ? 'is-failed' : asset?.status === 'ready' ? 'is-ready' : ''}`}>
@@ -1766,12 +2588,41 @@ function DeliveryStatusCard({
       {asset?.versionId ? <span className="code-delivery-card__meta">{asset.versionId}</span> : null}
       {logExcerpt ? <pre className="code-delivery-card__log">{logExcerpt}</pre> : null}
       <div className="code-delivery-card__actions">
-        <button className="primary-button" type="button" onClick={onAction} disabled={actionDisabled}>
+        <button
+          className="primary-button code-delivery-card__action code-delivery-card__action--primary"
+          type="button"
+          onClick={onAction}
+          disabled={actionDisabled}
+        >
           {actionBusy ? <LoaderCircle className="icon-spin" size={14} /> : null}
           {actionLabel}
         </button>
-        {linkUrl && linkLabel ? (
-          <a className="secondary-button" href={linkUrl} target="_blank" rel="noreferrer">
+        {secondaryActionLabel && onSecondaryAction ? (
+          <button
+            className="secondary-button code-delivery-card__action code-delivery-card__action--secondary"
+            type="button"
+            onClick={onSecondaryAction}
+            disabled={secondaryActionDisabled}
+          >
+            {secondaryActionLabel}
+            <Globe2 size={14} />
+          </button>
+        ) : onLinkAction && linkLabel ? (
+          <button
+            className="secondary-button code-delivery-card__action code-delivery-card__action--secondary"
+            type="button"
+            onClick={onLinkAction}
+          >
+            {inlinePreviewMode === 'build' ? '查看产物' : '查看部署'}
+            <Globe2 size={14} />
+          </button>
+        ) : linkUrl && linkLabel ? (
+          <a
+            className="secondary-button code-delivery-card__action code-delivery-card__action--secondary"
+            href={linkUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
             {linkLabel}
             <ExternalLink size={14} />
           </a>
@@ -1827,7 +2678,7 @@ function FileTreeNode({
   onSelectFile,
 }: FileTreeNodeProps) {
   const isDirectory = node.kind === 'directory'
-  const isBinaryFile = node.kind === 'file' && !node.isText
+  const isBinaryFile = node.kind === 'file' && !node.isText && !isDocumentPreviewableFile(node.path)
   const isExpanded = forceExpanded || expandedPaths[node.path] || depth === 0
 
   return (

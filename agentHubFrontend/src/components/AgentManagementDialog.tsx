@@ -94,6 +94,14 @@ function toCreateInput(draft: AgentDraft): CreateBusinessAgentInput {
 }
 
 function toUpdateInput(agent: AgentDefinition, draft: AgentDraft): UpdateBusinessAgentInput {
+  if (agent.source === 'built-in') {
+    return {
+      name: draft.name.trim(),
+      modelProvider: draft.modelProvider,
+      ...(draft.model.trim() ? { model: draft.model.trim() } : {}),
+    }
+  }
+
   return {
     name: draft.name.trim(),
     role: draft.role.trim(),
@@ -122,9 +130,17 @@ export function AgentManagementDialog({
   onUpdate,
   onDelete,
 }: AgentManagementDialogProps) {
-  const sortedAgents = useMemo(
-    () => [...agents].sort((left, right) => left.id.localeCompare(right.id)),
+  const builtInAgents = useMemo(
+    () => agents.filter(agent => agent.source === 'built-in'),
     [agents],
+  )
+  const customAgents = useMemo(
+    () => [...agents.filter(agent => agent.source !== 'built-in')].sort((left, right) => left.id.localeCompare(right.id)),
+    [agents],
+  )
+  const sortedAgents = useMemo(
+    () => [...builtInAgents, ...customAgents],
+    [builtInAgents, customAgents],
   )
   const [selectedAgentId, setSelectedAgentId] = useState('')
   const [creating, setCreating] = useState(false)
@@ -254,7 +270,23 @@ export function AgentManagementDialog({
                 <Plus size={15} />
                 <span>New Agent</span>
               </button>
-              {sortedAgents.map(agent => (
+              {builtInAgents.length ? <p className="agent-dialog__section-label">Default Agents</p> : null}
+              {builtInAgents.map(agent => (
+                <button
+                  className={`agent-list-item ${!creating && agent.id === selectedAgentId ? 'is-active' : ''}`}
+                  key={agent.id}
+                  type="button"
+                  onClick={() => selectAgent(agent)}
+                >
+                  <Bot size={15} />
+                  <span>
+                    <strong>{agent.name}</strong>
+                    <small>{agent.id} / {providerLabel(agent.modelProvider)}</small>
+                  </span>
+                </button>
+              ))}
+              {customAgents.length ? <p className="agent-dialog__section-label">Custom Agents</p> : null}
+              {customAgents.map(agent => (
                 <button
                   className={`agent-list-item ${!creating && agent.id === selectedAgentId ? 'is-active' : ''}`}
                   key={agent.id}
@@ -315,64 +347,74 @@ export function AgentManagementDialog({
                     placeholder="default"
                   />
                 </div>
+                {!isBuiltIn ? (
+                  <div className="dialog-field">
+                    <label htmlFor="agent-role">Role</label>
+                    <input
+                      id="agent-role"
+                      value={draft.role}
+                      onChange={event => updateDraft('role', event.currentTarget.value)}
+                      disabled={saving}
+                    />
+                  </div>
+                ) : null}
+                {!isBuiltIn ? (
+                  <div className="dialog-field">
+                    <label htmlFor="agent-runtime">Max Run Seconds</label>
+                    <input
+                      id="agent-runtime"
+                      type="number"
+                      min={1}
+                      value={draft.maxRunSeconds}
+                      onChange={event => updateDraft('maxRunSeconds', Number(event.currentTarget.value) || DEFAULT_RUNTIME_SECONDS)}
+                      disabled={saving}
+                    />
+                  </div>
+                ) : null}
+              </div>
+
+              {!isBuiltIn ? (
                 <div className="dialog-field">
-                  <label htmlFor="agent-role">Role</label>
-                  <input
-                    id="agent-role"
-                    value={draft.role}
-                    onChange={event => updateDraft('role', event.currentTarget.value)}
+                  <label htmlFor="agent-description">Description</label>
+                  <textarea
+                    id="agent-description"
+                    rows={2}
+                    value={draft.description}
+                    onChange={event => updateDraft('description', event.currentTarget.value)}
                     disabled={saving}
                   />
                 </div>
+              ) : null}
+
+              {!isBuiltIn ? (
                 <div className="dialog-field">
-                  <label htmlFor="agent-runtime">Max Run Seconds</label>
-                  <input
-                    id="agent-runtime"
-                    type="number"
-                    min={1}
-                    value={draft.maxRunSeconds}
-                    onChange={event => updateDraft('maxRunSeconds', Number(event.currentTarget.value) || DEFAULT_RUNTIME_SECONDS)}
+                  <label htmlFor="agent-when">When To Use</label>
+                  <textarea
+                    id="agent-when"
+                    rows={2}
+                    value={draft.whenToUse}
+                    onChange={event => updateDraft('whenToUse', event.currentTarget.value)}
                     disabled={saving}
                   />
                 </div>
-              </div>
+              ) : null}
 
-              <div className="dialog-field">
-                <label htmlFor="agent-description">Description</label>
-                <textarea
-                  id="agent-description"
-                  rows={2}
-                  value={draft.description}
-                  onChange={event => updateDraft('description', event.currentTarget.value)}
-                  disabled={saving}
-                />
-              </div>
-
-              <div className="dialog-field">
-                <label htmlFor="agent-when">When To Use</label>
-                <textarea
-                  id="agent-when"
-                  rows={2}
-                  value={draft.whenToUse}
-                  onChange={event => updateDraft('whenToUse', event.currentTarget.value)}
-                  disabled={saving}
-                />
-              </div>
-
-              <div className="dialog-field">
-                <label htmlFor="agent-system-prompt">System Prompt</label>
-                <textarea
-                  id="agent-system-prompt"
-                  rows={6}
-                  value={draft.systemPrompt}
-                  onChange={event => updateDraft('systemPrompt', event.currentTarget.value)}
-                  disabled={saving}
-                  required
-                />
-              </div>
+              {!isBuiltIn ? (
+                <div className="dialog-field">
+                  <label htmlFor="agent-system-prompt">System Prompt</label>
+                  <textarea
+                    id="agent-system-prompt"
+                    rows={6}
+                    value={draft.systemPrompt}
+                    onChange={event => updateDraft('systemPrompt', event.currentTarget.value)}
+                    disabled={saving}
+                    required
+                  />
+                </div>
+              ) : null}
 
               {isBuiltIn ? (
-                <div className="dialog-note">Built-in agents can change profile, prompt, provider, model, and runtime limit. They cannot be deleted.</div>
+                <div className="dialog-note">Built-in agents are locked per workspace. You can only change display name, provider, and model. They cannot be deleted.</div>
               ) : null}
               {errorMessage ? <div className="field-error">{errorMessage}</div> : null}
 

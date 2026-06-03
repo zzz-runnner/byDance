@@ -7,7 +7,24 @@ import extractZip from 'extract-zip'
 import fs from 'fs-extra'
 import { LocalStorageService } from '../storage/local-storage.service'
 import { VersionsService } from '../versions/versions.service'
+import { resolveWorkspaceAppRoot } from '../workspace-app-root'
 import { BuildVersionDto } from './builds.dto'
+
+const BUILD_LOG_LIMIT = 40_000
+const ROOT_RELATIVE_ASSET_ATTR_PATTERN = /\b(src|href|poster)=("|')\/(?!\/)([^"'?#]+)([^"']*)\2/gi
+
+/**
+ * Appends one stdout or stderr chunk while keeping the newest tail only.
+ * Input: current buffered log and one new chunk.
+ * Output: bounded log string suitable for API responses.
+ */
+function appendBuildLog(current: string, chunk: string): string {
+  const next = `${current}${chunk}`
+  if (next.length <= BUILD_LOG_LIMIT) {
+    return next
+  }
+  return next.slice(next.length - BUILD_LOG_LIMIT)
+}
 
 @Injectable()
 export class BuildsService {
@@ -33,16 +50,47 @@ export class BuildsService {
       await fs.ensureDir(sourceDir)
       await extractZip(version.sourceZipPath, { dir: sourceDir })
 
-      const hasPackageJson = await fs.pathExists(path.join(sourceDir, 'package.json'))
+      const appRoot = await resolveWorkspaceAppRoot(sourceDir) ?? {
+        appRootPath: sourceDir,
+        appRelativePath: '',
+        appDisplayPath: 'repo',
+      }
+      const buildRoot = appRoot.appRootPath
+      const hasPackageJson = await fs.pathExists(path.join(buildRoot, 'package.json'))
       if (hasPackageJson && !input.skipDocker) {
-        buildLog = await this.runDockerBuild(sourceDir, input)
+        if (await this.hasDockerCli()) {
+          buildLog = await this.runDockerBuild(buildRoot, input)
+        } else {
+          buildLog = appendBuildLog(
+            buildLog,
+            `Docker CLI not found. Falling back to host build in ${appRoot.appDisplayPath}.\n`,
+          )
+          buildLog = appendBuildLog(buildLog, await this.runHostBuild(buildRoot, input))
+        }
       } else if (!hasPackageJson) {
-        buildLog = 'No package.json found; copied static source as build artifact.'
+        buildLog = `No package.json found in ${appRoot.appDisplayPath}; copied static source as build artifact.`
       } else {
-        buildLog = 'Docker build skipped by request; copied source as build artifact.'
+        buildLog = appendBuildLog(
+          buildLog,
+          `Docker build skipped by request. Running host build in ${appRoot.appDisplayPath}.\n`,
+        )
+        buildLog = appendBuildLog(buildLog, await this.runHostBuild(buildRoot, input))
       }
 
-      const outputDir = await this.selectBuildOutputDir(sourceDir)
+      const outputDir = await this.selectBuildOutputDir(buildRoot)
+      const portabilityResult = await this.rewritePortableHtmlAssetUrls(outputDir)
+      if (portabilityResult.rewrittenReferences > 0) {
+        buildLog = appendBuildLog(
+          buildLog,
+          `Adjusted ${portabilityResult.rewrittenReferences} root-relative asset reference(s) across ${portabilityResult.rewrittenFiles} HTML file(s) for portable nested previews.\n`,
+        )
+      }
+      const portabilityIssues = await this.findPortableHtmlAssetIssues(outputDir)
+      if (portabilityIssues.length > 0) {
+        throw new BadRequestException(
+          `Build output still contains root-relative asset references that would break nested preview routes:\n${portabilityIssues.join('\n')}`,
+        )
+      }
       const artifactDir = this.storage.buildArtifactDir(projectId, version.versionId)
       await this.storage.ensureCleanDir(artifactDir)
       await fs.copy(outputDir, artifactDir, {
@@ -64,6 +112,33 @@ export class BuildsService {
     } finally {
       await fs.remove(jobDir).catch(() => undefined)
     }
+  }
+
+  /**
+   * Checks whether Docker CLI is available for containerized frontend builds.
+   * Input: none.
+   * Output: true when `docker --version` can run locally.
+   */
+  private async hasDockerCli(): Promise<boolean> {
+    return new Promise(resolve => {
+      const child = spawn('docker', ['--version'], {
+        windowsHide: true,
+      })
+      let settled = false
+
+      child.on('error', () => {
+        if (!settled) {
+          settled = true
+          resolve(false)
+        }
+      })
+      child.on('close', code => {
+        if (!settled) {
+          settled = true
+          resolve(code === 0)
+        }
+      })
+    })
   }
 
   private async runDockerBuild(sourceDir: string, input: BuildVersionDto): Promise<string> {
@@ -137,19 +212,247 @@ export class BuildsService {
     })
   }
 
-  private async selectBuildOutputDir(sourceDir: string): Promise<string> {
-    const candidates = ['dist', 'build', 'out'].map(name => path.join(sourceDir, name))
+  /**
+   * Runs one host-side dependency install plus build command inside the detected app root.
+   * Input: app-root directory and optional command overrides.
+   * Output: bounded combined stdout and stderr log.
+   */
+  private async runHostBuild(appRootDir: string, input: BuildVersionDto): Promise<string> {
+    const timeoutMs = this.config.get<number>('BUILD_TIMEOUT_MS', 300_000)
+    const installCommand = input.installCommand ?? await this.defaultInstallCommand(appRootDir)
+    const buildCommand = input.buildCommand ?? 'npm run build'
+    const script = `${installCommand} && ${buildCommand}`
+
+    return new Promise((resolve, reject) => {
+      const child = spawn(
+        process.platform === 'win32' ? 'cmd.exe' : 'sh',
+        process.platform === 'win32'
+          ? ['/d', '/s', '/c', script]
+          : ['-lc', script],
+        {
+          cwd: appRootDir,
+          env: {
+            ...process.env,
+            npm_config_fund: 'false',
+            npm_config_audit: 'false',
+          },
+          windowsHide: true,
+        },
+      )
+
+      let output = ''
+      let settled = false
+      const append = (chunk: Buffer): void => {
+        output = appendBuildLog(output, chunk.toString('utf8'))
+      }
+
+      const timeout = setTimeout(() => {
+        if (!settled) {
+          settled = true
+          child.kill('SIGKILL')
+          reject(new BadRequestException(`Host build timed out after ${timeoutMs}ms\n${output}`))
+        }
+      }, timeoutMs)
+
+      child.stdout.on('data', append)
+      child.stderr.on('data', append)
+      child.on('error', error => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timeout)
+          reject(new BadRequestException(`Host build failed to start: ${error.message}`))
+        }
+      })
+      child.on('close', code => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timeout)
+          if (code === 0) {
+            resolve(output)
+          } else {
+            reject(new BadRequestException(`Host build exited with code ${code}\n${output}`))
+          }
+        }
+      })
+    })
+  }
+
+  /**
+   * Selects one default host install command from the lockfile state.
+   * Input: detected app-root directory.
+   * Output: shell-ready dependency install command.
+   */
+  private async defaultInstallCommand(appRootDir: string): Promise<string> {
+    if (await fs.pathExists(path.join(appRootDir, 'pnpm-lock.yaml'))) {
+      return 'pnpm install --frozen-lockfile --prefer-offline'
+    }
+    if (await fs.pathExists(path.join(appRootDir, 'package-lock.json'))) {
+      return 'npm ci'
+    }
+    if (await fs.pathExists(path.join(appRootDir, 'yarn.lock'))) {
+      return 'yarn install --frozen-lockfile'
+    }
+    return 'npm install'
+  }
+
+  /**
+   * Picks the build artifact directory from the detected app root after build completion.
+   * Input: detected app-root directory.
+   * Output: absolute output directory that contains the final index HTML.
+   */
+  private async selectBuildOutputDir(appRootDir: string): Promise<string> {
+    const candidates = ['dist', 'build', 'out'].map(name => path.join(appRootDir, name))
     for (const candidate of candidates) {
       if (await fs.pathExists(path.join(candidate, 'index.html'))) {
         return candidate
       }
     }
 
-    if (await fs.pathExists(path.join(sourceDir, 'index.html'))) {
-      return sourceDir
+    if (await fs.pathExists(path.join(appRootDir, 'index.html'))) {
+      return appRootDir
     }
 
-    throw new BadRequestException('Build did not produce dist/index.html, build/index.html, out/index.html, or root index.html')
+    throw new BadRequestException('Build did not produce dist/index.html, build/index.html, out/index.html, or app-root index.html')
+  }
+
+  /**
+   * Rewrites root-relative HTML asset URLs into portable relative URLs when the target exists in the build output.
+   * Input: final build output directory.
+   * Output: rewritten HTML file and reference counts.
+   */
+  private async rewritePortableHtmlAssetUrls(outputDir: string): Promise<{
+    rewrittenFiles: number
+    rewrittenReferences: number
+  }> {
+    const htmlFiles = await this.listHtmlFiles(outputDir)
+    let rewrittenFiles = 0
+    let rewrittenReferences = 0
+
+    for (const htmlFilePath of htmlFiles) {
+      const relativeHtmlPath = path.relative(outputDir, htmlFilePath).replace(/\\/g, '/')
+      const currentHtml = await fs.readFile(htmlFilePath, 'utf8')
+      let fileRewriteCount = 0
+
+      const nextHtml = currentHtml.replace(
+        ROOT_RELATIVE_ASSET_ATTR_PATTERN,
+        (match, attributeName: string, quote: string, assetPath: string, suffix = '') => {
+          const portableUrl = this.tryBuildPortableAssetUrl(outputDir, relativeHtmlPath, assetPath)
+          if (!portableUrl) {
+            return match
+          }
+
+          fileRewriteCount += 1
+          return `${attributeName}=${quote}${portableUrl}${suffix}${quote}`
+        },
+      )
+
+      if (fileRewriteCount === 0) {
+        continue
+      }
+
+      rewrittenFiles += 1
+      rewrittenReferences += fileRewriteCount
+      await fs.writeFile(htmlFilePath, nextHtml, 'utf8')
+    }
+
+    return {
+      rewrittenFiles,
+      rewrittenReferences,
+    }
+  }
+
+  /**
+   * Collects any remaining root-relative HTML asset URLs that still point to files inside the build output.
+   * Input: final build output directory.
+   * Output: one issue string per unresolved HTML asset reference.
+   */
+  private async findPortableHtmlAssetIssues(outputDir: string): Promise<string[]> {
+    const htmlFiles = await this.listHtmlFiles(outputDir)
+    const issues: string[] = []
+
+    for (const htmlFilePath of htmlFiles) {
+      const relativeHtmlPath = path.relative(outputDir, htmlFilePath).replace(/\\/g, '/')
+      const html = await fs.readFile(htmlFilePath, 'utf8')
+
+      for (const match of html.matchAll(ROOT_RELATIVE_ASSET_ATTR_PATTERN)) {
+        const assetPath = match[3]
+        if (!this.tryBuildPortableAssetUrl(outputDir, relativeHtmlPath, assetPath)) {
+          continue
+        }
+
+        issues.push(`${relativeHtmlPath} -> /${assetPath}`)
+      }
+    }
+
+    return issues
+  }
+
+  /**
+   * Returns one portable relative asset URL when the referenced file exists inside the build output.
+   * Input: output directory, current HTML file path, and root-relative asset path.
+   * Output: relative asset URL or undefined when the reference should stay untouched.
+   */
+  private tryBuildPortableAssetUrl(
+    outputDir: string,
+    relativeHtmlPath: string,
+    assetPath: string,
+  ): string | undefined {
+    const normalizedAssetPath = assetPath.replace(/^\/+/, '').replace(/\\/g, '/')
+    if (!normalizedAssetPath) {
+      return undefined
+    }
+
+    const resolvedAssetPath = path.resolve(outputDir, normalizedAssetPath)
+    if (!this.isInsideDirectory(outputDir, resolvedAssetPath) || !fs.existsSync(resolvedAssetPath)) {
+      return undefined
+    }
+
+    const htmlDirectory = path.posix.dirname(relativeHtmlPath)
+    const relativeAssetPath = path.posix.relative(
+      htmlDirectory === '.' ? '' : htmlDirectory,
+      normalizedAssetPath,
+    )
+
+    return relativeAssetPath.startsWith('.') ? relativeAssetPath : `./${relativeAssetPath}`
+  }
+
+  /**
+   * Lists every HTML file beneath the build output directory.
+   * Input: final build output directory.
+   * Output: absolute HTML file paths.
+   */
+  private async listHtmlFiles(outputDir: string): Promise<string[]> {
+    const htmlFiles: string[] = []
+
+    const visit = async (currentDir: string): Promise<void> => {
+      const entries = await fs.readdir(currentDir, { withFileTypes: true })
+
+      for (const entry of entries) {
+        const nextPath = path.join(currentDir, entry.name)
+        if (entry.isDirectory()) {
+          await visit(nextPath)
+          continue
+        }
+
+        if (entry.isFile() && /\.(html?)$/i.test(entry.name)) {
+          htmlFiles.push(nextPath)
+        }
+      }
+    }
+
+    await visit(outputDir)
+    return htmlFiles
+  }
+
+  /**
+   * Checks whether one path stays inside the expected parent directory after normalization.
+   * Input: parent directory and candidate path.
+   * Output: true when the candidate does not escape the parent directory.
+   */
+  private isInsideDirectory(parentDir: string, candidatePath: string): boolean {
+    const resolvedParentDir = path.resolve(parentDir)
+    const resolvedCandidatePath = path.resolve(candidatePath)
+    return resolvedCandidatePath === resolvedParentDir || resolvedCandidatePath.startsWith(`${resolvedParentDir}${path.sep}`)
   }
 
   private errorMessage(error: unknown): string {

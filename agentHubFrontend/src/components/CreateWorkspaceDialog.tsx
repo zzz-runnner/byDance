@@ -184,7 +184,7 @@ export function CreateWorkspaceDialog({
               </div>
               <p className="field-hint">
                 {roomMode === 'group'
-                  ? '由 Orchestrator 协调多个 Agent 协作。'
+                  ? '由主脑协调多个 Agent 协作。'
                   : '固定把消息发送给一个目标 Agent，适合聚焦式调试。'}
               </p>
             </div>

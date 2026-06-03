@@ -14,12 +14,14 @@ import {
   Globe2,
   LoaderCircle,
   MessageSquareReply,
+  Pin,
   RefreshCcw,
   ShieldCheck,
   TerminalSquare,
   X,
 } from 'lucide-react'
 import {
+  agentDisplayName,
   buildAgentMap,
   formatTime,
   workspaceRoomKindLabel,
@@ -36,12 +38,16 @@ import type {
   AgentDefinition,
   AppState,
   Artifact,
+  CodeWorkspaceDialogRequest,
+  CodeWorkspaceDialogTab,
+  CodeWorkspaceDialogTurnResult,
   CodeSelectionReference,
   ConnectionStatus,
   LiveWorkflowEvent,
   Message,
   ReplyReference,
   StreamingAssistantDraft,
+  WorkspaceDeliverySurface,
   WorkspaceRoom,
 } from '../types'
 import { AgentAvatar } from './AgentAvatar'
@@ -72,6 +78,8 @@ type ChatPaneProps = {
   onCancelReply: () => void
   onCancelCodeSelection: () => void
   onCopyMessage: (content: string) => void
+  onToggleMessagePin: (messageId: string, pinned: boolean) => void
+  onOpenCodeDialog?: (request?: CodeWorkspaceDialogRequest) => void
   onSend: (content: string, replyTo?: ReplyReference, codeSelection?: CodeSelectionReference) => void
 }
 
@@ -87,6 +95,14 @@ type TurnLifecycleSnapshot = {
   status: ChatTurn['status']
   visibleReplyId?: string
   finalMessageId?: string
+}
+
+type TurnResultBundle = {
+  title: string
+  summary?: string
+  metaItems: string[]
+  defaultTab: CodeWorkspaceDialogTab
+  request: CodeWorkspaceDialogRequest
 }
 
 const TURN_PROCESS_AUTO_COLLAPSE_DELAY_MS = 960
@@ -175,7 +191,137 @@ function clipCodeSelectionExcerpt(selection: CodeSelectionReference, maxLength =
 }
 
 /**
- * Builds the available child-agent options for one group room.
+ * Resolves the local delivery surface for one raw message artifact when it has a preview URL.
+ * Input: persisted artifact payload from the backend state.
+ * Output: build or deployment for local delivery cards, otherwise undefined.
+ */
+function inlineArtifactDeliverySurface(artifact: Artifact): WorkspaceDeliverySurface | undefined {
+  const kind = artifact.metadata?.kind
+  return artifact.url && (kind === 'build' || kind === 'deployment') ? kind : undefined
+}
+
+/**
+ * Resolves the local delivery surface for one turn artifact when it has a preview URL.
+ * Input: chat timeline artifact payload.
+ * Output: build or deployment for local delivery cards, otherwise undefined.
+ */
+function turnArtifactDeliverySurface(artifact: ChatTurnArtifact): WorkspaceDeliverySurface | undefined {
+  return artifact.url && artifact.deliverySurface ? artifact.deliverySurface : undefined
+}
+
+/**
+ * Returns the newest artifact that matches one predicate.
+ * Input: one turn artifact list plus a predicate callback.
+ * Output: the latest matching artifact or undefined.
+ */
+function latestTurnArtifact(
+  artifacts: ChatTurnArtifact[],
+  predicate: (artifact: ChatTurnArtifact) => boolean,
+): ChatTurnArtifact | undefined {
+  return artifacts
+    .filter(predicate)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .at(-1)
+}
+
+/**
+ * Builds the unified turn-result entry shown between the process panel and the final answer.
+ * Input: all artifacts attached to one turn.
+ * Output: one dialog-open request plus compact card copy, or undefined when the turn has no artifacts.
+ */
+function buildTurnResultBundle(artifacts: ChatTurnArtifact[]): TurnResultBundle | undefined {
+  if (artifacts.length === 0) {
+    return undefined
+  }
+
+  const latestPreview = latestTurnArtifact(artifacts, artifact => artifact.kind === 'preview' && Boolean(artifact.url))
+  const latestDiff = latestTurnArtifact(artifacts, artifact => artifact.kind === 'diff')
+  const latestReview = latestTurnArtifact(artifacts, artifact => artifact.kind === 'review')
+  const latestZip = latestTurnArtifact(artifacts, artifact => artifact.kind === 'zip' && Boolean(artifact.url))
+  const latestDeploy = latestTurnArtifact(artifacts, artifact => artifact.kind === 'deploy' && Boolean(artifact.url))
+  const latestText = latestTurnArtifact(artifacts, artifact => artifact.kind === 'text')
+  const latestGenericArtifact = latestTurnArtifact(artifacts, artifact => artifact.kind === 'artifact')
+  const latestDeliverySurface =
+    latestPreview?.deliverySurface ??
+    latestDeploy?.deliverySurface
+
+  const primarySummary =
+    latestReview?.summary ||
+    latestPreview?.summary ||
+    latestDiff?.summary ||
+    latestDeploy?.summary ||
+    latestText?.summary ||
+    latestGenericArtifact?.summary ||
+    latestZip?.summary
+
+  const dedupedArtifacts = [
+    latestPreview,
+    latestDiff,
+    latestReview,
+    latestZip,
+    latestDeploy,
+    latestText,
+    latestGenericArtifact,
+  ]
+    .filter((artifact): artifact is ChatTurnArtifact => Boolean(artifact))
+    .filter((artifact, index, list) => list.findIndex(candidate => candidate.id === artifact.id) === index)
+
+  const metaItems = [
+    latestPreview ? 'preview' : undefined,
+    latestDiff ? 'diff' : undefined,
+    latestReview?.verdict ? `review ${latestReview.verdict.toLowerCase()}` : latestReview ? 'review' : undefined,
+    latestZip ? 'source zip' : undefined,
+    latestDeploy ? 'deploy' : undefined,
+    artifacts.length > dedupedArtifacts.length ? `history ${artifacts.length - dedupedArtifacts.length}` : undefined,
+  ].filter(Boolean) as string[]
+
+  const defaultTab: CodeWorkspaceDialogTab = latestPreview || latestDeploy
+    ? 'preview'
+    : latestDiff
+      ? 'diff'
+      : 'code'
+
+  const turnResult: CodeWorkspaceDialogTurnResult = {
+    title: '查看本轮产物',
+    summary: primarySummary,
+    badges: metaItems,
+    defaultTab,
+    preview: latestPreview?.url ? {
+      title: latestPreview.title,
+      summary: latestPreview.summary,
+      url: latestPreview.url,
+    } : undefined,
+    diff: latestDiff ? {
+      changeSetId: latestDiff.id,
+      title: latestDiff.title,
+      summary: latestDiff.summary,
+      patch: latestDiff.patch,
+      files: latestDiff.files,
+    } : undefined,
+    review: latestReview ? {
+      verdict: latestReview.verdict,
+      summary: latestReview.summary,
+      issues: latestReview.issues,
+    } : undefined,
+    sourceArchiveUrl: latestZip?.url,
+    deploymentUrl: latestDeploy?.url,
+  }
+
+  return {
+    title: '查看本轮产物',
+    summary: primarySummary ? buildArtifactExcerpt(primarySummary, 200) : undefined,
+    metaItems,
+    defaultTab,
+    request: {
+      tab: defaultTab,
+      previewSurface: latestDeliverySurface,
+      turnResult,
+    },
+  }
+}
+
+/**
+ * Builds the available group-agent options for one group room.
  * Input: active room and the agent lookup table.
  * Output: unique agent options used by the @ mention popup.
  */
@@ -185,10 +331,19 @@ function groupMentionOptions(room: WorkspaceRoom | undefined, agentMap: Map<stri
   }
 
   return [...new Set(room.participantAgentIds)]
-    .filter(agentId => agentId !== 'orchestrator')
+    .sort((left, right) => {
+      if (left === 'orchestrator') {
+        return -1
+      }
+      if (right === 'orchestrator') {
+        return 1
+      }
+      return 0
+    })
     .map(agentId => ({
       id: agentId,
-      name: agentMap.get(agentId)?.name ?? agentId,
+      name: agentDisplayName(agentMap.get(agentId), agentId),
+      ...(agentId === 'orchestrator' ? { insertText: 'main' } : {}),
     }))
 }
 
@@ -289,10 +444,17 @@ export function ChatPane({
   onCancelReply,
   onCancelCodeSelection,
   onCopyMessage,
+  onToggleMessagePin,
+  onOpenCodeDialog,
   onSend,
 }: ChatPaneProps) {
   const agentMap = buildAgentMap(state)
   const activeAgent = room?.targetAgentId ? agentMap.get(room.targetAgentId) : undefined
+  const activeAgentName = agentDisplayName(activeAgent, room?.targetAgentId)
+  const pinnedMessageIds =
+    state.workspaces.find(workspace => workspace.id === room?.workspace.id)?.pinnedMessageIds ??
+    room?.workspace.pinnedMessageIds ??
+    []
   const mentionOptions = groupMentionOptions(room, agentMap)
   const timelineItems = useMemo(
     () =>
@@ -323,7 +485,6 @@ export function ChatPane({
     scrollTop: number
   } | null>(null)
   const [isNearBottom, setIsNearBottom] = useState(true)
-  const [artifactDialog, setArtifactDialog] = useState<ChatTurnArtifact | null>(null)
   const [turnExpandOverrides, setTurnExpandOverrides] = useState<Record<string, boolean>>({})
   const [turnAutoExpandStates, setTurnAutoExpandStates] = useState<Record<string, boolean>>({})
   const turnLifecycleRef = useRef<Record<string, TurnLifecycleSnapshot>>({})
@@ -566,7 +727,7 @@ export function ChatPane({
             <h1>{room?.title ?? '选择一个工作区'}</h1>
             <span className="chat-subtitle">
               {room?.kind === 'direct'
-                ? `固定发给 ${activeAgent?.name ?? room.targetAgentId ?? 'Agent'}`
+                ? `固定发给 ${activeAgentName}`
                 : '支持 @ 指定子 Agent，执行过程、产物和最终结果都会直接落在聊天记录里'}
             </span>
           </div>
@@ -617,9 +778,14 @@ export function ChatPane({
               <MessageBubble
                 key={item.id}
                 message={item.message}
-                senderName={item.message.senderType === 'agent' ? agentMap.get(item.message.senderId)?.name : undefined}
+                senderName={item.message.senderType === 'agent'
+                  ? agentDisplayName(agentMap.get(item.message.senderId), item.message.senderId)
+                  : undefined}
                 onReply={onReplyToMessage}
                 onCopy={onCopyMessage}
+                isPinned={pinnedMessageIds.includes(item.message.id)}
+                onTogglePin={onToggleMessagePin}
+                onOpenCodeDialog={onOpenCodeDialog}
               />
             ) : (
               <TurnBlock
@@ -630,7 +796,9 @@ export function ChatPane({
                 onToggle={() => toggleTurn(item.turn)}
                 onReply={onReplyToMessage}
                 onCopy={onCopyMessage}
-                onOpenArtifact={setArtifactDialog}
+                pinnedMessageIds={pinnedMessageIds}
+                onTogglePin={onToggleMessagePin}
+                onOpenCodeDialog={onOpenCodeDialog}
               />
             ),
           )
@@ -647,6 +815,7 @@ export function ChatPane({
 
       <ChatComposer
         room={room}
+        targetAgentName={activeAgentName}
         sending={sending}
         mentionOptions={mentionOptions}
         replyTarget={replyTarget}
@@ -656,13 +825,6 @@ export function ChatPane({
         onCancelCodeSelection={onCancelCodeSelection}
         onSend={onSend}
       />
-
-      {artifactDialog ? (
-        <ArtifactDialog
-          artifact={artifactDialog}
-          onClose={() => setArtifactDialog(null)}
-        />
-      ) : null}
     </GlassPanel>
   )
 }
@@ -674,7 +836,9 @@ type TurnBlockProps = {
   onToggle: () => void
   onReply: (replyTo: ReplyReference) => void
   onCopy: (content: string) => void
-  onOpenArtifact: (artifact: ChatTurnArtifact) => void
+  pinnedMessageIds: string[]
+  onTogglePin: (messageId: string, pinned: boolean) => void
+  onOpenCodeDialog?: (request?: CodeWorkspaceDialogRequest) => void
 }
 
 /**
@@ -689,17 +853,22 @@ function TurnBlock({
   onToggle,
   onReply,
   onCopy,
-  onOpenArtifact,
+  pinnedMessageIds,
+  onTogglePin,
+  onOpenCodeDialog,
 }: TurnBlockProps) {
   const finalMessage = turn.finalMessage
   const streamingMessage = turn.streamingMessage
   const settlingMessage = turn.settlingMessage
-  const finalSpeakerName = finalMessage?.senderType === 'agent' ? agentMap.get(finalMessage.senderId)?.name : undefined
+  const turnResultBundle = buildTurnResultBundle(turn.artifacts)
+  const finalSpeakerName = finalMessage?.senderType === 'agent'
+    ? agentDisplayName(agentMap.get(finalMessage.senderId), finalMessage.senderId)
+    : undefined
   const streamingSpeakerName = streamingMessage?.senderType === 'agent'
-    ? agentMap.get(streamingMessage.senderId)?.name
+    ? agentDisplayName(agentMap.get(streamingMessage.senderId), streamingMessage.senderId)
     : undefined
   const settlingSpeakerName = settlingMessage?.senderType === 'agent'
-    ? agentMap.get(settlingMessage.senderId)?.name
+    ? agentDisplayName(agentMap.get(settlingMessage.senderId), settlingMessage.senderId)
     : undefined
 
   return (
@@ -708,6 +877,9 @@ function TurnBlock({
         message={turn.userMessage}
         onReply={onReply}
         onCopy={onCopy}
+        isPinned={pinnedMessageIds.includes(turn.userMessage.id)}
+        onTogglePin={onTogglePin}
+        onOpenCodeDialog={onOpenCodeDialog}
       />
 
       {(turn.processEntries.length > 0 || (turn.status === 'running' && turn.streamingMessage) || turn.status === 'awaiting_commit' || Boolean(turn.settlingMessage)) ? (
@@ -735,7 +907,7 @@ function TurnBlock({
                   <ProcessEntryCard
                     key={entry.id}
                     entry={entry}
-                    agentName={entry.agentId ? agentMap.get(entry.agentId)?.name : undefined}
+                    agentName={entry.agentId ? agentDisplayName(agentMap.get(entry.agentId), entry.agentId) : undefined}
                     enterDelayMs={Math.min(index, 4) * 36}
                     animate={turn.status === 'running'}
                   />
@@ -752,16 +924,9 @@ function TurnBlock({
         </section>
       ) : null}
 
-      {turn.artifacts.length > 0 ? (
+      {turnResultBundle ? (
         <div className="turn-artifact-grid">
-          {turn.artifacts.map(artifact => (
-            <TurnArtifactCard
-              key={artifact.id}
-              artifact={artifact}
-              agentName={artifact.agentId ? agentMap.get(artifact.agentId)?.name : undefined}
-              onOpenArtifact={onOpenArtifact}
-            />
-          ))}
+          <TurnResultCard bundle={turnResultBundle} onOpenCodeDialog={onOpenCodeDialog} />
         </div>
       ) : null}
 
@@ -771,6 +936,9 @@ function TurnBlock({
           senderName={finalSpeakerName}
           onReply={onReply}
           onCopy={onCopy}
+          isPinned={pinnedMessageIds.includes(finalMessage.id)}
+          onTogglePin={onTogglePin}
+          onOpenCodeDialog={onOpenCodeDialog}
           renderArtifacts={false}
         />
       ) : settlingMessage ? (
@@ -779,6 +947,9 @@ function TurnBlock({
           senderName={settlingSpeakerName}
           onReply={onReply}
           onCopy={onCopy}
+          isPinned={pinnedMessageIds.includes(settlingMessage.id)}
+          onTogglePin={onTogglePin}
+          onOpenCodeDialog={onOpenCodeDialog}
           renderArtifacts={false}
           statusNote="正在整理最终结果..."
         />
@@ -788,6 +959,9 @@ function TurnBlock({
           senderName={streamingSpeakerName}
           onReply={onReply}
           onCopy={onCopy}
+          isPinned={false}
+          onTogglePin={onTogglePin}
+          onOpenCodeDialog={onOpenCodeDialog}
           renderArtifacts={false}
           forceStreaming
         />
@@ -885,6 +1059,9 @@ type MessageBubbleProps = {
   senderName?: string
   onReply: (replyTo: ReplyReference) => void
   onCopy: (content: string) => void
+  isPinned: boolean
+  onTogglePin: (messageId: string, pinned: boolean) => void
+  onOpenCodeDialog?: (request?: CodeWorkspaceDialogRequest) => void
   renderArtifacts?: boolean
   forceStreaming?: boolean
   statusNote?: string
@@ -900,6 +1077,9 @@ function MessageBubble({
   senderName,
   onReply,
   onCopy,
+  isPinned,
+  onTogglePin,
+  onOpenCodeDialog,
   renderArtifacts = true,
   forceStreaming = false,
   statusNote,
@@ -908,6 +1088,7 @@ function MessageBubble({
   const isStreamingPlaceholder = forceStreaming || (!isUser && message.content.trim().length === 0)
   const senderLabel = messageSenderLabel(message, senderName)
   const canReply = message.content.trim().length > 0
+  const canPin = !isStreamingPlaceholder && !message.id.startsWith('temp-')
   const wasStreamingRef = useRef(isStreamingPlaceholder)
   const [isSettling, setIsSettling] = useState(false)
 
@@ -933,10 +1114,11 @@ function MessageBubble({
 
   return (
     <article className={rowClassName}>
-      {!isUser ? <AgentAvatar agentId={message.senderId} name={senderName} /> : null}
+      {!isUser ? <AgentAvatar agentId={message.senderId} name={senderName} size="lg" /> : null}
       <div className="message-stack">
         <div className="message-meta">
           <strong>{senderLabel}</strong>
+          {isPinned ? <span className="message-pin-badge">Pinned</span> : null}
           <time>{formatTime(message.createdAt)}</time>
         </div>
         <div
@@ -970,11 +1152,21 @@ function MessageBubble({
           {renderArtifacts && message.artifacts.length > 0 ? (
             <div className="artifact-grid">
               {message.artifacts.map(artifact => (
-                <InlineArtifactCard key={artifact.id} artifact={artifact} />
+                <InlineArtifactCard
+                  key={artifact.id}
+                  artifact={artifact}
+                  onOpenCodeDialog={onOpenCodeDialog}
+                />
               ))}
             </div>
           ) : null}
           <div className="message-actions">
+            {canPin ? (
+              <button type="button" onClick={() => onTogglePin(message.id, isPinned)}>
+                <Pin size={14} />
+                {isPinned ? '取消置顶' : '置顶记忆'}
+              </button>
+            ) : null}
             {canReply ? (
               <button type="button" onClick={() => onReply(buildMessageReplyReference(message, senderName))}>
                 <MessageSquareReply size={14} />
@@ -988,13 +1180,14 @@ function MessageBubble({
           </div>
         </div>
       </div>
-      {isUser ? <AgentAvatar agentId="user" /> : null}
+      {isUser ? <AgentAvatar agentId="user" size="lg" /> : null}
     </article>
   )
 }
 
 type InlineArtifactCardProps = {
   artifact: Artifact
+  onOpenCodeDialog?: (request?: CodeWorkspaceDialogRequest) => void
 }
 
 /**
@@ -1002,7 +1195,8 @@ type InlineArtifactCardProps = {
  * Input: raw artifact metadata.
  * Output: one inline artifact card.
  */
-function InlineArtifactCard({ artifact }: InlineArtifactCardProps) {
+function InlineArtifactCard({ artifact, onOpenCodeDialog }: InlineArtifactCardProps) {
+  const deliverySurface = inlineArtifactDeliverySurface(artifact)
   const Icon = artifact.type === 'zip'
     ? FileArchive
     : artifact.type === 'web-preview' || artifact.type === 'deploy-status'
@@ -1015,6 +1209,11 @@ function InlineArtifactCard({ artifact }: InlineArtifactCardProps) {
       : artifact.type === 'deploy-status'
         ? '打开部署'
         : '查看'
+  const resolvedActionLabel = deliverySurface === 'build'
+    ? '查看产物'
+    : deliverySurface === 'deployment'
+      ? '查看部署'
+      : actionLabel
   const summary = buildInlineArtifactCardSummary(artifact)
   const content = (
     <>
@@ -1026,7 +1225,7 @@ function InlineArtifactCard({ artifact }: InlineArtifactCardProps) {
         <ArtifactCardSummary preview={summary} />
       </div>
       <em>
-        {actionLabel}
+        {resolvedActionLabel}
         <ExternalLink size={13} />
       </em>
     </>
@@ -1036,6 +1235,18 @@ function InlineArtifactCard({ artifact }: InlineArtifactCardProps) {
     return <div className="artifact-card">{content}</div>
   }
 
+  if (deliverySurface && onOpenCodeDialog) {
+    return (
+      <button
+        className="artifact-card"
+        type="button"
+        onClick={() => onOpenCodeDialog({ tab: 'preview', previewSurface: deliverySurface })}
+      >
+        {content}
+      </button>
+    )
+  }
+
   return (
     <a className="artifact-card" href={artifact.url} target="_blank" rel="noreferrer">
       {content}
@@ -1043,10 +1254,16 @@ function InlineArtifactCard({ artifact }: InlineArtifactCardProps) {
   )
 }
 
+type TurnResultCardProps = {
+  bundle: TurnResultBundle
+  onOpenCodeDialog?: (request?: CodeWorkspaceDialogRequest) => void
+}
+
 type TurnArtifactCardProps = {
   artifact: ChatTurnArtifact
   agentName?: string
   onOpenArtifact: (artifact: ChatTurnArtifact) => void
+  onOpenWorkspacePreviewSurface?: (surface: WorkspaceDeliverySurface) => void
 }
 
 /**
@@ -1054,7 +1271,8 @@ type TurnArtifactCardProps = {
  * Input: turn artifact, optional agent name, and open callback.
  * Output: one chat-stream artifact card.
  */
-function TurnArtifactCard({ artifact, agentName, onOpenArtifact }: TurnArtifactCardProps) {
+function TurnArtifactCard({ artifact, agentName, onOpenArtifact, onOpenWorkspacePreviewSurface }: TurnArtifactCardProps) {
+  const deliverySurface = turnArtifactDeliverySurface(artifact)
   const Icon = artifactIcon(artifact.kind)
   const preview = buildTurnArtifactCardPreview(artifact)
   const actionLabel = artifact.kind === 'zip'
@@ -1064,7 +1282,12 @@ function TurnArtifactCard({ artifact, agentName, onOpenArtifact }: TurnArtifactC
       : artifact.kind === 'deploy'
         ? '打开部署'
       : '查看详情'
-  const isExternalOnly = (artifact.kind === 'zip' || artifact.kind === 'deploy') && Boolean(artifact.url)
+  const resolvedActionLabel = deliverySurface === 'build'
+    ? '查看产物'
+    : deliverySurface === 'deployment'
+      ? '查看部署'
+      : actionLabel
+  const isExternalOnly = (artifact.kind === 'zip' || (artifact.kind === 'deploy' && !deliverySurface)) && Boolean(artifact.url)
 
   const content = (
     <>
@@ -1078,7 +1301,7 @@ function TurnArtifactCard({ artifact, agentName, onOpenArtifact }: TurnArtifactC
         {agentName ? <i>{agentName}</i> : null}
       </div>
       <em>
-        {actionLabel}
+        {resolvedActionLabel}
         {isExternalOnly ? <Download size={13} /> : <ExternalLink size={13} />}
       </em>
     </>
@@ -1092,9 +1315,60 @@ function TurnArtifactCard({ artifact, agentName, onOpenArtifact }: TurnArtifactC
     )
   }
 
+  if (deliverySurface && onOpenWorkspacePreviewSurface) {
+    return (
+      <button
+        className="artifact-card artifact-card--turn"
+        type="button"
+        onClick={() => onOpenWorkspacePreviewSurface(deliverySurface)}
+      >
+        {content}
+      </button>
+    )
+  }
+
   return (
     <button className="artifact-card artifact-card--turn" type="button" onClick={() => onOpenArtifact(artifact)}>
       {content}
+    </button>
+  )
+}
+
+/**
+ * Renders the single result card that opens the unified code workspace dialog for one turn.
+ * Input: aggregated turn result bundle plus the dialog-open callback.
+ * Output: one chat-stream result card.
+ */
+function TurnResultCard({ bundle, onOpenCodeDialog }: TurnResultCardProps) {
+  const actionLabel = bundle.defaultTab === 'preview'
+    ? '查看预览'
+    : bundle.defaultTab === 'diff'
+      ? '查看 Diff'
+      : '查看源码'
+
+  return (
+    <button
+      className="artifact-card artifact-card--turn artifact-card--result"
+      type="button"
+      onClick={() => onOpenCodeDialog?.(bundle.request)}
+    >
+      <span className="artifact-icon artifact-icon--artifact">
+        <Braces size={18} />
+      </span>
+      <div className="artifact-card__copy">
+        <strong>{bundle.title}</strong>
+        <ArtifactCardSummary
+          preview={{
+            summary: bundle.summary,
+            metaItems: bundle.metaItems,
+            peekItems: [],
+          }}
+        />
+      </div>
+      <em>
+        {actionLabel}
+        <ExternalLink size={13} />
+      </em>
     </button>
   )
 }
@@ -1487,6 +1761,7 @@ function EmptyChatState({ room, loading }: EmptyChatStateProps) {
 
 type ChatComposerProps = {
   room: WorkspaceRoom | undefined
+  targetAgentName?: string
   sending: boolean
   mentionOptions: AgentMentionOption[]
   replyTarget?: ReplyReference
@@ -1504,6 +1779,7 @@ type ChatComposerProps = {
  */
 function ChatComposer({
   room,
+  targetAgentName,
   sending,
   mentionOptions,
   replyTarget,
@@ -1525,8 +1801,8 @@ function ChatComposer({
   const placeholder =
     disabledReason ||
     (room?.kind === 'direct'
-      ? `发送给 ${room.targetAgentId ?? 'Agent'}，例如：/run 检查当前产物并给出结论`
-      : '给群聊工作区发送任务，例如：@engineer 实现页面，并让 @reviewer 验收')
+      ? `发送给 ${targetAgentName ?? room.targetAgentId ?? 'Agent'}，例如：/run 检查当前产物并给出结论`
+      : '给群聊工作区发送任务，例如：@main 先拆分需求，或 @engineer 实现页面并让 @reviewer 验收')
   const filteredMentionOptions =
     room?.kind === 'group' && mentionMatch
       ? mentionOptions.filter(option => {
@@ -1536,7 +1812,7 @@ function ChatComposer({
             return true
           }
 
-          return `${option.id} ${option.name}`.toLowerCase().includes(query)
+          return `${option.id} ${option.insertText ?? ''} ${option.name}`.toLowerCase().includes(query)
         })
       : []
   const showMentionPicker = room?.kind === 'group' && !isComposing && filteredMentionOptions.length > 0 && Boolean(mentionMatch)
@@ -1626,16 +1902,16 @@ function ChatComposer({
   }
 
   /**
-   * Replaces the active @ token with one concrete child-agent mention.
+   * Replaces the active @ token with one concrete group-agent mention.
    * Input: the agent option selected from the mention popup.
-   * Output: inserts a normalized @agent-id token and closes the popup.
+   * Output: inserts a normalized @mention token and closes the popup.
    */
   function insertMention(option: AgentMentionOption) {
     if (!mentionMatch) {
       return
     }
 
-    const replacement = `@${option.id} `
+    const replacement = `@${option.insertText ?? option.id} `
     const nextValue = `${value.slice(0, mentionMatch.start)}${replacement}${value.slice(mentionMatch.end)}`
     setMentionMatch(null)
     applyComposerValue(nextValue, mentionMatch.start + replacement.length)

@@ -190,6 +190,38 @@ export interface ProjectDeliverySummaryResponse {
   deployment: ProjectDeliveryAssetSummary
 }
 
+export interface ProjectVersionRecord {
+  versionId: string
+  tag: string
+  commitSha: string
+  sourceZipPath: string
+  sourceZipUrl: string
+  buildPath?: string
+  buildPreviewUrl?: string
+  buildStatus?: 'pending' | 'success' | 'failed'
+  buildLog?: string
+  createdAt: string
+  updatedAt: string
+  isCurrent: boolean
+}
+
+export interface ProjectVersionDiffResponse {
+  v1: string
+  v2: string
+  diff: string
+  fromVersion: ProjectVersionRecord
+  toVersion: ProjectVersionRecord
+}
+
+export interface ProjectVersionRestoreResponse {
+  projectId: string
+  workspaceId: string
+  restoredVersion: ProjectVersionRecord
+  snapshotVersion?: ProjectVersionRecord
+  currentVersionId: string
+  restoredAt: string
+}
+
 export interface RuntimeWorkspace extends Record<string, unknown> {
   id: string
   name: string
@@ -232,6 +264,20 @@ export interface RuntimeMessage extends Record<string, unknown> {
 export interface RuntimeAgent extends Record<string, unknown> {
   id: string
   name?: string
+  modelProvider?: string
+  model?: string
+  source?: 'built-in' | 'workspace' | 'custom'
+  workspaceId?: string
+}
+
+export interface RuntimeWorkspaceAgentMember extends Record<string, unknown> {
+  workspaceId: string
+  agentId: string
+  displayName: string
+  modelProviderOverride?: string
+  modelOverride?: string
+  sortOrder?: number
+  enabled?: boolean
 }
 
 export interface RuntimeAgentSession extends Record<string, unknown> {
@@ -303,6 +349,7 @@ export interface RuntimeAppState {
   conversations: RuntimeConversation[]
   messages: RuntimeMessage[]
   agents: RuntimeAgent[]
+  workspaceAgentMembers: RuntimeWorkspaceAgentMember[]
   agentSessions: RuntimeAgentSession[]
   agentSessionMessages: RuntimeAgentSessionMessage[]
   taskHandoffs: RuntimeTaskHandoff[]

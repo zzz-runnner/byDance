@@ -10,6 +10,8 @@ import type {
   WorkflowEventRecord,
 } from './types'
 
+export const DEFAULT_ORCHESTRATOR_NAME = '项目经理 Agent'
+
 const STAGE_LABELS: Record<string, string> = {
   chat: '自由对话',
   requirements_intake: '需求澄清',
@@ -26,6 +28,25 @@ const STAGE_LABELS: Record<string, string> = {
  */
 export function buildAgentMap(state: AppState): Map<string, AgentDefinition> {
   return new Map(state.agents.map(agent => [agent.id, agent]))
+}
+
+/**
+ * Resolves the current display name for one agent without changing the stable id.
+ * Input: optional agent definition and an optional fallback id.
+ * Output: display-ready agent name.
+ */
+export function agentDisplayName(agent: AgentDefinition | undefined, fallbackId?: string): string {
+  const trimmedName = agent?.name?.trim() ?? ''
+
+  if (trimmedName) {
+    return trimmedName
+  }
+
+  if (agent?.id === 'orchestrator' || fallbackId === 'orchestrator') {
+    return DEFAULT_ORCHESTRATOR_NAME
+  }
+
+  return agent?.id ?? fallbackId ?? 'Agent'
 }
 
 /**

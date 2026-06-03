@@ -21,6 +21,16 @@ import {
   createZipArtifact,
   createZipReadyEvent,
 } from './orchestrator/artifacts'
+import { syncAgentDerivedTitles } from './agents/agent-presentation'
+import {
+  createDefaultWorkspaceAgentMembers,
+  ensureWorkspaceAgentMembers,
+  listBuiltInAgents,
+  resolveWorkspaceAgent,
+  resolveWorkspaceAgents,
+  syncWorkspaceGroupParticipants,
+  upsertWorkspaceAgentMember,
+} from './agents/workspace-agents'
 import { handleUserMessage, type WorkflowServices } from './orchestrator/workflow'
 
 const CreateConversationInputSchema = z.object({
@@ -44,6 +54,20 @@ const WorkspaceOverviewBatchInputSchema = z.object({
 
 const AgentParamsSchema = z.object({
   agentId: z.string().min(1),
+})
+
+const WorkspaceParamsSchema = z.object({
+  workspaceId: z.string().min(1),
+})
+
+const WorkspaceAgentParamsSchema = z.object({
+  workspaceId: z.string().min(1),
+  agentId: z.string().min(1),
+})
+
+const WorkspaceMessageParamsSchema = z.object({
+  workspaceId: z.string().min(1),
+  messageId: z.string().min(1),
 })
 
 const AgentContextPolicyInputSchema = z.object({
@@ -162,38 +186,43 @@ type UpdateAgentInput = z.infer<typeof UpdateAgentInputSchema>
 
 const BUILT_IN_AGENT_UPDATE_FIELDS = [
   'name',
-  'role',
-  'description',
-  'whenToUse',
-  'systemPrompt',
   'modelProvider',
   'model',
-  'contextPolicy',
-  'runtimePolicy',
-  'outputSchema',
-  'skills',
-  'routingProfile',
 ] satisfies Array<keyof UpdateAgentInput>
 
 const CUSTOM_AGENT_UPDATE_FIELDS = [
   ...BUILT_IN_AGENT_UPDATE_FIELDS,
+  'role',
+  'description',
+  'whenToUse',
+  'systemPrompt',
+  'contextPolicy',
   'tools',
   'permissions',
   'disallowedTools',
   'permissionMode',
+  'runtimePolicy',
+  'outputSchema',
   'isolation',
+  'skills',
+  'routingProfile',
 ] satisfies Array<keyof UpdateAgentInput>
 
 /**
  * Creates a workspace record plus its default group conversation.
  * Input: workspace creation payload. Output: workspace and conversation records.
  */
-function createWorkspaceRecords(input: z.infer<typeof CreateWorkspaceInputSchema>): {
+function createWorkspaceRecords(
+  input: z.infer<typeof CreateWorkspaceInputSchema>,
+  builtInAgents: AgentDefinition[],
+): {
   workspace: Workspace
   conversation: Conversation
+  workspaceAgentMembers: AppState['workspaceAgentMembers']
 } {
   const now = isoNow()
   const workspaceId = `ws-${randomUUID()}`
+  const workspaceAgentMembers = createDefaultWorkspaceAgentMembers(builtInAgents, workspaceId, now)
   const workspace: Workspace = {
     id: workspaceId,
     name: input.name,
@@ -213,24 +242,28 @@ function createWorkspaceRecords(input: z.infer<typeof CreateWorkspaceInputSchema
     workspaceId,
     type: 'group',
     title: '项目主群聊',
-    participants: ['user', 'orchestrator', 'product-manager', 'engineer', 'reviewer'],
+    participants: ['user', ...workspaceAgentMembers.filter(member => member.enabled).map(member => member.agentId)],
     createdAt: now,
     updatedAt: now,
   }
 
-  return { workspace, conversation }
+  return { workspace, conversation, workspaceAgentMembers }
 }
 
 /**
  * Creates a workspace-scoped custom agent from the user form payload.
  * Input: custom agent payload. Output: complete AgentDefinition.
  */
-function createCustomAgent(input: z.infer<typeof CreateAgentInputSchema>): AgentDefinition {
+function createCustomAgent(
+  input: z.infer<typeof CreateAgentInputSchema>,
+  workspaceId: string,
+): AgentDefinition {
   const now = isoNow()
   return {
     ...input,
     id: input.id ?? `agent-${randomUUID()}`,
     source: 'workspace',
+    workspaceId,
     createdAt: now,
     updatedAt: now,
   }
@@ -252,6 +285,71 @@ function updateAgentDefinition(agent: AgentDefinition, input: UpdateAgentInput):
   }
   agent.updatedAt = isoNow()
   return agent
+}
+
+/**
+ * Applies a workspace-scoped agent update and returns the resolved agent view.
+ * Input: mutable state, workspace id, agent id, and validated update payload.
+ * Output: updated workspace-visible agent or undefined when not found.
+ */
+function updateWorkspaceAgentDefinition(
+  state: AppState,
+  workspaceId: string,
+  agentId: string,
+  input: UpdateAgentInput,
+): AgentDefinition | undefined {
+  ensureWorkspaceAgentMembers(state, workspaceId)
+  const currentAgent = resolveWorkspaceAgent(state, workspaceId, agentId)
+  if (!currentAgent) {
+    return undefined
+  }
+
+  const previousAgent = {
+    id: currentAgent.id,
+    name: currentAgent.name,
+  }
+
+  if (currentAgent.source === 'built-in') {
+    const template = state.agents.find(agent => agent.id === agentId && agent.source === 'built-in')
+    const member = state.workspaceAgentMembers.find(
+      candidate => candidate.workspaceId === workspaceId && candidate.agentId === agentId,
+    )
+    if (!template || !member) {
+      return undefined
+    }
+
+    const nextName = input.name?.trim() || currentAgent.name
+    const nextProvider = input.modelProvider ?? currentAgent.modelProvider
+    const nextModel = input.model ?? currentAgent.model
+    const updatedAt = isoNow()
+    upsertWorkspaceAgentMember(state, {
+      workspaceId,
+      agentId,
+      displayName: nextName,
+      modelProviderOverride: nextProvider === template.modelProvider ? undefined : nextProvider,
+      modelOverride: nextModel === template.model ? undefined : nextModel,
+      sortOrder: member.sortOrder,
+      locked: true,
+      enabled: member.enabled,
+      createdAt: member.createdAt,
+      updatedAt,
+    })
+    const updatedAgent = resolveWorkspaceAgent(state, workspaceId, agentId)
+    if (!updatedAgent) {
+      return undefined
+    }
+    syncAgentDerivedTitles(state, previousAgent, updatedAgent, updatedAgent.updatedAt, workspaceId)
+    return updatedAgent
+  }
+
+  const agent = state.agents.find(candidate => candidate.id === agentId && candidate.workspaceId === workspaceId)
+  if (!agent) {
+    return undefined
+  }
+
+  const updatedAgent = updateAgentDefinition(agent, input)
+  syncAgentDerivedTitles(state, previousAgent, updatedAgent, updatedAgent.updatedAt, workspaceId)
+  return updatedAgent
 }
 
 /**
@@ -450,13 +548,13 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
 
   app.get('/api/agents', async () => {
     const state = await services.store.read()
-    return state.agents
+    return listBuiltInAgents(state)
   })
 
   app.get('/api/agents/:agentId', async (request, reply) => {
     const params = AgentParamsSchema.parse(request.params)
     const state = await services.store.read()
-    const agent = state.agents.find(item => item.id === params.agentId)
+    const agent = listBuiltInAgents(state).find(item => item.id === params.agentId)
     if (!agent) {
       reply.status(404)
       return reply.send({ error: `Agent not found: ${params.agentId}` })
@@ -539,13 +637,94 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
 
   app.post('/api/workspaces', async request => {
     const input = CreateWorkspaceInputSchema.parse(request.body)
-    const created = createWorkspaceRecords(input)
+    const state = await services.store.read()
+    const created = createWorkspaceRecords(input, listBuiltInAgents(state))
     await services.runtime.prepareWorkspace(created.workspace)
     await services.store.update(state => {
       state.workspaces.push(created.workspace)
       state.conversations.push(created.conversation)
+      state.workspaceAgentMembers.push(...created.workspaceAgentMembers)
     })
     return services.store.read()
+  })
+
+  app.get('/api/workspaces/:workspaceId/agents', async (request, reply) => {
+    const params = WorkspaceParamsSchema.parse(request.params)
+    const state = await services.store.read()
+    if (!state.workspaces.some(workspace => workspace.id === params.workspaceId)) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+    return resolveWorkspaceAgents(state, params.workspaceId)
+  })
+
+  app.get('/api/workspaces/:workspaceId/agents/:agentId', async (request, reply) => {
+    const params = WorkspaceAgentParamsSchema.parse(request.params)
+    const state = await services.store.read()
+    if (!state.workspaces.some(workspace => workspace.id === params.workspaceId)) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+    const agent = resolveWorkspaceAgent(state, params.workspaceId, params.agentId)
+    if (!agent) {
+      reply.status(404)
+      return reply.send({ error: `Agent not found in workspace: ${params.agentId}` })
+    }
+    return agent
+  })
+
+  app.put('/api/workspaces/:workspaceId/messages/:messageId/pin', async (request, reply) => {
+    const params = WorkspaceMessageParamsSchema.parse(request.params)
+    const currentState = await services.store.read()
+    const workspace = currentState.workspaces.find(item => item.id === params.workspaceId)
+    if (!workspace) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+    if (!currentState.messages.some(message => message.workspaceId === params.workspaceId && message.id === params.messageId)) {
+      reply.status(404)
+      return reply.send({ error: `Message not found in workspace: ${params.messageId}` })
+    }
+
+    return services.store.update(state => {
+      const targetWorkspace = state.workspaces.find(item => item.id === params.workspaceId)
+      if (!targetWorkspace) {
+        throw new Error(`Workspace not found: ${params.workspaceId}`)
+      }
+      if (!targetWorkspace.pinnedMessageIds.includes(params.messageId)) {
+        targetWorkspace.pinnedMessageIds.push(params.messageId)
+      }
+      targetWorkspace.updatedAt = isoNow()
+      return {
+        workspaceId: targetWorkspace.id,
+        messageId: params.messageId,
+        pinnedMessageIds: [...targetWorkspace.pinnedMessageIds],
+      }
+    })
+  })
+
+  app.delete('/api/workspaces/:workspaceId/messages/:messageId/pin', async (request, reply) => {
+    const params = WorkspaceMessageParamsSchema.parse(request.params)
+    const currentState = await services.store.read()
+    const workspace = currentState.workspaces.find(item => item.id === params.workspaceId)
+    if (!workspace) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+
+    return services.store.update(state => {
+      const targetWorkspace = state.workspaces.find(item => item.id === params.workspaceId)
+      if (!targetWorkspace) {
+        throw new Error(`Workspace not found: ${params.workspaceId}`)
+      }
+      targetWorkspace.pinnedMessageIds = targetWorkspace.pinnedMessageIds.filter(messageId => messageId !== params.messageId)
+      targetWorkspace.updatedAt = isoNow()
+      return {
+        workspaceId: targetWorkspace.id,
+        messageId: params.messageId,
+        pinnedMessageIds: [...targetWorkspace.pinnedMessageIds],
+      }
+    })
   })
 
   app.post('/api/conversations', async request => {
@@ -569,66 +748,97 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
     return services.store.read()
   })
 
-  app.post('/api/agents', async request => {
+  app.post('/api/workspaces/:workspaceId/agents', async (request, reply) => {
+    const params = WorkspaceParamsSchema.parse(request.params)
     const input = CreateAgentInputSchema.parse(request.body)
-    const agent = createCustomAgent(input)
-    if (services.store.createAgent) {
-      return services.store.createAgent(agent)
+    const currentState = await services.store.read()
+    if (!currentState.workspaces.some(workspace => workspace.id === params.workspaceId)) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
     }
-    await services.store.update(state => {
+    const requestedId = input.id?.trim()
+    if (requestedId && currentState.agents.some(agent => agent.id === requestedId)) {
+      reply.status(400)
+      return reply.send({ error: `Agent already exists: ${requestedId}` })
+    }
+    const created = await services.store.update(state => {
+      const agent = createCustomAgent(input, params.workspaceId)
       if (state.agents.some(item => item.id === agent.id)) {
         throw new Error(`Agent already exists: ${agent.id}`)
       }
       state.agents.push(agent)
+      syncWorkspaceGroupParticipants(state, params.workspaceId, agent.updatedAt)
+      return agent
     })
-    return agent
+    return created
   })
 
-  app.patch('/api/agents/:agentId', async (request, reply) => {
-    const params = AgentParamsSchema.parse(request.params)
+  app.patch('/api/workspaces/:workspaceId/agents/:agentId', async (request, reply) => {
+    const params = WorkspaceAgentParamsSchema.parse(request.params)
     const input = UpdateAgentInputSchema.parse(request.body)
-    const updated = services.store.updateAgent
-      ? await services.store.updateAgent(
-          params.agentId,
-          agent => updateAgentDefinition(agent, input),
-        )
-      : await services.store.update(state => {
-          const agent = state.agents.find(item => item.id === params.agentId)
-          if (!agent) {
-            return undefined
-          }
-          return updateAgentDefinition(agent, input)
-        })
+    const currentState = await services.store.read()
+    if (!currentState.workspaces.some(workspace => workspace.id === params.workspaceId)) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+    const updated = await services.store.update(state =>
+      updateWorkspaceAgentDefinition(state, params.workspaceId, params.agentId, input),
+    )
     if (!updated) {
       reply.status(404)
-      return reply.send({ error: `Agent not found: ${params.agentId}` })
+      return reply.send({ error: `Agent not found in workspace: ${params.agentId}` })
     }
     return updated
   })
 
-  app.delete('/api/agents/:agentId', async (request, reply) => {
-    const params = AgentParamsSchema.parse(request.params)
-    const current = (await services.store.read()).agents.find(item => item.id === params.agentId)
-    if (!current) {
+  app.delete('/api/workspaces/:workspaceId/agents/:agentId', async (request, reply) => {
+    const params = WorkspaceAgentParamsSchema.parse(request.params)
+    const currentState = await services.store.read()
+    if (!currentState.workspaces.some(workspace => workspace.id === params.workspaceId)) {
       reply.status(404)
-      return reply.send({ error: `Agent not found: ${params.agentId}` })
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
     }
-    if (current.source === 'built-in') {
+    const currentAgent = resolveWorkspaceAgent(currentState, params.workspaceId, params.agentId)
+    if (!currentAgent) {
+      reply.status(404)
+      return reply.send({ error: `Agent not found in workspace: ${params.agentId}` })
+    }
+    if (currentAgent.source === 'built-in') {
       reply.status(400)
       return reply.send({ error: `Built-in agent cannot be deleted: ${params.agentId}` })
     }
-
-    if (services.store.deleteAgent) {
-      await services.store.deleteAgent(params.agentId)
-    } else {
-      await services.store.update(state => {
-        state.agents = state.agents.filter(agent => agent.id !== params.agentId)
-      })
+    const deleted = await services.store.update(state => {
+      const previousLength = state.agents.length
+      state.agents = state.agents.filter(
+        agent => !(agent.id === params.agentId && agent.workspaceId === params.workspaceId),
+      )
+      syncWorkspaceGroupParticipants(state, params.workspaceId)
+      return state.agents.length !== previousLength
+    })
+    if (!deleted) {
+      reply.status(404)
+      return reply.send({ error: `Agent not found in workspace: ${params.agentId}` })
     }
     return {
       deleted: true,
       agentId: params.agentId,
+      workspaceId: params.workspaceId,
     }
+  })
+
+  app.post('/api/agents', async (_request, reply) => {
+    reply.status(400)
+    return reply.send({ error: 'Use /api/workspaces/:workspaceId/agents to create workspace-scoped agents.' })
+  })
+
+  app.patch('/api/agents/:agentId', async (_request, reply) => {
+    reply.status(400)
+    return reply.send({ error: 'Use /api/workspaces/:workspaceId/agents/:agentId to update workspace-scoped agents.' })
+  })
+
+  app.delete('/api/agents/:agentId', async (_request, reply) => {
+    reply.status(400)
+    return reply.send({ error: 'Use /api/workspaces/:workspaceId/agents/:agentId to delete workspace-scoped agents.' })
   })
 
   app.post('/api/messages', async request => {

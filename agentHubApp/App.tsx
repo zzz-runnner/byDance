@@ -267,7 +267,7 @@ function WorkbenchScreen({
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<WorkspaceFilter>('active')
   const workspaceSearch = useMemo(
-    () => new Fuse(workspaceList, { keys: ['name', 'goal', 'latestEventLabel', 'type'], threshold: 0.36 }),
+    () => new Fuse<Workspace>(workspaceList, { keys: ['name', 'goal', 'latestEventLabel', 'type'], threshold: 0.36 }),
     [workspaceList],
   )
   const searchedWorkspaces = query.trim() ? workspaceSearch.search(query.trim()).map(result => result.item) : workspaceList
@@ -1098,7 +1098,7 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
   const runningCount = visibleAgents.filter(agent => agent.status !== 'idle').length
   const builtinCount = visibleAgents.filter(agent => agent.id === 'orchestrator' || agent.id === 'engineer').length
   const agentSearch = useMemo(
-    () => new Fuse(visibleAgents, { keys: ['name', 'role', 'provider', 'skills'], threshold: 0.34 }),
+    () => new Fuse<Agent>(visibleAgents, { keys: ['name', 'role', 'provider', 'skills'], threshold: 0.34 }),
     [visibleAgents],
   )
   const searchedAgents = query.trim() ? agentSearch.search(query.trim()).map(result => result.item) : visibleAgents

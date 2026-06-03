@@ -12,6 +12,7 @@ import type {
   ProjectPreviewRenderableTarget,
   StoredProjectRecord,
 } from './types'
+import { prefixWorkspaceRelativePath, resolveWorkspaceAppRoot } from './workspace-app-root'
 
 const SOURCE_HIDDEN_SEGMENTS = new Set([
   '.git',
@@ -98,6 +99,9 @@ type WorkspaceDetection = {
   reason: string
   sourceHash: string
   cacheKey: string
+  appRootPath: string
+  appRelativePath: string
+  appDisplayPath: string
   manifestHash?: string
   entryPath?: string
   runtimeTargets: string[]
@@ -275,6 +279,12 @@ function previewContentType(filePath: string): string {
       return 'image/webp'
     case '.ico':
       return 'image/x-icon'
+    case '.pdf':
+      return 'application/pdf'
+    case '.docx':
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    case '.pptx':
+      return 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
     case '.txt':
     case '.map':
     case '.md':
@@ -620,30 +630,48 @@ function detectViteFramework(dependencies: Set<string>, sourceFiles: string[]): 
  * Output: detection result including cache keys, framework, and preview entry hints.
  */
 async function detectWorkspacePreview(repoPath: string): Promise<WorkspaceDetection> {
-  const sourceFiles = await collectSourceFiles(repoPath)
-  const hashes = await computeWorkspaceHashes(repoPath, sourceFiles)
-  const manifest = await readPackageManifest(repoPath)
+  const appRoot = await resolveWorkspaceAppRoot(repoPath) ?? {
+    appRootPath: repoPath,
+    appRelativePath: '',
+    appDisplayPath: 'repo',
+  }
+  const sourceFiles = await collectSourceFiles(appRoot.appRootPath)
+  const hashes = await computeWorkspaceHashes(appRoot.appRootPath, sourceFiles)
+  const manifest = await readPackageManifest(appRoot.appRootPath)
   const dependencies = dependencySetOf(manifest)
-  const hasViteConfig = Boolean(await findFirstExistingFile(repoPath, VITE_CONFIG_NAMES))
-  const htmlTargets = (await collectHtmlTargets(repoPath)).sort((left, right) => {
+  const hasViteConfig = Boolean(await findFirstExistingFile(appRoot.appRootPath, VITE_CONFIG_NAMES))
+  const htmlTargets = (await collectHtmlTargets(appRoot.appRootPath)).sort((left, right) => {
     const weightDiff = previewTargetWeight(left) - previewTargetWeight(right)
     return weightDiff !== 0 ? weightDiff : left.localeCompare(right)
   })
   const primaryHtmlTarget = htmlTargets[0]
-  const primaryHtmlNeedsBuild = primaryHtmlTarget ? await htmlRequiresBuild(repoPath, primaryHtmlTarget) : false
+  const primaryHtmlNeedsBuild = primaryHtmlTarget
+    ? await htmlRequiresBuild(appRoot.appRootPath, primaryHtmlTarget)
+    : false
   const hasAngularSignals =
     dependencies.has('@angular/core') ||
     dependencies.has('@angular/cli') ||
     sourceFiles.includes('angular.json')
+  const runtimeTargets = htmlTargets
+    .map(targetPath => prefixWorkspaceRelativePath(appRoot.appRelativePath, targetPath))
+    .filter((targetPath): targetPath is string => Boolean(targetPath))
+  const prefixedFullSourceHash = hashStrings([appRoot.appRelativePath || 'repo', hashes.fullSourceHash])
+  const prefixedSourceHash = hashStrings([appRoot.appRelativePath || 'repo', hashes.sourceHash])
+  const detectionPrefix = appRoot.appRelativePath
+    ? `检测到位于 ${appRoot.appRelativePath} 的`
+    : '检测到'
 
   if (hasAngularSignals) {
     return {
       mode: 'unsupported',
       framework: 'angular',
-      reason: '检测到 Angular 工程。当前本地预览第一期只支持静态页面、原生模块和 Vite 工程。',
-      sourceHash: hashes.fullSourceHash,
-      cacheKey: hashes.fullSourceHash,
-      runtimeTargets: [],
+      reason: `${detectionPrefix} Angular 工程。当前本地预览第一期只支持静态页面、原生模块和 Vite 工程。`,
+      sourceHash: prefixedFullSourceHash,
+      cacheKey: prefixedFullSourceHash,
+      appRootPath: appRoot.appRootPath,
+      appRelativePath: appRoot.appRelativePath,
+      appDisplayPath: appRoot.appDisplayPath,
+      runtimeTargets,
     }
   }
 
@@ -661,28 +689,34 @@ async function detectWorkspacePreview(repoPath: string): Promise<WorkspaceDetect
     return {
       mode: 'static',
       framework: 'static-html',
-      reason: '检测到可直接访问的静态 HTML 入口，当前工作区可以直接预览。',
-      sourceHash: hashes.fullSourceHash,
-      cacheKey: hashes.fullSourceHash,
-      entryPath: primaryHtmlTarget,
-      runtimeTargets: htmlTargets,
+      reason: `${detectionPrefix}可直接访问的静态 HTML 入口，当前工作区可以直接预览。`,
+      sourceHash: prefixedFullSourceHash,
+      cacheKey: prefixedFullSourceHash,
+      appRootPath: appRoot.appRootPath,
+      appRelativePath: appRoot.appRelativePath,
+      appDisplayPath: appRoot.appDisplayPath,
+      entryPath: prefixWorkspaceRelativePath(appRoot.appRelativePath, primaryHtmlTarget),
+      runtimeTargets,
     }
   }
 
   if (hasViteLikeSignals) {
-    if (!(await pathExists(path.join(repoPath, 'package.json')))) {
+    if (!(await pathExists(path.join(appRoot.appRootPath, 'package.json')))) {
       return {
         mode: 'unsupported',
         framework: 'unsupported',
-        reason: '检测到需要构建的前端工程，但当前工作区缺少 package.json，无法准备本地预览环境。',
-        sourceHash: hashes.fullSourceHash,
-        cacheKey: hashes.fullSourceHash,
-        runtimeTargets: [],
+        reason: `${detectionPrefix}需要构建的前端工程，但当前工程根缺少 package.json，无法准备本地预览环境。`,
+        sourceHash: prefixedFullSourceHash,
+        cacheKey: prefixedFullSourceHash,
+        appRootPath: appRoot.appRootPath,
+        appRelativePath: appRoot.appRelativePath,
+        appDisplayPath: appRoot.appDisplayPath,
+        runtimeTargets,
       }
     }
 
     const framework = detectViteFramework(dependencies, sourceFiles)
-    const entryPath = await findFirstExistingFile(repoPath, [
+    const entryPath = await findFirstExistingFile(appRoot.appRootPath, [
       'src/main.tsx',
       'src/main.jsx',
       'src/main.ts',
@@ -691,31 +725,37 @@ async function detectWorkspacePreview(repoPath: string): Promise<WorkspaceDetect
       'src/App.svelte',
       primaryHtmlTarget ?? '',
     ].filter(Boolean))
-    const cacheKey = hashStrings([hashes.manifestHash, hashes.sourceHash])
+    const cacheKey = hashStrings([appRoot.appRelativePath || 'repo', hashes.manifestHash, hashes.sourceHash])
 
     return {
       mode: 'build',
       framework,
-      reason: '检测到 Vite 风格前端工程，后端会在独立沙箱里准备依赖并构建预览产物。',
-      sourceHash: hashes.sourceHash,
+      reason: `${detectionPrefix} Vite 风格前端工程，后端会在独立沙箱里准备依赖并构建预览产物。`,
+      sourceHash: prefixedSourceHash,
       cacheKey,
+      appRootPath: appRoot.appRootPath,
+      appRelativePath: appRoot.appRelativePath,
+      appDisplayPath: appRoot.appDisplayPath,
       manifestHash: hashes.manifestHash,
-      entryPath,
-      runtimeTargets: [],
+      entryPath: prefixWorkspaceRelativePath(appRoot.appRelativePath, entryPath),
+      runtimeTargets,
       buildTool: 'vite',
     }
   }
 
   const moduleEntry = await detectModuleShellEntry(sourceFiles)
-  if (moduleEntry && !(await entryUsesBareImports(repoPath, moduleEntry))) {
+  if (moduleEntry && !(await entryUsesBareImports(appRoot.appRootPath, moduleEntry))) {
     return {
       mode: 'module-shell',
       framework: 'vanilla-module',
-      reason: '检测到浏览器原生模块入口，可以直接套一层预览壳页面运行。',
-      sourceHash: hashes.fullSourceHash,
-      cacheKey: hashes.fullSourceHash,
-      entryPath: moduleEntry,
-      runtimeTargets: [moduleEntry],
+      reason: `${detectionPrefix}浏览器原生模块入口，可以直接套一层预览壳页面运行。`,
+      sourceHash: prefixedFullSourceHash,
+      cacheKey: prefixedFullSourceHash,
+      appRootPath: appRoot.appRootPath,
+      appRelativePath: appRoot.appRelativePath,
+      appDisplayPath: appRoot.appDisplayPath,
+      entryPath: prefixWorkspaceRelativePath(appRoot.appRelativePath, moduleEntry),
+      runtimeTargets: [prefixWorkspaceRelativePath(appRoot.appRelativePath, moduleEntry)].filter((targetPath): targetPath is string => Boolean(targetPath)),
     }
   }
 
@@ -723,11 +763,14 @@ async function detectWorkspacePreview(repoPath: string): Promise<WorkspaceDetect
     return {
       mode: 'unsupported',
       framework: 'unsupported',
-      reason: '检测到 JavaScript 入口，但它依赖裸模块导入。当前本地预览只支持静态页面、原生浏览器模块和 Vite 工程。',
-      sourceHash: hashes.fullSourceHash,
-      cacheKey: hashes.fullSourceHash,
-      entryPath: moduleEntry,
-      runtimeTargets: [],
+      reason: `${detectionPrefix} JavaScript 入口，但它依赖裸模块导入。当前本地预览只支持静态页面、原生浏览器模块和 Vite 工程。`,
+      sourceHash: prefixedFullSourceHash,
+      cacheKey: prefixedFullSourceHash,
+      appRootPath: appRoot.appRootPath,
+      appRelativePath: appRoot.appRelativePath,
+      appDisplayPath: appRoot.appDisplayPath,
+      entryPath: prefixWorkspaceRelativePath(appRoot.appRelativePath, moduleEntry),
+      runtimeTargets,
     }
   }
 
@@ -735,9 +778,12 @@ async function detectWorkspacePreview(repoPath: string): Promise<WorkspaceDetect
     mode: 'unsupported',
     framework: 'unsupported',
     reason: '当前工作区没有检测到可直接预览的 HTML 入口、原生浏览器模块入口或受支持的 Vite 工程。',
-    sourceHash: hashes.fullSourceHash,
-    cacheKey: hashes.fullSourceHash,
-    runtimeTargets: [],
+    sourceHash: prefixedFullSourceHash,
+    cacheKey: prefixedFullSourceHash,
+    appRootPath: appRoot.appRootPath,
+    appRelativePath: appRoot.appRelativePath,
+    appDisplayPath: appRoot.appDisplayPath,
+    runtimeTargets,
   }
 }
 
@@ -954,7 +1000,7 @@ export class PreviewService {
       buildId: `build-${randomUUID()}`,
       summary: '正在等待本地预览构建槽。',
       startedAt: new Date().toISOString(),
-      installCommand: await this.installCommandFor(repoPath),
+      installCommand: await this.installCommandFor(detection.appRootPath),
       buildCommand: this.viteBuildCommand(project, detection.cacheKey),
       logOutput: '',
     }
@@ -1136,7 +1182,7 @@ export class PreviewService {
     const releaseBuildSlot = await this.acquireBuildSlot(record)
     try {
       const outputDir = this.outputDirFor(project.workspaceId, detection.cacheKey)
-      const sandboxDir = await this.prepareBuildSandbox(project.workspaceId, detection, record)
+      const { sandboxAppRootDir } = await this.prepareBuildSandbox(project.workspaceId, detection, record)
 
       await mkdir(outputDir, { recursive: true })
       await rm(outputDir, { recursive: true, force: true })
@@ -1157,7 +1203,7 @@ export class PreviewService {
       const buildResult = await runWorkspaceCommand({
         command: pnpmExecutable(),
         args: buildArgs,
-        cwd: sandboxDir,
+        cwd: sandboxAppRootDir,
         timeoutMs: 300_000,
         env: {
           npm_config_fund: 'false',
@@ -1207,7 +1253,7 @@ export class PreviewService {
     workspaceId: string,
     detection: WorkspaceDetection,
     record: PreviewBuildRecord,
-  ): Promise<string> {
+  ): Promise<{ sandboxDir: string; sandboxAppRootDir: string }> {
     if (!detection.manifestHash) {
       throw new Error('Preview build sandbox requires a manifest hash.')
     }
@@ -1226,8 +1272,14 @@ export class PreviewService {
     })
 
     record.summary = '正在准备共享依赖环境。'
-    await this.ensureSandboxDependencies(sandboxDir, repoPath, record)
-    return sandboxDir
+    const sandboxAppRootDir = detection.appRelativePath
+      ? resolveInsideRoot(sandboxDir, detection.appRelativePath)
+      : sandboxDir
+    await this.ensureSandboxDependencies(sandboxAppRootDir, detection.appRootPath, record)
+    return {
+      sandboxDir,
+      sandboxAppRootDir,
+    }
   }
 
   /**
@@ -1259,17 +1311,17 @@ export class PreviewService {
    * Output: sandbox node_modules ready for Vite build.
    */
   private async ensureSandboxDependencies(
-    sandboxDir: string,
-    repoPath: string,
+    sandboxAppRootDir: string,
+    appRootPath: string,
     record: PreviewBuildRecord,
   ): Promise<void> {
-    const manifestPath = path.join(sandboxDir, 'package.json')
+    const manifestPath = path.join(sandboxAppRootDir, 'package.json')
     if (!(await pathExists(manifestPath))) {
       throw new Error('当前工作区没有 package.json，无法执行前端构建。')
     }
 
-    const nodeModulesPath = path.join(sandboxDir, 'node_modules')
-    const installMarkerPath = path.join(sandboxDir, SANDBOX_INSTALL_MARKER_FILE_NAME)
+    const nodeModulesPath = path.join(sandboxAppRootDir, 'node_modules')
+    const installMarkerPath = path.join(sandboxAppRootDir, SANDBOX_INSTALL_MARKER_FILE_NAME)
     if ((await pathExists(nodeModulesPath)) && (await pathExists(installMarkerPath))) {
       record.logOutput = appendBuildLog(record.logOutput, 'Reusing sandbox node_modules with shared pnpm store.\n')
       return
@@ -1280,12 +1332,12 @@ export class PreviewService {
     await rm(installMarkerPath, { force: true })
 
     await mkdir(this.config.pnpmStoreDir, { recursive: true })
-    const installArgs = await this.installArgsFor(repoPath)
+    const installArgs = await this.installArgsFor(appRootPath)
     record.installCommand = this.installCommandDisplay(installArgs)
     let installResult = await runWorkspaceCommand({
       command: pnpmExecutable(),
       args: installArgs,
-      cwd: sandboxDir,
+      cwd: sandboxAppRootDir,
       timeoutMs: 300_000,
       env: {
         npm_config_fund: 'false',
@@ -1299,7 +1351,7 @@ export class PreviewService {
       const approvalResult = await runWorkspaceCommand({
         command: pnpmExecutable(),
         args: ['approve-builds', '--all'],
-        cwd: sandboxDir,
+        cwd: sandboxAppRootDir,
         timeoutMs: 120_000,
         env: {
           npm_config_fund: 'false',
@@ -1318,7 +1370,7 @@ export class PreviewService {
       installResult = await runWorkspaceCommand({
         command: pnpmExecutable(),
         args: installArgs,
-        cwd: sandboxDir,
+        cwd: sandboxAppRootDir,
         timeoutMs: 300_000,
         env: {
           npm_config_fund: 'false',
