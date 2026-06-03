@@ -214,7 +214,7 @@ export function InsightDock({ state, room, events }: InsightDockProps) {
               const Icon = artifact.type === 'zip' ? FileArchive : artifact.type === 'diff' ? Braces : CheckCircle2
 
               return (
-                <a className="artifact-mini artifact-mini--rich" key={artifact.id} href={artifact.url ?? '#'} target="_blank" rel="noreferrer">
+                <a className="artifact-mini artifact-mini--rich" key={artifact.id} href={artifact.url} target="_blank" rel="noreferrer">
                   <Icon size={16} />
                   <span>
                     <strong>{artifact.title}</strong>

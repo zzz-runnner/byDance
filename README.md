@@ -109,9 +109,14 @@ The backend still keeps the Nest business modules for:
   - final agent reply
 - Turn-level runtime preview URLs and code diffs no longer render as separate duplicate cards in chat.
 - The turn result entry now opens the workspace dialog directly, and the dialog can switch across:
+  - `Result`
   - `Diff`
   - `源码`
   - `预览`
+- Result-only turns now open the dedicated `Result` tab first, so review/text-only runs no longer fall through to an empty code panel.
+- Frontend artifact affordances now stay capability-aware:
+  - entries without a real URL no longer advertise a fake external page
+  - preview and delivery open actions only appear when a real target exists
 - When one turn contains multiple repair attempts, the main chat flow now collapses them into one result entry instead of repeating similar preview and diff cards.
 - Quote replies and code selections are structured inputs, not plain text hacks.
 - AI output, process summaries, and artifact text use the unified Markdown renderer.
