@@ -332,6 +332,33 @@ Focused feature verification also passed on 2026-06-03:
   - final visible reply sender was `product-manager`
   - SSE stream completed and state reload reflected the persisted reply
 
+Additional custom-agent interaction verification passed on 2026-06-04 through the live services already running on `127.0.0.1:8787` and `127.0.0.1:8790`:
+
+- Created one fresh validation project:
+  - project: `proj-f114d6cb-48b5-41e1-bad3-931a6171efe1`
+  - workspace: `ws-dc027d8e-a489-4471-8bd2-bdaf22b9071b`
+- Created one workspace custom agent:
+  - `ux-copy-agent-verify`
+  - display name: `UX Copy Agent`
+  - provider: `mock`
+- Frontend create-agent dialog regression was fixed:
+  - clicking `New Agent` no longer exits create mode immediately
+  - the dialog now stays in create mode until the user selects an existing agent or finishes creation
+- Real explicit mention routing passed:
+  - `@ux-copy-agent-verify ...`
+  - persisted reply sender id stayed `ux-copy-agent-verify`
+  - `routing_finished.speakerAgentId` stayed `ux-copy-agent-verify`
+- Real custom-agent execution passed:
+  - `@ux-copy-agent-verify /run Return exactly three short login empty-state lines and nothing else.`
+  - persisted `agentRun.id = run-6d39db67-ffcf-4796-a451-88ab8ca98e2e`
+  - persisted `agentRun.provider = mock`
+  - persisted `agentRun.status = success`
+  - persisted handoff target stayed `ux-copy-agent-verify`
+- Real dynamic visible-speaker routing was also rechecked:
+  - English UI-copy request without `@mention` routed to `ux-copy-agent-verify`
+  - Chinese planning-style UI-copy request without `@mention` routed to `product-manager`
+  - current behavior therefore supports automatic custom-agent selection in some chat turns, but it is still sensitive to task-stage detection and routing-profile match quality
+
 Portable delivery preview smoke also passed on 2026-06-02 through one isolated backend instance on `127.0.0.1:8791`:
 
 - `POST /api/projects/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/builds` rebuilt delivery version `v20260602_135651` successfully with the updated portable HTML rewrite step.
