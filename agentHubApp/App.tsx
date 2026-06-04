@@ -100,7 +100,7 @@ function AnimatedHomeIcon({ size }: { size: number }) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('workbench')
-  const [navExpanded, setNavExpanded] = useState(false)
+  const [appMenuOpen, setAppMenuOpen] = useState(false)
   const [workspaceList, setWorkspaceList] = useState<Workspace[]>(workspaces)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(workspaces[0]?.id ?? '')
   const [activityOpen, setActivityOpen] = useState(false)
@@ -124,13 +124,10 @@ export default function App() {
         <SafeAreaView style={styles.safe}>
           <StatusBar style="dark" />
           <View style={[styles.header, activeTab === 'agents' && styles.agentHeader, activeTab === 'chat' && styles.codeHeader]}>
-            {activeTab === 'chat' ? (
-              <GlassCard compact style={styles.codeHeaderButton}>
-                <MaterialCommunityIcons name="chevron-left" size={mobileScale.headerIcon} color="#0f172a" />
-              </GlassCard>
-            ) : null}
             <View style={[styles.headerLeft, activeTab === 'chat' && styles.codeHeaderLeft, tightChatHeader && styles.chatHeaderLeftTight]}>
-              {tightChatHeader ? null : <AgentGlyph agentId="orchestrator" size={mobileScale.headerAvatar} />}
+              <Pressable style={styles.headerAvatarButton} onPress={() => setAppMenuOpen(true)}>
+                <AgentGlyph agentId="orchestrator" size={mobileScale.headerAvatar} />
+              </Pressable>
               <View style={styles.headerCopy}>
                 {activeTab === 'chat' ? null : <Text style={styles.eyebrow}>AGENTHUB</Text>}
                 <Text style={[styles.headerTitle, { fontSize: mobileScale.pageTitle }, activeTab === 'chat' && styles.chatHeaderTitle, activeTab === 'chat' && { fontSize: mobileScale.chatTitle }]} numberOfLines={1}>
@@ -208,7 +205,6 @@ export default function App() {
                   onOpenWorkspace={nextWorkspace => {
                     setActiveWorkspaceId(nextWorkspace.id)
                     setActiveTab('chat')
-                    setNavExpanded(false)
                   }}
                 />
               ) : null}
@@ -216,7 +212,16 @@ export default function App() {
             </ScrollView>
           )}
 
-          <SideTabs activeTab={activeTab} onChange={setActiveTab} expanded={navExpanded} onToggle={() => setNavExpanded(value => !value)} mobileScale={mobileScale} />
+          <AppMenuDrawer
+            visible={appMenuOpen}
+            activeTab={activeTab}
+            mobileScale={mobileScale}
+            onClose={() => setAppMenuOpen(false)}
+            onChange={nextTab => {
+              setActiveTab(nextTab)
+              setAppMenuOpen(false)
+            }}
+          />
           <WorkspacePanelModal
             visible={workspacePanelOpen}
             workspaceList={workspaceList}
@@ -227,14 +232,12 @@ export default function App() {
               setActiveWorkspaceId(nextWorkspace.id)
               setWorkspacePanelOpen(false)
               setActiveTab('chat')
-              setNavExpanded(false)
             }}
             onCreate={nextWorkspace => {
               setWorkspaceList(current => [nextWorkspace, ...current])
               setActiveWorkspaceId(nextWorkspace.id)
               setWorkspacePanelOpen(false)
               setActiveTab('chat')
-              setNavExpanded(false)
             }}
           />
           <ActivityCenterModal visible={activityOpen} onClose={() => setActivityOpen(false)} />
@@ -1205,51 +1208,38 @@ function AgentScreen({ layoutTier, mobileScale }: { layoutTier: LayoutTier; mobi
   )
 }
 
-function SideTabs({ activeTab, onChange, expanded, onToggle, mobileScale }: { activeTab: TabKey; onChange: (tab: TabKey) => void; expanded: boolean; onToggle: () => void; mobileScale: MobileScale }) {
+function AppMenuDrawer({ visible, activeTab, mobileScale, onClose, onChange }: { visible: boolean; activeTab: TabKey; mobileScale: MobileScale; onClose: () => void; onChange: (tab: TabKey) => void }) {
   const insets = useSafeAreaInsets()
-  const active = tabs.find(tab => tab.key === activeTab) ?? tabs[0]
-
-  if (!expanded) {
-    return (
-      <GlassCard style={[styles.navFab, { width: mobileScale.navFab, height: mobileScale.navFab, borderRadius: Math.round(mobileScale.navFab / 2), bottom: Platform.select({ android: 14, default: 24 }) + insets.bottom }]}>
-        <Pressable style={styles.navFabButton} onPress={onToggle}>
-          <MaterialCommunityIcons name={active.icon} size={Math.round(mobileScale.navFab * 0.34)} color="#fff" />
-        </Pressable>
-      </GlassCard>
-    )
-  }
 
   return (
-    <GlassCard style={[styles.sideRail, { width: mobileScale.sideRailWidth, bottom: Platform.select({ android: 12, default: 22 }) + insets.bottom }]}>
-      <Pressable style={styles.sideRailToggle} onPress={onToggle}>
-        <MaterialCommunityIcons name="chevron-left" size={22} color="#e5edf7" />
-      </Pressable>
-      <View style={styles.sideRailStack}>
-        {tabs.map(tab => {
-          const active = tab.key === activeTab
-          const isAi = tab.key === 'chat'
-          return (
-            <Pressable
-              key={tab.key}
-              style={[
-                styles.sideRailItem,
-                { width: mobileScale.sideRailButton, minHeight: mobileScale.sideRailButton },
-                styles.sideRailItemExpanded,
-                active && styles.sideRailItemActive,
-                isAi && styles.sideRailAi,
-                isAi && active && styles.sideRailAiActive,
-              ]}
-              onPress={() => onChange(tab.key)}
-            >
-              <View style={[styles.sideRailIconWrap, active && !isAi && styles.sideRailIconWrapActive, isAi && styles.sideRailAiIconWrap]}>
-                <MaterialCommunityIcons name={tab.icon} size={isAi ? Math.round(mobileScale.sideRailButton * 0.46) : Math.round(mobileScale.sideRailButton * 0.38)} color={active || isAi ? '#fff' : '#dbe4ee'} />
-              </View>
-              {expanded ? <Text style={[styles.sideRailLabel, active && styles.sideRailLabelActive, isAi && styles.sideRailAiLabel]}>{tab.label}</Text> : null}
-            </Pressable>
-          )
-        })}
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.appMenuBackdrop}>
+        <Pressable style={styles.appMenuScrim} onPress={onClose} />
+        <GlassCard style={[styles.appMenuPanel, { paddingTop: insets.top + 14 }]}>
+          <View style={styles.appMenuHead}>
+            <AgentGlyph agentId="orchestrator" size={mobileScale.headerAvatar} />
+            <View style={styles.appMenuHeadCopy}>
+              <Text style={styles.homeWorkspaceEyebrow}>AGENTHUB</Text>
+              <Text style={[styles.appMenuTitle, { fontSize: mobileScale.panelTitle }]}>页面切换</Text>
+            </View>
+          </View>
+          <View style={styles.appMenuList}>
+            {tabs.map(tab => {
+              const active = tab.key === activeTab
+              return (
+                <Pressable key={tab.key} style={[styles.appMenuRow, active && styles.appMenuRowActive]} onPress={() => onChange(tab.key)}>
+                  <View style={[styles.appMenuIcon, active && styles.appMenuIconActive]}>
+                    <MaterialCommunityIcons name={tab.icon} size={20} color={active ? '#fff' : '#94a3b8'} />
+                  </View>
+                  <Text style={[styles.appMenuRowText, { fontSize: mobileScale.bodyText }, active && styles.appMenuRowTextActive]} numberOfLines={1}>{tab.label}</Text>
+                  <MaterialCommunityIcons name="chevron-right" size={18} color={active ? '#dbeafe' : '#64748b'} />
+                </Pressable>
+              )
+            })}
+          </View>
+        </GlassCard>
       </View>
-    </GlassCard>
+    </Modal>
   )
 }
 
@@ -1592,6 +1582,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+  headerAvatarButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   codeHeaderLeft: {
     flex: 1,
   },
@@ -1687,6 +1681,76 @@ const styles = StyleSheet.create({
   agentCreateText: {
     color: '#0f172a',
     fontSize: 16,
+    fontWeight: '900',
+  },
+  appMenuBackdrop: {
+    flex: 1,
+    alignItems: 'flex-start',
+  },
+  appMenuScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15,23,42,0.24)',
+  },
+  appMenuPanel: {
+    width: '72%',
+    maxWidth: 320,
+    height: '100%',
+    paddingHorizontal: 14,
+    paddingBottom: Platform.select({ ios: 24, android: 18, default: 20 }),
+    borderTopLeftRadius: 0,
+    borderBottomLeftRadius: 0,
+    borderTopRightRadius: 22,
+    borderBottomRightRadius: 22,
+    backgroundColor: 'rgba(15,23,42,0.9)',
+  },
+  appMenuHead: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 14,
+  },
+  appMenuHeadCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  appMenuTitle: {
+    color: '#f8fafc',
+    fontWeight: '900',
+  },
+  appMenuList: {
+    gap: 4,
+  },
+  appMenuRow: {
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+  },
+  appMenuRowActive: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  appMenuIcon: {
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  appMenuIconActive: {
+    backgroundColor: '#2563eb',
+  },
+  appMenuRowText: {
+    flex: 1,
+    minWidth: 0,
+    color: '#dbe4ee',
+    fontWeight: '800',
+  },
+  appMenuRowTextActive: {
+    color: '#fff',
     fontWeight: '900',
   },
   content: {
