@@ -105,6 +105,7 @@ export default function App() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(workspaces[0]?.id ?? '')
   const [activityOpen, setActivityOpen] = useState(false)
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false)
+  const [workspacePanelMode, setWorkspacePanelMode] = useState<'switch' | 'create'>('switch')
   const { width } = useWindowDimensions()
   const layoutTier: LayoutTier = width < 380 ? 'compact' : width < 430 ? 'standard' : 'wide'
   const mobileScale = useMemo(() => createMobileScale(layoutTier, width), [layoutTier, width])
@@ -158,7 +159,13 @@ export default function App() {
             ) : activeTab === 'workbench' ? (
               <View style={styles.workspaceHeaderActions}>
                 <GlassCard compact style={styles.headerIconButton}>
-                  <Pressable style={styles.headerButtonPressable} onPress={() => setWorkspacePanelOpen(true)}>
+                  <Pressable
+                    style={styles.headerButtonPressable}
+                    onPress={() => {
+                      setWorkspacePanelMode('create')
+                      setWorkspacePanelOpen(true)
+                    }}
+                  >
                     <MaterialCommunityIcons name="plus" size={mobileScale.headerIcon} color="#0f172a" />
                   </Pressable>
                 </GlassCard>
@@ -191,7 +198,15 @@ export default function App() {
 
           {activeTab === 'chat' ? (
             <View style={styles.contentFill}>
-              <ChatScreen workspace={activeWorkspace} layoutTier={layoutTier} mobileScale={mobileScale} onOpenWorkspacePanel={() => setWorkspacePanelOpen(true)} />
+              <ChatScreen
+                workspace={activeWorkspace}
+                layoutTier={layoutTier}
+                mobileScale={mobileScale}
+                onOpenWorkspacePanel={() => {
+                  setWorkspacePanelMode('switch')
+                  setWorkspacePanelOpen(true)
+                }}
+              />
             </View>
           ) : (
             <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} showsVerticalScrollIndicator={false}>
@@ -205,6 +220,15 @@ export default function App() {
                   onOpenWorkspace={nextWorkspace => {
                     setActiveWorkspaceId(nextWorkspace.id)
                     setActiveTab('chat')
+                  }}
+                  onToggleWorkspacePin={workspaceId => {
+                    setWorkspaceList(current =>
+                      current.map(item => (item.id === workspaceId ? { ...item, pinned: !item.pinned } : item)),
+                    )
+                  }}
+                  onOpenWorkspacePanel={() => {
+                    setWorkspacePanelMode('switch')
+                    setWorkspacePanelOpen(true)
                   }}
                 />
               ) : null}
@@ -224,6 +248,7 @@ export default function App() {
           />
           <WorkspacePanelModal
             visible={workspacePanelOpen}
+            mode={workspacePanelMode}
             workspaceList={workspaceList}
             activeWorkspaceId={activeWorkspace.id}
             layoutTier={layoutTier}
@@ -248,6 +273,7 @@ export default function App() {
 }
 
 type WorkspaceFilter = 'active' | 'updated' | 'pinned' | 'archived'
+type WorkbenchFocus = 'workspaces' | 'running' | 'artifacts'
 type AgentFilter = 'all' | 'running' | 'reviewing' | 'idle' | 'builtin'
 type ArtifactStatus = 'generating' | 'partial' | 'ready' | 'failed'
 
@@ -263,6 +289,8 @@ function WorkbenchScreen({
   layoutTier,
   mobileScale,
   onOpenWorkspace,
+  onToggleWorkspacePin,
+  onOpenWorkspacePanel,
 }: {
   workspaceList: Workspace[]
   runningAgents: number
@@ -270,10 +298,13 @@ function WorkbenchScreen({
   layoutTier: LayoutTier
   mobileScale: MobileScale
   onOpenWorkspace: (workspace: Workspace) => void
+  onToggleWorkspacePin: (workspaceId: string) => void
+  onOpenWorkspacePanel: () => void
 }) {
   const isCompact = layoutTier === 'compact'
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<WorkspaceFilter>('active')
+  const [focus, setFocus] = useState<WorkbenchFocus>('workspaces')
   const workspaceSearch = useMemo(
     () => new Fuse<Workspace>(workspaceList, { keys: ['name', 'goal', 'latestEventLabel', 'type'], threshold: 0.36 }),
     [workspaceList],
@@ -289,8 +320,16 @@ function WorkbenchScreen({
     if (filter === 'updated') return b.updatedAt.localeCompare(a.updatedAt)
     return Number(b.status === 'running') - Number(a.status === 'running')
   })
-  const pinnedWorkspaces = sortedWorkspaces.filter(item => item.pinned)
-  const recentWorkspaces = sortedWorkspaces.filter(item => !item.pinned)
+  const focusedWorkspaces =
+    focus === 'running'
+      ? sortedWorkspaces.filter(item => item.status === 'running')
+      : focus === 'artifacts'
+        ? sortedWorkspaces.filter(item => item.artifactCount > 0)
+        : sortedWorkspaces
+  const pinnedWorkspaces = focusedWorkspaces.filter(item => item.pinned)
+  const recentWorkspaces = focusedWorkspaces.filter(item => !item.pinned)
+  const focusTitle = focus === 'workspaces' ? '置顶工作区' : focus === 'running' ? '进行中的项目' : '产物相关项目'
+  const focusMeta = focus === 'workspaces' ? `${pinnedWorkspaces.length} 个` : focus === 'running' ? `${focusedWorkspaces.length} 个运行中` : `${focusedWorkspaces.length} 个有产物`
 
   return (
     <View style={[styles.workbenchScreen, isCompact && styles.workspaceScreenCompact]}>
@@ -321,11 +360,6 @@ function WorkbenchScreen({
             <Text style={styles.homeMetaTextGray}>{workspace.messageCount} 消息</Text>
           </View>
         </View>
-        <View style={styles.homeStatGrid}>
-          <StatCard label="工作区" value={String(workspaceList.length)} icon="view-grid-outline" tone="#2563eb" />
-          <StatCard label="运行中" value={String(runningAgents)} icon="lightning-bolt-outline" tone="#db2777" />
-          <StatCard label="产物" value={String(artifacts.length)} icon="package-variant-closed" tone="#059669" />
-        </View>
         <View style={styles.homeAvatarRow}>
           {workspace.agents.slice(0, 4).map((agentId, index) => (
             <View key={agentId} style={{ marginLeft: index === 0 ? 0 : -10 }}>
@@ -340,6 +374,30 @@ function WorkbenchScreen({
           </View>
         </GlassCard>
       </Pressable>
+
+      <View style={styles.homeStatGrid}>
+        <Pressable
+          style={styles.statPressable}
+          onPress={() => {
+            setFocus('workspaces')
+            onOpenWorkspacePanel()
+          }}
+        >
+          <StatCard label="工作区" value={String(workspaceList.length)} icon="view-grid-outline" tone="#2563eb" active={focus === 'workspaces'} />
+        </Pressable>
+        <Pressable
+          style={styles.statPressable}
+          onPress={() => {
+            setFocus('running')
+            setFilter('active')
+          }}
+        >
+          <StatCard label="运行中" value={String(runningAgents)} icon="lightning-bolt-outline" tone="#db2777" active={focus === 'running'} />
+        </Pressable>
+        <View style={styles.statPressable}>
+          <StatCard label="产物" value={String(artifacts.length)} icon="package-variant-closed" tone="#059669" />
+        </View>
+      </View>
 
       <GlassCard style={styles.searchCard}>
         <MaterialCommunityIcons name="magnify" size={24} color="#64748b" />
@@ -367,11 +425,11 @@ function WorkbenchScreen({
       </View>
 
       <View style={styles.workbenchSectionHead}>
-        <Text style={[styles.homeSectionTitle, { fontSize: mobileScale.sectionTitle }]}>置顶工作区</Text>
-        <Text style={styles.workbenchSectionMeta}>{pinnedWorkspaces.length} 个</Text>
+        <Text style={[styles.homeSectionTitle, { fontSize: mobileScale.sectionTitle }]}>{focusTitle}</Text>
+        <Text style={styles.workbenchSectionMeta}>{focusMeta}</Text>
       </View>
       {pinnedWorkspaces.map(item => (
-        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} />
+        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} onTogglePin={() => onToggleWorkspacePin(item.id)} />
       ))}
 
       <View style={styles.workbenchSectionHead}>
@@ -379,10 +437,10 @@ function WorkbenchScreen({
         <Text style={styles.workbenchSectionMeta}>按活跃度排序</Text>
       </View>
       {recentWorkspaces.slice(0, 3).map(item => (
-        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} />
+        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} onTogglePin={() => onToggleWorkspacePin(item.id)} />
       ))}
 
-      {sortedWorkspaces.length === 0 ? (
+      {focusedWorkspaces.length === 0 ? (
         <GlassCard style={styles.emptyStateCard}>
           <MaterialCommunityIcons name="database-search-outline" size={28} color="#64748b" />
           <Text style={styles.cardTitle}>没有匹配的工作区</Text>
@@ -718,6 +776,7 @@ function ActivityCenterModal({ visible, onClose }: { visible: boolean; onClose: 
 
 function WorkspacePanelModal({
   visible,
+  mode,
   workspaceList,
   activeWorkspaceId,
   layoutTier,
@@ -726,6 +785,7 @@ function WorkspacePanelModal({
   onCreate,
 }: {
   visible: boolean
+  mode: 'switch' | 'create'
   workspaceList: Workspace[]
   activeWorkspaceId: string
   layoutTier: LayoutTier
@@ -786,7 +846,7 @@ function WorkspacePanelModal({
           <View style={styles.activityCenterHead}>
             <View style={styles.workspacePanelTitleCopy}>
               <Text style={styles.homeWorkspaceEyebrow}>WORKSPACE PANEL</Text>
-              <Text style={styles.artifactDetailTitle}>工作区切换与创建</Text>
+              <Text style={styles.artifactDetailTitle}>{mode === 'create' ? '创建工作区' : '切换工作区'}</Text>
             </View>
             <Pressable style={styles.artifactCloseButton} onPress={onClose}>
               <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
@@ -794,29 +854,32 @@ function WorkspacePanelModal({
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.workspacePanelContent}>
-            <View style={styles.workspacePanelSection}>
-              <View style={styles.workspacePanelSectionHead}>
-                <Text style={styles.workspacePanelSectionTitle}>快速切换</Text>
-                <Text style={styles.workbenchSectionMeta}>{workspaceList.length} 个</Text>
+            {mode === 'switch' ? (
+              <View style={styles.workspacePanelSection}>
+                <View style={styles.workspacePanelSectionHead}>
+                  <Text style={styles.workspacePanelSectionTitle}>快速切换</Text>
+                  <Text style={styles.workbenchSectionMeta}>{workspaceList.length} 个</Text>
+                </View>
+                {visibleWorkspaces.map(workspace => {
+                  const isActive = workspace.id === activeWorkspaceId
+                  return (
+                    <Pressable key={workspace.id} style={[styles.workspaceSwitchRow, isActive && styles.workspaceSwitchRowActive]} onPress={() => onSwitch(workspace)}>
+                      <View style={styles.workspaceSwitchIcon}>
+                        <MaterialCommunityIcons name={workspace.kind === 'group' ? 'account-group-outline' : 'account-outline'} size={20} color="#2563eb" />
+                      </View>
+                      <View style={styles.workspaceSwitchCopy}>
+                        <Text style={styles.cardTitle} numberOfLines={1}>{workspace.name}</Text>
+                        <Text style={styles.bodyText} numberOfLines={1}>{workspace.latestEventLabel}</Text>
+                      </View>
+                      <Text style={styles.workspaceSwitchMeta}>{isActive ? '当前' : workspace.updatedAt}</Text>
+                    </Pressable>
+                  )
+                })}
               </View>
-              {visibleWorkspaces.map(workspace => {
-                const isActive = workspace.id === activeWorkspaceId
-                return (
-                  <Pressable key={workspace.id} style={[styles.workspaceSwitchRow, isActive && styles.workspaceSwitchRowActive]} onPress={() => onSwitch(workspace)}>
-                    <View style={styles.workspaceSwitchIcon}>
-                      <MaterialCommunityIcons name={workspace.kind === 'group' ? 'account-group-outline' : 'account-outline'} size={20} color="#2563eb" />
-                    </View>
-                    <View style={styles.workspaceSwitchCopy}>
-                      <Text style={styles.cardTitle} numberOfLines={1}>{workspace.name}</Text>
-                      <Text style={styles.bodyText} numberOfLines={1}>{workspace.latestEventLabel}</Text>
-                    </View>
-                    <Text style={styles.workspaceSwitchMeta}>{isActive ? '当前' : workspace.updatedAt}</Text>
-                  </Pressable>
-                )
-              })}
-            </View>
+            ) : null}
 
-            <View style={styles.workspacePanelSection}>
+            {mode === 'create' ? (
+              <View style={styles.workspacePanelSection}>
               <Text style={styles.workspacePanelSectionTitle}>创建工作区</Text>
               <TextInput
                 value={draftName}
@@ -867,7 +930,8 @@ function WorkspacePanelModal({
                 <MaterialCommunityIcons name="plus" size={20} color="#fff" />
                 <Text style={styles.workspaceCreateText}>创建并进入</Text>
               </Pressable>
-            </View>
+              </View>
+            ) : null}
           </ScrollView>
         </GlassCard>
       </View>
@@ -1243,9 +1307,9 @@ function AppMenuDrawer({ visible, activeTab, mobileScale, onClose, onChange }: {
   )
 }
 
-function StatCard({ label, value, icon, tone }: { label: string; value: string; icon: IconName; tone: string }) {
+function StatCard({ label, value, icon, tone, active = false }: { label: string; value: string; icon: IconName; tone: string; active?: boolean }) {
   return (
-    <GlassCard style={styles.statCard}>
+    <GlassCard style={[styles.statCard, active && styles.statCardActive]}>
       <View style={styles.statIcon}>
         <MaterialCommunityIcons name={icon} size={24} color={tone} />
       </View>
@@ -1266,7 +1330,7 @@ function Feature({ icon, label }: { icon: IconName; label: string }) {
   )
 }
 
-function WorkspaceCard({ workspace, layoutTier, mobileScale, onPress }: { workspace: Workspace; layoutTier: LayoutTier; mobileScale: MobileScale; onPress?: () => void }) {
+function WorkspaceCard({ workspace, layoutTier, mobileScale, onPress, onTogglePin }: { workspace: Workspace; layoutTier: LayoutTier; mobileScale: MobileScale; onPress?: () => void; onTogglePin?: () => void }) {
   const isCompact = layoutTier === 'compact'
   const iconName = workspace.kind === 'group' ? 'school-outline' : 'account-group-outline'
   const typeLabel = workspace.type === 'dev' ? 'dev' : workspace.type === 'chat' ? 'chat' : workspace.type === 'research' ? 'research' : 'writing'
@@ -1305,7 +1369,16 @@ function WorkspaceCard({ workspace, layoutTier, mobileScale, onPress }: { worksp
           </View>
         </View>
         <View style={styles.workspaceActionColumn}>
-          <MaterialCommunityIcons name="pin" size={22} color={workspace.pinned ? '#d97706' : '#c4c9d4'} />
+          <Pressable
+            style={styles.workspacePinButton}
+            hitSlop={8}
+            onPress={event => {
+              event.stopPropagation()
+              onTogglePin?.()
+            }}
+          >
+            <MaterialCommunityIcons name="pin" size={22} color={workspace.pinned ? '#d97706' : '#c4c9d4'} />
+          </Pressable>
           <MaterialCommunityIcons name="chevron-right" size={26} color="#64748b" />
         </View>
       </View>
@@ -1831,6 +1904,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
+  statPressable: {
+    flex: 1,
+  },
   homeSectionTitle: {
     color: '#172033',
     fontSize: 19,
@@ -1904,11 +1980,14 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   statCard: {
-    flex: 1,
     minHeight: 110,
     padding: 14,
     gap: 6,
     justifyContent: 'space-between',
+  },
+  statCardActive: {
+    borderColor: 'rgba(37,99,235,0.34)',
+    backgroundColor: 'rgba(255,255,255,0.58)',
   },
   statIcon: {
     alignSelf: 'flex-start',
@@ -2185,6 +2264,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     minHeight: 92,
     paddingTop: 2,
+  },
+  workspacePinButton: {
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 17,
   },
   workspaceAvatarRow: {
     flexDirection: 'row',
