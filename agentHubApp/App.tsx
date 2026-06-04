@@ -179,12 +179,12 @@ export default function App() {
               </View>
             ) : activeTab === 'agents' ? (
               <View style={styles.headerActions}>
-                <Pressable onPress={() => setAgentCreateSignal(signal => signal + 1)}>
-                  <GlassCard compact style={[styles.agentCreateButton, layoutTier === 'compact' && styles.agentCreateButtonCompact]}>
+                <GlassCard compact style={[styles.agentCreateButton, layoutTier === 'compact' && styles.agentCreateButtonCompact]}>
+                  <Pressable style={styles.agentCreatePressable} onPress={() => setAgentCreateSignal(signal => signal + 1)}>
                     <MaterialCommunityIcons name="plus" size={mobileScale.headerIcon - 3} color="#0f172a" />
                     <Text style={styles.agentCreateText}>新建</Text>
-                  </GlassCard>
-                </Pressable>
+                  </Pressable>
+                </GlassCard>
                 <GlassCard compact style={styles.headerAction}>
                   <MaterialCommunityIcons name="cog-outline" size={mobileScale.headerIcon - 2} color="#0f172a" />
                 </GlassCard>
@@ -1292,6 +1292,7 @@ function AgentScreen({ layoutTier, mobileScale, createSignal }: { layoutTier: La
         onClose={() => setSelectedAgent(null)}
         onEdit={agent => {
           setEditingAgent(agent)
+          setSelectedAgent(null)
           setAgentConfigOpen(true)
         }}
       />
@@ -1930,6 +1931,12 @@ const styles = StyleSheet.create({
   agentCreateButton: {
     height: 48,
     minWidth: 92,
+    paddingHorizontal: 0,
+    overflow: 'hidden',
+  },
+  agentCreatePressable: {
+    width: '100%',
+    height: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1938,7 +1945,7 @@ const styles = StyleSheet.create({
   },
   agentCreateButtonCompact: {
     minWidth: 82,
-    paddingHorizontal: 12,
+    paddingHorizontal: 0,
   },
   agentCreateText: {
     color: '#0f172a',
