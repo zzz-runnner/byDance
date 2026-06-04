@@ -92,6 +92,8 @@ const TEXT_FILE_EXTENSIONS = new Set([
 const BINARY_FILE_EXTENSIONS = new Set([
   '.avif',
   '.bmp',
+  '.doc',
+  '.docx',
   '.gif',
   '.ico',
   '.jpeg',
@@ -100,12 +102,16 @@ const BINARY_FILE_EXTENSIONS = new Set([
   '.mp4',
   '.pdf',
   '.png',
+  '.ppt',
+  '.pptx',
   '.ttf',
   '.wav',
   '.webm',
   '.webp',
   '.woff',
   '.woff2',
+  '.xls',
+  '.xlsx',
   '.zip',
 ])
 const PREVIEW_SCAN_HIDDEN_SEGMENTS = new Set([

@@ -117,6 +117,9 @@ The backend still keeps the Nest business modules for:
 - Frontend artifact affordances now stay capability-aware:
   - entries without a real URL no longer advertise a fake external page
   - preview and delivery open actions only appear when a real target exists
+- Workspace bootstrap now prefers real text files and document-preview assets correctly:
+  - `.docx/.pptx/.pdf` no longer get misclassified as editor text files
+  - one bad initial file preload no longer kills the whole workspace dialog
 - When one turn contains multiple repair attempts, the main chat flow now collapses them into one result entry instead of repeating similar preview and diff cards.
 - Quote replies and code selections are structured inputs, not plain text hacks.
 - AI output, process summaries, and artifact text use the unified Markdown renderer.
