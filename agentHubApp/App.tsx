@@ -1197,7 +1197,8 @@ function AgentScreen({ layoutTier, mobileScale, createSignal }: { layoutTier: La
       const exists = current.some(agent => agent.id === nextAgent.id)
       return exists ? current.map(agent => (agent.id === nextAgent.id ? nextAgent : agent)) : [nextAgent, ...current]
     })
-    setSelectedAgent(nextAgent)
+    setSelectedAgent(null)
+    setAgentConfigOpen(false)
   }
 
   useEffect(() => {
@@ -1206,6 +1207,16 @@ function AgentScreen({ layoutTier, mobileScale, createSignal }: { layoutTier: La
     setSelectedAgent(null)
     setAgentConfigOpen(true)
   }, [createSignal])
+
+  if (agentConfigOpen) {
+    return (
+      <AgentConfigPage
+        agent={editingAgent}
+        onBack={() => setAgentConfigOpen(false)}
+        onSave={saveAgent}
+      />
+    )
+  }
 
   return (
     <View style={styles.agentScreen}>
@@ -1295,12 +1306,6 @@ function AgentScreen({ layoutTier, mobileScale, createSignal }: { layoutTier: La
           setSelectedAgent(null)
           setAgentConfigOpen(true)
         }}
-      />
-      <AgentConfigModal
-        visible={agentConfigOpen}
-        agent={editingAgent}
-        onClose={() => setAgentConfigOpen(false)}
-        onSave={saveAgent}
       />
     </View>
   )
@@ -1588,7 +1593,7 @@ function AgentDetailModal({ agent, mobileScale, onClose, onEdit }: { agent: Agen
   )
 }
 
-function AgentConfigModal({ visible, agent, onClose, onSave }: { visible: boolean; agent: Agent | null; onClose: () => void; onSave: (agent: Agent) => void }) {
+function AgentConfigPage({ agent, onBack, onSave }: { agent: Agent | null; onBack: () => void; onSave: (agent: Agent) => void }) {
   const [agentId, setAgentId] = useState('')
   const [name, setName] = useState('')
   const [provider, setProvider] = useState<Agent['provider']>('claude')
@@ -1607,7 +1612,6 @@ function AgentConfigModal({ visible, agent, onClose, onSave }: { visible: boolea
   ]
 
   useEffect(() => {
-    if (!visible) return
     setAgentId(agent?.id ?? `agent-${Date.now().toString().slice(-5)}`)
     setName(agent?.name ?? '')
     setProvider(agent?.provider ?? 'claude')
@@ -1619,7 +1623,7 @@ function AgentConfigModal({ visible, agent, onClose, onSave }: { visible: boolea
     setSystemPrompt('You are a focused custom Agent. Follow the workspace context and return concise, actionable output.')
     setSkillsText(agent?.skills.join(', ') ?? '需求, 优先级, 验收')
     setProviderOpen(false)
-  }, [agent, visible])
+  }, [agent])
 
   const submit = () => {
     const fallbackName = name.trim() || '新建 Agent'
@@ -1633,72 +1637,67 @@ function AgentConfigModal({ visible, agent, onClose, onSave }: { visible: boolea
       skills: skillsText.split(/[,，]/).map(skill => skill.trim()).filter(Boolean).slice(0, 5),
     }
     onSave(nextAgent)
-    onClose()
   }
 
-  if (!visible) return null
-
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <Pressable style={styles.modalScrim} onPress={onClose} />
-        <GlassCard style={styles.agentConfigSheet}>
-          <View style={styles.artifactDetailHandle} />
+    <View style={styles.agentConfigPage}>
+      <GlassCard style={styles.agentConfigSheet}>
+        <View style={styles.agentConfigPageHead}>
+          <Pressable style={styles.agentConfigBackButton} onPress={onBack}>
+            <MaterialCommunityIcons name="chevron-left" size={26} color="#0f172a" />
+          </Pressable>
           <View style={styles.activityCenterHead}>
             <View style={styles.workspacePanelTitleCopy}>
               <Text style={styles.homeWorkspaceEyebrow}>AGENT MANAGEMENT</Text>
               <Text style={styles.artifactDetailTitle}>{agent ? '编辑 Agent' : '新建 Agent'}</Text>
             </View>
-            <Pressable style={styles.artifactCloseButton} onPress={onClose}>
-              <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
-            </Pressable>
+          </View>
+        </View>
+
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.agentConfigContent}>
+          <View style={styles.agentConfigGrid}>
+            <AgentField label="Agent ID" value={agentId} onChangeText={setAgentId} placeholder="agent-id" editable={!agent} />
+            <View style={styles.agentFormField}>
+              <Text style={styles.agentFormLabel}>Provider</Text>
+              <Pressable style={styles.agentSelectBox} onPress={() => setProviderOpen(open => !open)}>
+                <Text style={styles.agentFormInputText}>{providerOptions.find(option => option.value === provider)?.label}</Text>
+                <MaterialCommunityIcons name="menu-down" size={22} color="#334155" />
+              </Pressable>
+              {providerOpen ? (
+                <GlassCard compact style={styles.agentProviderMenu}>
+                  {providerOptions.map(option => (
+                    <Pressable
+                      key={option.value}
+                      style={[styles.agentProviderOption, provider === option.value && styles.agentProviderOptionActive]}
+                      onPress={() => {
+                        setProvider(option.value)
+                        setProviderOpen(false)
+                      }}
+                    >
+                      <Text style={[styles.agentProviderOptionText, provider === option.value && styles.agentProviderOptionTextActive]}>{option.label}</Text>
+                    </Pressable>
+                  ))}
+                </GlassCard>
+              ) : null}
+            </View>
+            <AgentField label="Name" value={name} onChangeText={setName} placeholder="Agent name" />
+            <AgentField label="Model" value={model} onChangeText={setModel} placeholder="default" />
+            <AgentField label="Role" value={role} onChangeText={setRole} placeholder="Custom Agent" />
+            <AgentField label="Max Run Seconds" value={maxRunSeconds} onChangeText={setMaxRunSeconds} placeholder="300" keyboardType="number-pad" />
           </View>
 
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.agentConfigContent}>
-            <View style={styles.agentConfigGrid}>
-              <AgentField label="Agent ID" value={agentId} onChangeText={setAgentId} placeholder="agent-id" editable={!agent} />
-              <View style={styles.agentFormField}>
-                <Text style={styles.agentFormLabel}>Provider</Text>
-                <Pressable style={styles.agentSelectBox} onPress={() => setProviderOpen(open => !open)}>
-                  <Text style={styles.agentFormInputText}>{providerOptions.find(option => option.value === provider)?.label}</Text>
-                  <MaterialCommunityIcons name="menu-down" size={22} color="#334155" />
-                </Pressable>
-                {providerOpen ? (
-                  <GlassCard compact style={styles.agentProviderMenu}>
-                    {providerOptions.map(option => (
-                      <Pressable
-                        key={option.value}
-                        style={[styles.agentProviderOption, provider === option.value && styles.agentProviderOptionActive]}
-                        onPress={() => {
-                          setProvider(option.value)
-                          setProviderOpen(false)
-                        }}
-                      >
-                        <Text style={[styles.agentProviderOptionText, provider === option.value && styles.agentProviderOptionTextActive]}>{option.label}</Text>
-                      </Pressable>
-                    ))}
-                  </GlassCard>
-                ) : null}
-              </View>
-              <AgentField label="Name" value={name} onChangeText={setName} placeholder="Agent name" />
-              <AgentField label="Model" value={model} onChangeText={setModel} placeholder="default" />
-              <AgentField label="Role" value={role} onChangeText={setRole} placeholder="Custom Agent" />
-              <AgentField label="Max Run Seconds" value={maxRunSeconds} onChangeText={setMaxRunSeconds} placeholder="300" keyboardType="number-pad" />
-            </View>
+          <AgentField label="Description" value={description} onChangeText={setDescription} placeholder="User-created Agent" multiline />
+          <AgentField label="When To Use" value={whenToUse} onChangeText={setWhenToUse} multiline />
+          <AgentField label="System Prompt" value={systemPrompt} onChangeText={setSystemPrompt} multiline tall />
+          <AgentField label="Skills" value={skillsText} onChangeText={setSkillsText} placeholder="需求, 优先级, 验收" />
 
-            <AgentField label="Description" value={description} onChangeText={setDescription} placeholder="User-created Agent" multiline />
-            <AgentField label="When To Use" value={whenToUse} onChangeText={setWhenToUse} multiline />
-            <AgentField label="System Prompt" value={systemPrompt} onChangeText={setSystemPrompt} multiline tall />
-            <AgentField label="Skills" value={skillsText} onChangeText={setSkillsText} placeholder="需求, 优先级, 验收" />
-
-            <Pressable style={styles.workspaceCreateButton} onPress={submit}>
-              <MaterialCommunityIcons name="content-save-outline" size={20} color="#fff" />
-              <Text style={styles.workspaceCreateText}>{agent ? '保存配置' : '创建 Agent'}</Text>
-            </Pressable>
-          </ScrollView>
-        </GlassCard>
-      </View>
-    </Modal>
+          <Pressable style={styles.workspaceCreateButton} onPress={submit}>
+            <MaterialCommunityIcons name="content-save-outline" size={20} color="#fff" />
+            <Text style={styles.workspaceCreateText}>{agent ? '保存配置' : '创建 Agent'}</Text>
+          </Pressable>
+        </ScrollView>
+      </GlassCard>
+    </View>
   )
 }
 
@@ -3328,16 +3327,29 @@ const styles = StyleSheet.create({
   agentEditMockTextDisabled: {
     color: '#94a3b8',
   },
+  agentConfigPage: {
+    gap: 12,
+    paddingTop: 2,
+  },
   agentConfigSheet: {
-    width: '94%',
-    maxHeight: '86%',
-    marginHorizontal: 12,
-    marginBottom: Platform.select({ ios: 18, android: 12, default: 16 }),
-    paddingTop: 8,
+    paddingTop: 12,
     paddingHorizontal: 16,
     paddingBottom: Platform.select({ ios: 24, android: 18, default: 22 }),
     borderRadius: 28,
     gap: 12,
+  },
+  agentConfigPageHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  agentConfigBackButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.42)',
   },
   agentConfigContent: {
     gap: 12,
