@@ -22,6 +22,7 @@ import Fuse from 'fuse.js'
 import { AgentGlyph } from './src/components/AgentGlyph'
 import { GlassCard } from './src/components/GlassCard'
 import { Pill } from './src/components/Pill'
+import { createMobileScale, type LayoutTier } from './src/styles/mobileScale'
 import {
   agents,
   artifacts,
@@ -39,7 +40,7 @@ const background = require('./assets/background/mainBackground.png')
 const homeIcon = require('./assets/home/icon.png')
 
 type TabKey = 'workbench' | 'chat' | 'agents'
-type LayoutTier = 'compact' | 'standard' | 'wide'
+type MobileScale = ReturnType<typeof createMobileScale>
 
 const tabs: { key: TabKey; label: string; icon: IconName }[] = [
   { key: 'workbench', label: '工作台', icon: 'view-dashboard-outline' },
@@ -99,13 +100,16 @@ function AnimatedHomeIcon({ size }: { size: number }) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('workbench')
-  const [navExpanded, setNavExpanded] = useState(false)
+  const [appMenuOpen, setAppMenuOpen] = useState(false)
   const [workspaceList, setWorkspaceList] = useState<Workspace[]>(workspaces)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(workspaces[0]?.id ?? '')
   const [activityOpen, setActivityOpen] = useState(false)
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false)
+  const [workspacePanelMode, setWorkspacePanelMode] = useState<'switch' | 'create'>('switch')
+  const [agentCreateSignal, setAgentCreateSignal] = useState(0)
   const { width } = useWindowDimensions()
   const layoutTier: LayoutTier = width < 380 ? 'compact' : width < 430 ? 'standard' : 'wide'
+  const mobileScale = useMemo(() => createMobileScale(layoutTier, width), [layoutTier, width])
   const tightChatHeader = activeTab === 'chat' && layoutTier !== 'wide'
   const activeWorkspace = workspaceList.find(workspace => workspace.id === activeWorkspaceId) ?? workspaceList[0]
   const runningAgents = agents.filter(agent => agent.status !== 'idle').length
@@ -122,16 +126,13 @@ export default function App() {
         <SafeAreaView style={styles.safe}>
           <StatusBar style="dark" />
           <View style={[styles.header, activeTab === 'agents' && styles.agentHeader, activeTab === 'chat' && styles.codeHeader]}>
-            {activeTab === 'chat' ? (
-              <GlassCard compact style={styles.codeHeaderButton}>
-                <MaterialCommunityIcons name="chevron-left" size={28} color="#0f172a" />
-              </GlassCard>
-            ) : null}
-            <View style={[styles.headerLeft, activeTab === 'chat' && styles.codeHeaderLeft, tightChatHeader && styles.chatHeaderLeftTight]}>
-              {tightChatHeader ? null : <AgentGlyph agentId="orchestrator" size={activeTab === 'agents' || activeTab === 'chat' ? 46 : 54} />}
+            <View style={[styles.headerLeft, activeTab === 'agents' && styles.agentHeaderLeft, activeTab === 'chat' && styles.codeHeaderLeft, tightChatHeader && styles.chatHeaderLeftTight]}>
+              <Pressable style={styles.headerAvatarButton} onPress={() => setAppMenuOpen(true)}>
+                <AgentGlyph agentId="orchestrator" size={mobileScale.headerAvatar} />
+              </Pressable>
               <View style={styles.headerCopy}>
                 {activeTab === 'chat' ? null : <Text style={styles.eyebrow}>AGENTHUB</Text>}
-                <Text style={[styles.headerTitle, activeTab === 'chat' && styles.chatHeaderTitle]} numberOfLines={1}>
+                <Text style={[styles.headerTitle, { fontSize: mobileScale.pageTitle }, activeTab === 'chat' && styles.chatHeaderTitle, activeTab === 'chat' && { fontSize: mobileScale.chatTitle }]} numberOfLines={1}>
                   {activeTab === 'chat' ? activeWorkspace.name : title}
                 </Text>
                 {activeTab === 'chat' ? (
@@ -143,8 +144,8 @@ export default function App() {
                 {activeTab === 'chat' && tightChatHeader ? (
                   <View style={styles.chatStreamingRow}>
                     <GlassCard compact style={styles.streamingPill}>
-                      <MaterialCommunityIcons name="chart-timeline-variant-shimmer" size={17} color="#10b981" />
-                      <Text style={styles.streamingText}>streaming</Text>
+                      <MaterialCommunityIcons name="chart-timeline-variant-shimmer" size={14} color="#10b981" />
+                      <Text style={[styles.streamingText, { fontSize: mobileScale.labelText }]}>streaming</Text>
                     </GlassCard>
                   </View>
                 ) : null}
@@ -153,31 +154,39 @@ export default function App() {
             {activeTab === 'chat' ? (
               <View style={styles.chatHeaderActions}>
                 <GlassCard compact style={styles.codeHeaderButton}>
-                  <MaterialCommunityIcons name="refresh" size={25} color="#0f172a" />
+                  <MaterialCommunityIcons name="refresh" size={mobileScale.headerIcon - 2} color="#0f172a" />
                 </GlassCard>
               </View>
             ) : activeTab === 'workbench' ? (
               <View style={styles.workspaceHeaderActions}>
                 <GlassCard compact style={styles.headerIconButton}>
-                  <Pressable style={styles.headerButtonPressable} onPress={() => setWorkspacePanelOpen(true)}>
-                    <MaterialCommunityIcons name="plus" size={28} color="#0f172a" />
+                  <Pressable
+                    style={styles.headerButtonPressable}
+                    onPress={() => {
+                      setWorkspacePanelMode('create')
+                      setWorkspacePanelOpen(true)
+                    }}
+                  >
+                    <MaterialCommunityIcons name="plus" size={mobileScale.headerIcon} color="#0f172a" />
                   </Pressable>
                 </GlassCard>
                 <GlassCard compact style={styles.headerIconButton}>
                   <Pressable style={styles.bellWrap} onPress={() => setActivityOpen(true)}>
-                    <MaterialCommunityIcons name="bell-outline" size={24} color="#0f172a" />
+                    <MaterialCommunityIcons name="bell-outline" size={mobileScale.headerIcon - 2} color="#0f172a" />
                     <View style={styles.bellDot} />
                   </Pressable>
                 </GlassCard>
               </View>
             ) : activeTab === 'agents' ? (
-              <View style={styles.headerActions}>
+              <View style={styles.agentHeaderActions}>
                 <GlassCard compact style={[styles.agentCreateButton, layoutTier === 'compact' && styles.agentCreateButtonCompact]}>
-                  <MaterialCommunityIcons name="plus" size={23} color="#0f172a" />
-                  <Text style={styles.agentCreateText}>新建</Text>
+                  <Pressable style={styles.agentCreatePressable} onPress={() => setAgentCreateSignal(signal => signal + 1)}>
+                    <MaterialCommunityIcons name="plus" size={mobileScale.headerIcon - 3} color="#0f172a" />
+                    <Text style={styles.agentCreateText}>新建</Text>
+                  </Pressable>
                 </GlassCard>
                 <GlassCard compact style={styles.headerAction}>
-                  <MaterialCommunityIcons name="cog-outline" size={24} color="#0f172a" />
+                  <MaterialCommunityIcons name="cog-outline" size={mobileScale.headerIcon - 2} color="#0f172a" />
                 </GlassCard>
               </View>
             ) : (
@@ -192,7 +201,15 @@ export default function App() {
 
           {activeTab === 'chat' ? (
             <View style={styles.contentFill}>
-              <ChatScreen workspace={activeWorkspace} layoutTier={layoutTier} onOpenWorkspacePanel={() => setWorkspacePanelOpen(true)} />
+              <ChatScreen
+                workspace={activeWorkspace}
+                layoutTier={layoutTier}
+                mobileScale={mobileScale}
+                onOpenWorkspacePanel={() => {
+                  setWorkspacePanelMode('switch')
+                  setWorkspacePanelOpen(true)
+                }}
+              />
             </View>
           ) : (
             <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} showsVerticalScrollIndicator={false}>
@@ -202,20 +219,39 @@ export default function App() {
                   runningAgents={runningAgents}
                   workspace={activeWorkspace}
                   layoutTier={layoutTier}
+                  mobileScale={mobileScale}
                   onOpenWorkspace={nextWorkspace => {
                     setActiveWorkspaceId(nextWorkspace.id)
                     setActiveTab('chat')
-                    setNavExpanded(false)
+                  }}
+                  onToggleWorkspacePin={workspaceId => {
+                    setWorkspaceList(current =>
+                      current.map(item => (item.id === workspaceId ? { ...item, pinned: !item.pinned } : item)),
+                    )
+                  }}
+                  onOpenWorkspacePanel={() => {
+                    setWorkspacePanelMode('switch')
+                    setWorkspacePanelOpen(true)
                   }}
                 />
               ) : null}
-              {activeTab === 'agents' ? <AgentScreen layoutTier={layoutTier} /> : null}
+              {activeTab === 'agents' ? <AgentScreen layoutTier={layoutTier} mobileScale={mobileScale} createSignal={agentCreateSignal} /> : null}
             </ScrollView>
           )}
 
-          <SideTabs activeTab={activeTab} onChange={setActiveTab} expanded={navExpanded} onToggle={() => setNavExpanded(value => !value)} />
+          <AppMenuDrawer
+            visible={appMenuOpen}
+            activeTab={activeTab}
+            mobileScale={mobileScale}
+            onClose={() => setAppMenuOpen(false)}
+            onChange={nextTab => {
+              setActiveTab(nextTab)
+              setAppMenuOpen(false)
+            }}
+          />
           <WorkspacePanelModal
             visible={workspacePanelOpen}
+            mode={workspacePanelMode}
             workspaceList={workspaceList}
             activeWorkspaceId={activeWorkspace.id}
             layoutTier={layoutTier}
@@ -224,14 +260,12 @@ export default function App() {
               setActiveWorkspaceId(nextWorkspace.id)
               setWorkspacePanelOpen(false)
               setActiveTab('chat')
-              setNavExpanded(false)
             }}
             onCreate={nextWorkspace => {
               setWorkspaceList(current => [nextWorkspace, ...current])
               setActiveWorkspaceId(nextWorkspace.id)
               setWorkspacePanelOpen(false)
               setActiveTab('chat')
-              setNavExpanded(false)
             }}
           />
           <ActivityCenterModal visible={activityOpen} onClose={() => setActivityOpen(false)} />
@@ -242,6 +276,7 @@ export default function App() {
 }
 
 type WorkspaceFilter = 'active' | 'updated' | 'pinned' | 'archived'
+type WorkbenchFocus = 'workspaces' | 'running' | 'artifacts'
 type AgentFilter = 'all' | 'running' | 'reviewing' | 'idle' | 'builtin'
 type ArtifactStatus = 'generating' | 'partial' | 'ready' | 'failed'
 
@@ -255,17 +290,24 @@ function WorkbenchScreen({
   runningAgents,
   workspace,
   layoutTier,
+  mobileScale,
   onOpenWorkspace,
+  onToggleWorkspacePin,
+  onOpenWorkspacePanel,
 }: {
   workspaceList: Workspace[]
   runningAgents: number
   workspace: Workspace
   layoutTier: LayoutTier
+  mobileScale: MobileScale
   onOpenWorkspace: (workspace: Workspace) => void
+  onToggleWorkspacePin: (workspaceId: string) => void
+  onOpenWorkspacePanel: () => void
 }) {
   const isCompact = layoutTier === 'compact'
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<WorkspaceFilter>('active')
+  const [focus, setFocus] = useState<WorkbenchFocus>('workspaces')
   const workspaceSearch = useMemo(
     () => new Fuse<Workspace>(workspaceList, { keys: ['name', 'goal', 'latestEventLabel', 'type'], threshold: 0.36 }),
     [workspaceList],
@@ -281,8 +323,16 @@ function WorkbenchScreen({
     if (filter === 'updated') return b.updatedAt.localeCompare(a.updatedAt)
     return Number(b.status === 'running') - Number(a.status === 'running')
   })
-  const pinnedWorkspaces = sortedWorkspaces.filter(item => item.pinned)
-  const recentWorkspaces = sortedWorkspaces.filter(item => !item.pinned)
+  const focusedWorkspaces =
+    focus === 'running'
+      ? sortedWorkspaces.filter(item => item.status === 'running')
+      : focus === 'artifacts'
+        ? sortedWorkspaces.filter(item => item.artifactCount > 0)
+        : sortedWorkspaces
+  const pinnedWorkspaces = focusedWorkspaces.filter(item => item.pinned)
+  const recentWorkspaces = focusedWorkspaces.filter(item => !item.pinned)
+  const focusTitle = focus === 'workspaces' ? '置顶工作区' : focus === 'running' ? '进行中的项目' : '产物相关项目'
+  const focusMeta = focus === 'workspaces' ? `${pinnedWorkspaces.length} 个` : focus === 'running' ? `${focusedWorkspaces.length} 个运行中` : `${focusedWorkspaces.length} 个有产物`
 
   return (
     <View style={[styles.workbenchScreen, isCompact && styles.workspaceScreenCompact]}>
@@ -291,13 +341,13 @@ function WorkbenchScreen({
         <View style={styles.homeWorkspaceHead}>
           <View style={styles.workbenchActiveCopy}>
             <Text style={styles.homeWorkspaceEyebrow}>ACTIVE WORKSPACE</Text>
-            <Text style={styles.homeWorkspaceTitle}>{workspace.name}</Text>
+            <Text style={[styles.homeWorkspaceTitle, { fontSize: mobileScale.heroTitle }]} numberOfLines={1}>{workspace.name}</Text>
           </View>
           <View style={styles.workbenchIconWrap}>
-            <AnimatedHomeIcon size={isCompact ? 58 : 68} />
+            <AnimatedHomeIcon size={mobileScale.workspaceHeroIcon} />
           </View>
         </View>
-        <Text style={styles.homeWorkspaceDesc} numberOfLines={2}>{workspace.goal}</Text>
+        <Text style={[styles.homeWorkspaceDesc, { fontSize: mobileScale.bodyText, lineHeight: mobileScale.bodyLineHeight }]} numberOfLines={2}>{workspace.goal}</Text>
         <View style={styles.homeWorkspaceMetaRow}>
           <View style={styles.homeStatusPill}>
             <MaterialCommunityIcons name="waveform" size={16} color="#2563eb" />
@@ -313,15 +363,10 @@ function WorkbenchScreen({
             <Text style={styles.homeMetaTextGray}>{workspace.messageCount} 消息</Text>
           </View>
         </View>
-        <View style={styles.homeStatGrid}>
-          <StatCard label="工作区" value={String(workspaceList.length)} icon="view-grid-outline" tone="#2563eb" />
-          <StatCard label="运行中" value={String(runningAgents)} icon="lightning-bolt-outline" tone="#db2777" />
-          <StatCard label="产物" value={String(artifacts.length)} icon="package-variant-closed" tone="#059669" />
-        </View>
         <View style={styles.homeAvatarRow}>
           {workspace.agents.slice(0, 4).map((agentId, index) => (
             <View key={agentId} style={{ marginLeft: index === 0 ? 0 : -10 }}>
-              <AgentGlyph agentId={agentId} size={36} />
+              <AgentGlyph agentId={agentId} size={mobileScale.workspaceAgentAvatar} />
             </View>
           ))}
           <Text style={styles.homeAvatarText}>{workspace.latestEventLabel}</Text>
@@ -332,6 +377,30 @@ function WorkbenchScreen({
           </View>
         </GlassCard>
       </Pressable>
+
+      <View style={styles.homeStatGrid}>
+        <Pressable
+          style={styles.statPressable}
+          onPress={() => {
+            setFocus('workspaces')
+            onOpenWorkspacePanel()
+          }}
+        >
+          <StatCard label="工作区" value={String(workspaceList.length)} icon="view-grid-outline" tone="#2563eb" active={focus === 'workspaces'} />
+        </Pressable>
+        <Pressable
+          style={styles.statPressable}
+          onPress={() => {
+            setFocus('running')
+            setFilter('active')
+          }}
+        >
+          <StatCard label="运行中" value={String(runningAgents)} icon="lightning-bolt-outline" tone="#db2777" active={focus === 'running'} />
+        </Pressable>
+        <View style={styles.statPressable}>
+          <StatCard label="产物" value={String(artifacts.length)} icon="package-variant-closed" tone="#059669" />
+        </View>
+      </View>
 
       <GlassCard style={styles.searchCard}>
         <MaterialCommunityIcons name="magnify" size={24} color="#64748b" />
@@ -359,22 +428,22 @@ function WorkbenchScreen({
       </View>
 
       <View style={styles.workbenchSectionHead}>
-        <Text style={styles.homeSectionTitle}>置顶工作区</Text>
-        <Text style={styles.workbenchSectionMeta}>{pinnedWorkspaces.length} 个</Text>
+        <Text style={[styles.homeSectionTitle, { fontSize: mobileScale.sectionTitle }]}>{focusTitle}</Text>
+        <Text style={styles.workbenchSectionMeta}>{focusMeta}</Text>
       </View>
       {pinnedWorkspaces.map(item => (
-        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} onPress={() => onOpenWorkspace(item)} />
+        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} onTogglePin={() => onToggleWorkspacePin(item.id)} />
       ))}
 
       <View style={styles.workbenchSectionHead}>
-        <Text style={styles.homeSectionTitle}>最近更新</Text>
+        <Text style={[styles.homeSectionTitle, { fontSize: mobileScale.sectionTitle }]}>最近更新</Text>
         <Text style={styles.workbenchSectionMeta}>按活跃度排序</Text>
       </View>
       {recentWorkspaces.slice(0, 3).map(item => (
-        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} onPress={() => onOpenWorkspace(item)} />
+        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} onTogglePin={() => onToggleWorkspacePin(item.id)} />
       ))}
 
-      {sortedWorkspaces.length === 0 ? (
+      {focusedWorkspaces.length === 0 ? (
         <GlassCard style={styles.emptyStateCard}>
           <MaterialCommunityIcons name="database-search-outline" size={28} color="#64748b" />
           <Text style={styles.cardTitle}>没有匹配的工作区</Text>
@@ -421,14 +490,14 @@ function WorkbenchScreen({
         <View style={styles.homeWorkspaceHead}>
           <View>
             <Text style={styles.homeWorkspaceEyebrow}>ACTIVE WORKSPACE</Text>
-            <Text style={styles.homeWorkspaceTitle}>{workspace.name}</Text>
+            <Text style={[styles.homeWorkspaceTitle, { fontSize: mobileScale.heroTitle }]} numberOfLines={1}>{workspace.name}</Text>
           </View>
           <View style={styles.homeStatusPill}>
             <MaterialCommunityIcons name="waveform" size={16} color="#2563eb" />
             <Text style={styles.homeStatusText}>running</Text>
           </View>
         </View>
-        <Text style={styles.homeWorkspaceDesc} numberOfLines={2}>{workspace.goal}</Text>
+        <Text style={[styles.homeWorkspaceDesc, { fontSize: mobileScale.bodyText, lineHeight: mobileScale.bodyLineHeight }]} numberOfLines={2}>{workspace.goal}</Text>
         <View style={styles.homeWorkspaceMetaRow}>
           <View style={styles.homeMetaChip}>
             <Text style={styles.homeMetaTextBlue}>{workspace.type}</Text>
@@ -455,6 +524,8 @@ function WorkbenchScreen({
 
 function WorkspaceScreen({ layoutTier }: { layoutTier: LayoutTier }) {
   const isCompact = layoutTier === 'compact'
+  const { width } = useWindowDimensions()
+  const mobileScale = useMemo(() => createMobileScale(layoutTier, width), [layoutTier, width])
   return (
     <View style={[styles.workspaceScreen, isCompact && styles.workspaceScreenCompact]}>
       <GlassCard style={styles.searchCard}>
@@ -468,7 +539,7 @@ function WorkspaceScreen({ layoutTier }: { layoutTier: LayoutTier }) {
         <Pill label="归档" tone="muted" icon="archive-outline" />
       </View>
       {workspaces.slice(0, 3).map(workspace => (
-        <WorkspaceCard key={workspace.id} workspace={workspace} layoutTier={layoutTier} />
+        <WorkspaceCard key={workspace.id} workspace={workspace} layoutTier={layoutTier} mobileScale={mobileScale} />
       ))}
       <Pressable style={styles.loadMoreButton}>
         <Text style={styles.loadMoreText}>加载更多工作区</Text>
@@ -478,7 +549,7 @@ function WorkspaceScreen({ layoutTier }: { layoutTier: LayoutTier }) {
   )
 }
 
-function ChatScreen({ workspace, layoutTier, onOpenWorkspacePanel }: { workspace: Workspace; layoutTier: LayoutTier; onOpenWorkspacePanel: () => void }) {
+function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }: { workspace: Workspace; layoutTier: LayoutTier; mobileScale: MobileScale; onOpenWorkspacePanel: () => void }) {
   const isCompact = layoutTier === 'compact'
   const isStandard = layoutTier === 'standard'
   const isWide = layoutTier === 'wide'
@@ -526,7 +597,7 @@ function ChatScreen({ workspace, layoutTier, onOpenWorkspacePanel }: { workspace
           <View style={styles.chatAgentOverview}>
             {workspace.agents.slice(0, isCompact ? 3 : 4).map((agentId, index) => (
               <View key={agentId} style={{ marginLeft: index === 0 ? 0 : -8 }}>
-                <AgentGlyph agentId={agentId} size={34} />
+                <AgentGlyph agentId={agentId} size={mobileScale.chatMiniAvatar} />
               </View>
             ))}
             <Text style={styles.chatAgentOverviewText}>{workspace.runningAgents} 个 Agent 执行中 · {workspace.artifactCount} 个产物</Text>
@@ -535,24 +606,24 @@ function ChatScreen({ workspace, layoutTier, onOpenWorkspacePanel }: { workspace
 
         <View style={styles.userMessageRow}>
           <GlassCard style={styles.userPromptBubble}>
-            <Text style={styles.userPromptText}>
+            <Text style={[styles.userPromptText, { fontSize: mobileScale.messageText, lineHeight: mobileScale.messageLineHeight }]}>
               <Text style={styles.mentionText}>@engineer</Text>
               {'  '}先把移动端 app 的主 UI 做出来，按 web 端功能做 mock。
             </Text>
           </GlassCard>
-          <AgentGlyph agentId="product-manager" size={44} />
+          <AgentGlyph agentId="product-manager" size={mobileScale.chatUserAvatar} />
         </View>
 
         <View style={styles.agentMessageBlock}>
           <View style={styles.agentMessageMetaRow}>
-            <AgentGlyph agentId="orchestrator" size={56} />
+            <AgentGlyph agentId="orchestrator" size={mobileScale.chatAgentAvatar} />
             <Text style={styles.agentMessageName}>协调 Agent</Text>
             <View style={styles.agentSmallBadge}>
               <Text style={styles.agentSmallBadgeText}>协调中</Text>
             </View>
           </View>
           <GlassCard style={styles.chatBubbleLarge}>
-            <Text style={styles.chatBubbleText}>我先快速梳理目标：移动端保留工作区、群聊、Agent 管理、代码/产物查看和交付状态。</Text>
+            <Text style={[styles.chatBubbleText, { fontSize: mobileScale.messageText, lineHeight: mobileScale.messageLineHeight }]}>我先快速梳理目标：移动端保留工作区、群聊、Agent 管理、代码/产物查看和交付状态。</Text>
           </GlassCard>
         </View>
 
@@ -560,10 +631,10 @@ function ChatScreen({ workspace, layoutTier, onOpenWorkspacePanel }: { workspace
           <View style={styles.chatProcessHead}>
             <View style={styles.chatProcessTitleLine}>
               <MaterialCommunityIcons name="robot-outline" size={22} color="#2563eb" />
-              <Text style={styles.chatProcessTitle}>本轮过程</Text>
+              <Text style={[styles.chatProcessTitle, { fontSize: mobileScale.panelTitle }]}>本轮过程</Text>
             </View>
             <View style={styles.processStatePill}>
-              <Text style={styles.processStateText}>进行中</Text>
+              <Text style={[styles.processStateText, { fontSize: mobileScale.labelText }]}>进行中</Text>
             </View>
           </View>
           {[
@@ -575,23 +646,23 @@ function ChatScreen({ workspace, layoutTier, onOpenWorkspacePanel }: { workspace
               <View style={[styles.chatProcessIcon, step.tone === 'done' && styles.chatProcessIconDone, step.tone === 'running' && styles.chatProcessIconRunning]}>
                 <MaterialCommunityIcons name={step.icon} size={19} color={step.tone === 'waiting' ? '#fff' : step.tone === 'done' ? '#10b981' : '#fff'} />
               </View>
-              <Text style={styles.chatProcessStepTitle}>{step.title}</Text>
-              <Text style={styles.chatProcessSummary} numberOfLines={1}>{step.summary}</Text>
-              <Text style={styles.chatProcessTime}>{step.time}</Text>
+              <Text style={[styles.chatProcessStepTitle, { fontSize: mobileScale.messageText }]}>{step.title}</Text>
+              <Text style={[styles.chatProcessSummary, { fontSize: mobileScale.messageText }]} numberOfLines={1}>{step.summary}</Text>
+              <Text style={[styles.chatProcessTime, { fontSize: mobileScale.metaText }]}>{step.time}</Text>
             </View>
           ))}
         </GlassCard>
 
         <View style={styles.agentMessageBlock}>
           <View style={styles.agentMessageMetaRow}>
-            <AgentGlyph agentId="reviewer" size={50} />
+            <AgentGlyph agentId="reviewer" size={mobileScale.chatReviewerAvatar} />
             <Text style={styles.agentMessageName}>工程师</Text>
             <View style={styles.engineerBadge}>
               <Text style={styles.engineerBadgeText}>执行中</Text>
             </View>
           </View>
           <GlassCard style={styles.engineerBubble}>
-            <Text style={styles.chatBubbleText}>我会把 Monaco 和 iframe 能力先转成移动端摘要卡，后续再接真实接口。</Text>
+            <Text style={[styles.chatBubbleText, { fontSize: mobileScale.messageText, lineHeight: mobileScale.messageLineHeight }]}>我会把 Monaco 和 iframe 能力先转成移动端摘要卡，后续再接真实接口。</Text>
             <Text style={styles.chatBubbleTime}>21:14</Text>
           </GlassCard>
         </View>
@@ -600,9 +671,10 @@ function ChatScreen({ workspace, layoutTier, onOpenWorkspacePanel }: { workspace
           <Text style={styles.currentArtifactsTitle}>当前产出（工程师）</Text>
           <View style={[styles.currentArtifactGrid, isCompact && styles.currentArtifactGridCompact]}>
             {artifactViews.map(item => (
-              <CurrentArtifactCard
-                key={item.id}
-                artifact={item}
+                <CurrentArtifactCard
+                  key={item.id}
+                  artifact={item}
+                  mobileScale={mobileScale}
                 onPress={() => {
                   if (item.status === 'ready' || item.status === 'partial') setSelectedArtifact(item)
                 }}
@@ -629,12 +701,12 @@ function ChatScreen({ workspace, layoutTier, onOpenWorkspacePanel }: { workspace
   )
 }
 
-function CurrentArtifactCard({ artifact, onPress }: { artifact: ArtifactView; onPress: () => void }) {
+function CurrentArtifactCard({ artifact, mobileScale, onPress }: { artifact: ArtifactView; mobileScale: MobileScale; onPress: () => void }) {
   const tone = artifact.status === 'ready' ? 'green' : artifact.status === 'partial' ? 'blue' : artifact.status === 'failed' ? 'muted' : 'muted'
   const disabled = artifact.status === 'generating' || artifact.status === 'failed'
   return (
-    <Pressable style={[styles.currentArtifactCard, disabled && styles.currentArtifactCardDisabled]} onPress={onPress} disabled={disabled}>
-      <MaterialCommunityIcons name={artifact.icon} size={30} color={tone === 'green' ? '#10b981' : tone === 'muted' ? '#334155' : '#5572ff'} />
+    <Pressable style={[styles.currentArtifactCard, { minHeight: mobileScale.artifactCardMinHeight }, disabled && styles.currentArtifactCardDisabled]} onPress={onPress} disabled={disabled}>
+      <MaterialCommunityIcons name={artifact.icon} size={mobileScale.headerIcon} color={tone === 'green' ? '#10b981' : tone === 'muted' ? '#334155' : '#5572ff'} />
       <Text style={styles.currentArtifactTitle}>{artifact.title}</Text>
       <Text style={[styles.currentArtifactMeta, tone === 'green' && styles.currentArtifactMetaGreen, tone === 'muted' && styles.currentArtifactMetaMuted]}>{artifact.metric}</Text>
       <View style={[styles.artifactStatusBadge, artifact.status === 'ready' && styles.artifactStatusReady, artifact.status === 'partial' && styles.artifactStatusPartial]}>
@@ -707,6 +779,7 @@ function ActivityCenterModal({ visible, onClose }: { visible: boolean; onClose: 
 
 function WorkspacePanelModal({
   visible,
+  mode,
   workspaceList,
   activeWorkspaceId,
   layoutTier,
@@ -715,6 +788,7 @@ function WorkspacePanelModal({
   onCreate,
 }: {
   visible: boolean
+  mode: 'switch' | 'create'
   workspaceList: Workspace[]
   activeWorkspaceId: string
   layoutTier: LayoutTier
@@ -775,7 +849,7 @@ function WorkspacePanelModal({
           <View style={styles.activityCenterHead}>
             <View style={styles.workspacePanelTitleCopy}>
               <Text style={styles.homeWorkspaceEyebrow}>WORKSPACE PANEL</Text>
-              <Text style={styles.artifactDetailTitle}>工作区切换与创建</Text>
+              <Text style={styles.artifactDetailTitle}>{mode === 'create' ? '创建工作区' : '切换工作区'}</Text>
             </View>
             <Pressable style={styles.artifactCloseButton} onPress={onClose}>
               <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
@@ -783,29 +857,32 @@ function WorkspacePanelModal({
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.workspacePanelContent}>
-            <View style={styles.workspacePanelSection}>
-              <View style={styles.workspacePanelSectionHead}>
-                <Text style={styles.workspacePanelSectionTitle}>快速切换</Text>
-                <Text style={styles.workbenchSectionMeta}>{workspaceList.length} 个</Text>
+            {mode === 'switch' ? (
+              <View style={styles.workspacePanelSection}>
+                <View style={styles.workspacePanelSectionHead}>
+                  <Text style={styles.workspacePanelSectionTitle}>快速切换</Text>
+                  <Text style={styles.workbenchSectionMeta}>{workspaceList.length} 个</Text>
+                </View>
+                {visibleWorkspaces.map(workspace => {
+                  const isActive = workspace.id === activeWorkspaceId
+                  return (
+                    <Pressable key={workspace.id} style={[styles.workspaceSwitchRow, isActive && styles.workspaceSwitchRowActive]} onPress={() => onSwitch(workspace)}>
+                      <View style={styles.workspaceSwitchIcon}>
+                        <MaterialCommunityIcons name={workspace.kind === 'group' ? 'account-group-outline' : 'account-outline'} size={20} color="#2563eb" />
+                      </View>
+                      <View style={styles.workspaceSwitchCopy}>
+                        <Text style={styles.cardTitle} numberOfLines={1}>{workspace.name}</Text>
+                        <Text style={styles.bodyText} numberOfLines={1}>{workspace.latestEventLabel}</Text>
+                      </View>
+                      <Text style={styles.workspaceSwitchMeta}>{isActive ? '当前' : workspace.updatedAt}</Text>
+                    </Pressable>
+                  )
+                })}
               </View>
-              {visibleWorkspaces.map(workspace => {
-                const isActive = workspace.id === activeWorkspaceId
-                return (
-                  <Pressable key={workspace.id} style={[styles.workspaceSwitchRow, isActive && styles.workspaceSwitchRowActive]} onPress={() => onSwitch(workspace)}>
-                    <View style={styles.workspaceSwitchIcon}>
-                      <MaterialCommunityIcons name={workspace.kind === 'group' ? 'account-group-outline' : 'account-outline'} size={20} color="#2563eb" />
-                    </View>
-                    <View style={styles.workspaceSwitchCopy}>
-                      <Text style={styles.cardTitle} numberOfLines={1}>{workspace.name}</Text>
-                      <Text style={styles.bodyText} numberOfLines={1}>{workspace.latestEventLabel}</Text>
-                    </View>
-                    <Text style={styles.workspaceSwitchMeta}>{isActive ? '当前' : workspace.updatedAt}</Text>
-                  </Pressable>
-                )
-              })}
-            </View>
+            ) : null}
 
-            <View style={styles.workspacePanelSection}>
+            {mode === 'create' ? (
+              <View style={styles.workspacePanelSection}>
               <Text style={styles.workspacePanelSectionTitle}>创建工作区</Text>
               <TextInput
                 value={draftName}
@@ -856,7 +933,8 @@ function WorkspacePanelModal({
                 <MaterialCommunityIcons name="plus" size={20} color="#fff" />
                 <Text style={styles.workspaceCreateText}>创建并进入</Text>
               </Pressable>
-            </View>
+              </View>
+            ) : null}
           </ScrollView>
         </GlassCard>
       </View>
@@ -1089,10 +1167,12 @@ function DeliveryStatusCard({ icon, title, status, body, time, tone }: { icon: I
   )
 }
 
-function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
+function AgentScreen({ layoutTier, mobileScale, createSignal }: { layoutTier: LayoutTier; mobileScale: MobileScale; createSignal: number }) {
   const showFullRegistry = layoutTier === 'wide'
   const [visibleAgents, setVisibleAgents] = useState<Agent[]>(agents)
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
+  const [agentConfigOpen, setAgentConfigOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<AgentFilter>('all')
   const runningCount = visibleAgents.filter(agent => agent.status !== 'idle').length
@@ -1112,17 +1192,42 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
     setVisibleAgents(current => current.filter(agent => agent.id !== agentId))
     if (selectedAgent?.id === agentId) setSelectedAgent(null)
   }
+  const saveAgent = (nextAgent: Agent) => {
+    setVisibleAgents(current => {
+      const exists = current.some(agent => agent.id === nextAgent.id)
+      return exists ? current.map(agent => (agent.id === nextAgent.id ? nextAgent : agent)) : [nextAgent, ...current]
+    })
+    setSelectedAgent(null)
+    setAgentConfigOpen(false)
+  }
+
+  useEffect(() => {
+    if (createSignal === 0) return
+    setEditingAgent(null)
+    setSelectedAgent(null)
+    setAgentConfigOpen(true)
+  }, [createSignal])
+
+  if (agentConfigOpen) {
+    return (
+      <AgentConfigPage
+        agent={editingAgent}
+        onBack={() => setAgentConfigOpen(false)}
+        onSave={saveAgent}
+      />
+    )
+  }
 
   return (
     <View style={styles.agentScreen}>
       <GlassCard style={[styles.agentSummary, !showFullRegistry && styles.agentSummaryCompact]}>
         <View style={[styles.agentSummaryHero, !showFullRegistry && styles.agentSummaryHeroCompact]}>
-          <View style={styles.registryIcon}>
-            <MaterialCommunityIcons name="layers-triple" size={35} color="#5572ff" />
+          <View style={[styles.registryIcon, { width: mobileScale.workspaceCardIcon, height: mobileScale.workspaceCardIcon, borderRadius: Math.round(mobileScale.workspaceCardIcon * 0.27) }]}>
+            <MaterialCommunityIcons name="layers-triple" size={Math.round(mobileScale.workspaceCardIcon * 0.44)} color="#5572ff" />
           </View>
           <View style={styles.registryCopy}>
-            <Text style={styles.registryTitle}>Agent Registry</Text>
-            <Text style={styles.agentSummaryText}>管理模型、提示词、工具权限和上下文策略</Text>
+            <Text style={[styles.registryTitle, { fontSize: mobileScale.registryTitle }]} numberOfLines={1}>Agent Registry</Text>
+            <Text style={[styles.agentSummaryText, { fontSize: mobileScale.bodyText, lineHeight: mobileScale.bodyLineHeight }]}>管理模型、提示词、工具权限和上下文策略</Text>
           </View>
         </View>
         {showFullRegistry ? (
@@ -1182,7 +1287,7 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
       </View>
 
       {filteredAgents.map(agent => (
-        <AgentCard key={agent.id} agent={agent} layoutTier={layoutTier} onPress={() => setSelectedAgent(agent)} onDelete={() => deleteAgent(agent.id)} />
+        <AgentCard key={agent.id} agent={agent} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => setSelectedAgent(agent)} onDelete={() => deleteAgent(agent.id)} />
       ))}
       {filteredAgents.length === 0 ? (
         <GlassCard style={styles.emptyStateCard}>
@@ -1192,61 +1297,58 @@ function AgentScreen({ layoutTier }: { layoutTier: LayoutTier }) {
         </GlassCard>
       ) : null}
       <Text style={styles.agentLoadedText}>已显示 {filteredAgents.length} / {visibleAgents.length} 个 Agent</Text>
-      <AgentDetailModal agent={selectedAgent} onClose={() => setSelectedAgent(null)} />
+      <AgentDetailModal
+        agent={selectedAgent}
+        mobileScale={mobileScale}
+        onClose={() => setSelectedAgent(null)}
+        onEdit={agent => {
+          setEditingAgent(agent)
+          setSelectedAgent(null)
+          setAgentConfigOpen(true)
+        }}
+      />
     </View>
   )
 }
 
-function SideTabs({ activeTab, onChange, expanded, onToggle }: { activeTab: TabKey; onChange: (tab: TabKey) => void; expanded: boolean; onToggle: () => void }) {
+function AppMenuDrawer({ visible, activeTab, mobileScale, onClose, onChange }: { visible: boolean; activeTab: TabKey; mobileScale: MobileScale; onClose: () => void; onChange: (tab: TabKey) => void }) {
   const insets = useSafeAreaInsets()
-  const active = tabs.find(tab => tab.key === activeTab) ?? tabs[0]
-
-  if (!expanded) {
-    return (
-      <GlassCard style={[styles.navFab, { bottom: Platform.select({ android: 18, default: 24 }) + insets.bottom }]}>
-        <Pressable style={styles.navFabButton} onPress={onToggle}>
-          <MaterialCommunityIcons name={active.icon} size={24} color="#fff" />
-        </Pressable>
-      </GlassCard>
-    )
-  }
 
   return (
-    <GlassCard style={[styles.sideRail, { bottom: Platform.select({ android: 14, default: 22 }) + insets.bottom }]}>
-      <Pressable style={styles.sideRailToggle} onPress={onToggle}>
-        <MaterialCommunityIcons name="chevron-left" size={22} color="#e5edf7" />
-      </Pressable>
-      <View style={styles.sideRailStack}>
-        {tabs.map(tab => {
-          const active = tab.key === activeTab
-          const isAi = tab.key === 'chat'
-          return (
-            <Pressable
-              key={tab.key}
-              style={[
-                styles.sideRailItem,
-                styles.sideRailItemExpanded,
-                active && styles.sideRailItemActive,
-                isAi && styles.sideRailAi,
-                isAi && active && styles.sideRailAiActive,
-              ]}
-              onPress={() => onChange(tab.key)}
-            >
-              <View style={[styles.sideRailIconWrap, active && !isAi && styles.sideRailIconWrapActive, isAi && styles.sideRailAiIconWrap]}>
-                <MaterialCommunityIcons name={tab.icon} size={isAi ? 28 : 22} color={active || isAi ? '#fff' : '#dbe4ee'} />
-              </View>
-              {expanded ? <Text style={[styles.sideRailLabel, active && styles.sideRailLabelActive, isAi && styles.sideRailAiLabel]}>{tab.label}</Text> : null}
-            </Pressable>
-          )
-        })}
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.appMenuBackdrop}>
+        <Pressable style={styles.appMenuScrim} onPress={onClose} />
+        <GlassCard style={[styles.appMenuPanel, { paddingTop: insets.top + 14 }]}>
+          <View style={styles.appMenuHead}>
+            <AgentGlyph agentId="orchestrator" size={mobileScale.headerAvatar} />
+            <View style={styles.appMenuHeadCopy}>
+              <Text style={styles.homeWorkspaceEyebrow}>AGENTHUB</Text>
+              <Text style={[styles.appMenuTitle, { fontSize: mobileScale.panelTitle }]}>页面切换</Text>
+            </View>
+          </View>
+          <View style={styles.appMenuList}>
+            {tabs.map(tab => {
+              const active = tab.key === activeTab
+              return (
+                <Pressable key={tab.key} style={[styles.appMenuRow, active && styles.appMenuRowActive]} onPress={() => onChange(tab.key)}>
+                  <View style={[styles.appMenuIcon, active && styles.appMenuIconActive]}>
+                    <MaterialCommunityIcons name={tab.icon} size={20} color={active ? '#fff' : '#94a3b8'} />
+                  </View>
+                  <Text style={[styles.appMenuRowText, { fontSize: mobileScale.bodyText }, active && styles.appMenuRowTextActive]} numberOfLines={1}>{tab.label}</Text>
+                  <MaterialCommunityIcons name="chevron-right" size={18} color={active ? '#dbeafe' : '#64748b'} />
+                </Pressable>
+              )
+            })}
+          </View>
+        </GlassCard>
       </View>
-    </GlassCard>
+    </Modal>
   )
 }
 
-function StatCard({ label, value, icon, tone }: { label: string; value: string; icon: IconName; tone: string }) {
+function StatCard({ label, value, icon, tone, active = false }: { label: string; value: string; icon: IconName; tone: string; active?: boolean }) {
   return (
-    <GlassCard style={styles.statCard}>
+    <GlassCard style={[styles.statCard, active && styles.statCardActive]}>
       <View style={styles.statIcon}>
         <MaterialCommunityIcons name={icon} size={24} color={tone} />
       </View>
@@ -1267,7 +1369,7 @@ function Feature({ icon, label }: { icon: IconName; label: string }) {
   )
 }
 
-function WorkspaceCard({ workspace, layoutTier, onPress }: { workspace: Workspace; layoutTier: LayoutTier; onPress?: () => void }) {
+function WorkspaceCard({ workspace, layoutTier, mobileScale, onPress, onTogglePin }: { workspace: Workspace; layoutTier: LayoutTier; mobileScale: MobileScale; onPress?: () => void; onTogglePin?: () => void }) {
   const isCompact = layoutTier === 'compact'
   const iconName = workspace.kind === 'group' ? 'school-outline' : 'account-group-outline'
   const typeLabel = workspace.type === 'dev' ? 'dev' : workspace.type === 'chat' ? 'chat' : workspace.type === 'research' ? 'research' : 'writing'
@@ -1279,12 +1381,12 @@ function WorkspaceCard({ workspace, layoutTier, onPress }: { workspace: Workspac
     <Pressable onPress={onPress} disabled={!onPress}>
       <GlassCard style={[styles.workspaceCard, isCompact && styles.workspaceCardCompact]}>
       <View style={styles.workspaceTopRow}>
-        <LinearGradient colors={workspace.kind === 'group' ? ['#4f8dfc', '#6ea5ff'] : ['#8f71f6', '#a98df8']} start={{ x: 0.08, y: 0.1 }} end={{ x: 1, y: 1 }} style={styles.workspaceIconTile}>
-          <MaterialCommunityIcons name={iconName} size={48} color="#fff" />
+        <LinearGradient colors={workspace.kind === 'group' ? ['#4f8dfc', '#6ea5ff'] : ['#8f71f6', '#a98df8']} start={{ x: 0.08, y: 0.1 }} end={{ x: 1, y: 1 }} style={[styles.workspaceIconTile, { width: mobileScale.workspaceCardIcon, height: mobileScale.workspaceCardIcon, borderRadius: Math.round(mobileScale.workspaceCardIcon * 0.25) }]}>
+          <MaterialCommunityIcons name={iconName} size={mobileScale.workspaceCardIconGlyph} color="#fff" />
         </LinearGradient>
         <View style={styles.workspaceTitleWrap}>
           <View style={styles.workspaceTitleRow}>
-            <Text style={styles.workspaceTitle} numberOfLines={1}>{workspace.name}</Text>
+            <Text style={[styles.workspaceTitle, { fontSize: mobileScale.workspaceCardTitle }]} numberOfLines={1}>{workspace.name}</Text>
             <View style={styles.workspacePrimaryBadge}>
               <Text style={styles.workspacePrimaryText}>{primaryLabel}</Text>
             </View>
@@ -1306,14 +1408,23 @@ function WorkspaceCard({ workspace, layoutTier, onPress }: { workspace: Workspac
           </View>
         </View>
         <View style={styles.workspaceActionColumn}>
-          <MaterialCommunityIcons name="pin" size={22} color={workspace.pinned ? '#d97706' : '#c4c9d4'} />
+          <Pressable
+            style={styles.workspacePinButton}
+            hitSlop={8}
+            onPress={event => {
+              event.stopPropagation()
+              onTogglePin?.()
+            }}
+          >
+            <MaterialCommunityIcons name="pin" size={22} color={workspace.pinned ? '#d97706' : '#c4c9d4'} />
+          </Pressable>
           <MaterialCommunityIcons name="chevron-right" size={26} color="#64748b" />
         </View>
       </View>
       <View style={styles.workspaceAvatarRow}>
         {workspace.agents.slice(0, 4).map((agentId, index) => (
           <View key={agentId} style={{ marginLeft: index === 0 ? 0 : -10 }}>
-            <AgentGlyph agentId={agentId} size={isCompact ? 36 : 38} />
+            <AgentGlyph agentId={agentId} size={mobileScale.workspaceAgentAvatar} />
           </View>
         ))}
         {extraAgents > 0 ? (
@@ -1391,7 +1502,7 @@ function ArtifactStrip({ artifacts: items }: { artifacts: Artifact[] }) {
   )
 }
 
-function AgentDetailModal({ agent, onClose }: { agent: Agent | null; onClose: () => void }) {
+function AgentDetailModal({ agent, mobileScale, onClose, onEdit }: { agent: Agent | null; mobileScale: MobileScale; onClose: () => void; onEdit: (agent: Agent) => void }) {
   if (!agent) return null
 
   const isBuiltin = agent.id === 'orchestrator' || agent.id === 'engineer'
@@ -1406,7 +1517,7 @@ function AgentDetailModal({ agent, onClose }: { agent: Agent | null; onClose: ()
           <View style={styles.artifactDetailHandle} />
           <View style={styles.artifactDetailHead}>
             <View style={styles.agentDetailTitleRow}>
-              <AgentGlyph agentId={agent.id} size={58} />
+              <AgentGlyph agentId={agent.id} size={mobileScale.agentDetailAvatar} />
               <View style={styles.artifactDetailTitleCopy}>
                 <Text style={styles.homeWorkspaceEyebrow}>{isBuiltin ? 'BUILT-IN AGENT' : 'CUSTOM AGENT'}</Text>
                 <Text style={styles.artifactDetailTitle}>{agent.name}</Text>
@@ -1466,7 +1577,11 @@ function AgentDetailModal({ agent, onClose }: { agent: Agent | null; onClose: ()
                 <Text style={styles.sectionTitle}>轻管理</Text>
                 <Text style={styles.bodyText}>{isBuiltin ? '内置 Agent 仅支持查看资料。' : '可编辑名称、简介、provider、model 与技能标签。'}</Text>
               </View>
-              <Pressable style={[styles.agentEditMockButton, isBuiltin && styles.agentEditMockButtonDisabled]}>
+              <Pressable
+                style={[styles.agentEditMockButton, isBuiltin && styles.agentEditMockButtonDisabled]}
+                disabled={isBuiltin}
+                onPress={() => onEdit(agent)}
+              >
                 <MaterialCommunityIcons name={isBuiltin ? 'lock-outline' : 'pencil-outline'} size={20} color={isBuiltin ? '#94a3b8' : '#fff'} />
                 <Text style={[styles.agentEditMockText, isBuiltin && styles.agentEditMockTextDisabled]}>{isBuiltin ? '不可编辑' : '基础编辑'}</Text>
               </Pressable>
@@ -1478,13 +1593,155 @@ function AgentDetailModal({ agent, onClose }: { agent: Agent | null; onClose: ()
   )
 }
 
-function AgentCard({ agent, layoutTier, onPress, onDelete }: { agent: Agent; layoutTier: LayoutTier; onPress?: () => void; onDelete?: () => void }) {
+function AgentConfigPage({ agent, onBack, onSave }: { agent: Agent | null; onBack: () => void; onSave: (agent: Agent) => void }) {
+  const [name, setName] = useState('')
+  const [provider, setProvider] = useState<Agent['provider']>('claude')
+  const [providerOpen, setProviderOpen] = useState(false)
+  const [model, setModel] = useState('')
+  const [role, setRole] = useState('Custom Agent')
+  const [maxRunSeconds, setMaxRunSeconds] = useState('300')
+  const [description, setDescription] = useState('User-created Agent')
+  const [whenToUse, setWhenToUse] = useState('Use when the user explicitly selects or mentions this Agent.')
+  const [systemPrompt, setSystemPrompt] = useState('You are a focused custom Agent. Follow the workspace context and return concise, actionable output.')
+  const providerOptions: { value: Agent['provider']; label: string }[] = [
+    { value: 'claude', label: 'Claude' },
+    { value: 'codex', label: 'Codex' },
+    { value: 'mock', label: 'Mock' },
+  ]
+
+  useEffect(() => {
+    setName(agent?.name ?? '')
+    setProvider(agent?.provider ?? 'claude')
+    setModel('')
+    setRole(agent?.role ?? 'Custom Agent')
+    setMaxRunSeconds('300')
+    setDescription(agent?.role ?? 'User-created Agent')
+    setWhenToUse('Use when the user explicitly selects or mentions this Agent.')
+    setSystemPrompt('You are a focused custom Agent. Follow the workspace context and return concise, actionable output.')
+    setProviderOpen(false)
+  }, [agent])
+
+  const submit = () => {
+    const fallbackName = name.trim() || '新建 Agent'
+    const nextAgent: Agent = {
+      id: agent?.id ?? `agent-${Date.now()}`,
+      name: fallbackName,
+      role: description.trim() || role.trim() || 'Custom Agent',
+      provider,
+      status: agent?.status ?? 'idle',
+      color: agent?.color ?? '#f59e0b',
+      skills: agent?.skills ?? ['自定义', '指令', '配置'],
+    }
+    onSave(nextAgent)
+  }
+
+  return (
+    <View style={styles.agentConfigPage}>
+      <GlassCard style={styles.agentConfigSheet}>
+        <View style={styles.agentConfigPageHead}>
+          <Pressable style={styles.agentConfigBackButton} onPress={onBack}>
+            <MaterialCommunityIcons name="chevron-left" size={26} color="#0f172a" />
+          </Pressable>
+          <View style={styles.activityCenterHead}>
+            <View style={styles.workspacePanelTitleCopy}>
+              <Text style={styles.homeWorkspaceEyebrow}>AGENT MANAGEMENT</Text>
+              <Text style={styles.artifactDetailTitle}>{agent ? '编辑 Agent' : '新建 Agent'}</Text>
+            </View>
+          </View>
+        </View>
+
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.agentConfigContent}>
+          <View style={styles.agentConfigGrid}>
+            <AgentField label="name" value={name} onChangeText={setName} placeholder="Agent 显示名" />
+            <AgentField label="role" value={role} onChangeText={setRole} placeholder="例如 前端工程师 / 需求分析师" />
+          </View>
+
+          <AgentField label="description" value={description} onChangeText={setDescription} placeholder="简短说明这个 Agent 做什么" multiline />
+          <AgentField label="whenToUse" value={whenToUse} onChangeText={setWhenToUse} placeholder="什么时候应该调用它" multiline />
+          <AgentField label="systemPrompt" value={systemPrompt} onChangeText={setSystemPrompt} placeholder="Agent 的核心行为指令" multiline tall />
+
+          <View style={styles.agentConfigGrid}>
+            <View style={styles.agentFormField}>
+              <Text style={styles.agentFormLabel}>modelProvider</Text>
+              <Pressable style={styles.agentSelectBox} onPress={() => setProviderOpen(open => !open)}>
+                <Text style={styles.agentFormInputText}>{providerOptions.find(option => option.value === provider)?.label}</Text>
+                <MaterialCommunityIcons name="menu-down" size={22} color="#334155" />
+              </Pressable>
+              {providerOpen ? (
+                <GlassCard compact style={styles.agentProviderMenu}>
+                  {providerOptions.map(option => (
+                    <Pressable
+                      key={option.value}
+                      style={[styles.agentProviderOption, provider === option.value && styles.agentProviderOptionActive]}
+                      onPress={() => {
+                        setProvider(option.value)
+                        setProviderOpen(false)
+                      }}
+                    >
+                      <Text style={[styles.agentProviderOptionText, provider === option.value && styles.agentProviderOptionTextActive]}>{option.label}</Text>
+                    </Pressable>
+                  ))}
+                </GlassCard>
+              ) : null}
+            </View>
+            <AgentField label="model" value={model} onChangeText={setModel} placeholder="不填用默认模型" />
+            <AgentField label="maxRunSeconds" value={maxRunSeconds} onChangeText={setMaxRunSeconds} placeholder="最大运行时间" keyboardType="number-pad" />
+          </View>
+
+          <Pressable style={styles.workspaceCreateButton} onPress={submit}>
+            <MaterialCommunityIcons name="content-save-outline" size={20} color="#fff" />
+            <Text style={styles.workspaceCreateText}>{agent ? '保存配置' : '创建 Agent'}</Text>
+          </Pressable>
+        </ScrollView>
+      </GlassCard>
+    </View>
+  )
+}
+
+function AgentField({
+  label,
+  value,
+  onChangeText,
+  placeholder,
+  multiline = false,
+  tall = false,
+  editable = true,
+  keyboardType,
+}: {
+  label: string
+  value: string
+  onChangeText: (value: string) => void
+  placeholder?: string
+  multiline?: boolean
+  tall?: boolean
+  editable?: boolean
+  keyboardType?: 'default' | 'number-pad'
+}) {
+  return (
+    <View style={styles.agentFormField}>
+      <Text style={styles.agentFormLabel}>{label}</Text>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor="#94a3b8"
+        editable={editable}
+        keyboardType={keyboardType}
+        multiline={multiline}
+        textAlignVertical={multiline ? 'top' : 'center'}
+        style={[styles.agentFormInput, multiline && styles.agentFormTextarea, tall && styles.agentFormTextareaTall, !editable && styles.agentFormInputDisabled]}
+      />
+    </View>
+  )
+}
+
+function AgentCard({ agent, layoutTier, mobileScale, onPress, onDelete }: { agent: Agent; layoutTier: LayoutTier; mobileScale: MobileScale; onPress?: () => void; onDelete?: () => void }) {
   const isBuiltin = agent.id === 'orchestrator' || agent.id === 'engineer'
   const statusLabel = agent.status === 'running' ? '运行中' : agent.status === 'reviewing' ? '审查中' : '空闲中'
   const statusTone = agent.status === 'running' ? 'running' : agent.status === 'reviewing' ? 'reviewing' : 'idle'
   const isCompact = layoutTier === 'compact'
   const isStandard = layoutTier === 'standard'
-  const avatarSize = isCompact ? 54 : isStandard ? 60 : 78
+  const avatarSize = mobileScale.agentCardAvatar
 
   return (
     <Pressable onPress={onPress} disabled={!onPress}>
@@ -1492,7 +1749,7 @@ function AgentCard({ agent, layoutTier, onPress, onDelete }: { agent: Agent; lay
       <AgentGlyph agentId={agent.id} size={avatarSize} />
       <View style={styles.agentCopy}>
         <View style={styles.agentCardTop}>
-          <Text style={styles.agentName} numberOfLines={1}>{agent.name}</Text>
+          <Text style={[styles.agentName, { fontSize: mobileScale.agentCardTitle }]} numberOfLines={1}>{agent.name}</Text>
           <View style={styles.agentCardActions}>
             {!isBuiltin ? (
               <Pressable
@@ -1510,22 +1767,22 @@ function AgentCard({ agent, layoutTier, onPress, onDelete }: { agent: Agent; lay
         </View>
         <View style={styles.agentBadgeRow}>
           <View style={[styles.agentTypeBadge, isBuiltin ? styles.agentTypeBuiltin : styles.agentTypeCustom]}>
-            <Text style={[styles.agentTypeText, isBuiltin ? styles.agentTypeBuiltinText : styles.agentTypeCustomText]}>
+            <Text style={[styles.agentTypeText, { fontSize: mobileScale.labelText }, isBuiltin ? styles.agentTypeBuiltinText : styles.agentTypeCustomText]}>
               {isBuiltin ? '内置' : '自定义'}
             </Text>
           </View>
           <View style={[styles.agentStatusBadge, styles[statusTone]]}>
             <View style={[styles.agentStatusDot, styles[`${statusTone}Dot`]]} />
-            <Text style={[styles.agentStatusText, styles[`${statusTone}Text`]]}>{statusLabel}</Text>
+            <Text style={[styles.agentStatusText, { fontSize: mobileScale.labelText }, styles[`${statusTone}Text`]]}>{statusLabel}</Text>
           </View>
         </View>
-        <Text style={styles.agentProvider}>提供方： {agent.provider}</Text>
-        <Text style={styles.agentRole} numberOfLines={1}>{agent.role}</Text>
+        <Text style={[styles.agentProvider, { fontSize: mobileScale.metaText }]}>提供方： {agent.provider}</Text>
+        <Text style={[styles.agentRole, { fontSize: mobileScale.bodyText, lineHeight: mobileScale.bodyLineHeight }]} numberOfLines={1}>{agent.role}</Text>
         <View style={[styles.agentBottomRow, (isCompact || isStandard) && styles.agentBottomRowResponsive]}>
           <View style={styles.agentSkillLine}>
             {agent.skills.slice(0, 3).map(skill => (
               <View key={skill} style={[styles.agentSkillChip, agent.status === 'reviewing' ? styles.reviewSkillChip : agent.status === 'running' ? styles.runningSkillChip : undefined]}>
-                <Text style={[styles.agentSkillText, agent.status === 'reviewing' ? styles.reviewSkillText : agent.status === 'running' ? styles.runningSkillText : undefined]}>{skill}</Text>
+                <Text style={[styles.agentSkillText, { fontSize: mobileScale.labelText }, agent.status === 'reviewing' ? styles.reviewSkillText : agent.status === 'running' ? styles.runningSkillText : undefined]}>{skill}</Text>
               </View>
             ))}
           </View>
@@ -1570,6 +1827,10 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 14,
   },
+  agentHeaderLeft: {
+    flexShrink: 1,
+    gap: 12,
+  },
   codeHeader: {
     paddingHorizontal: 16,
     paddingTop: Platform.select({ ios: 8, android: 6, default: 8 }),
@@ -1580,14 +1841,19 @@ const styles = StyleSheet.create({
     minWidth: 0,
     flex: 1,
     flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 16,
+  },
+  headerAvatarButton: {
     alignItems: 'center',
-    gap: 12,
+    justifyContent: 'center',
+    marginTop: 2,
   },
   codeHeaderLeft: {
     flex: 1,
   },
   chatHeaderLeftTight: {
-    gap: 0,
+    gap: 14,
   },
   headerCopy: {
     minWidth: 0,
@@ -1619,8 +1885,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   codeHeaderButton: {
-    width: 54,
-    height: 54,
+    width: Platform.select({ android: 48, default: 54 }),
+    height: Platform.select({ android: 48, default: 54 }),
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1630,21 +1896,21 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   headerIconButton: {
-    width: 54,
-    height: 54,
+    width: Platform.select({ android: 48, default: 54 }),
+    height: Platform.select({ android: 48, default: 54 }),
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerButtonPressable: {
-    width: 54,
-    height: 54,
+    width: '100%',
+    height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
   },
   bellWrap: {
     position: 'relative',
-    width: 54,
-    height: 54,
+    width: '100%',
+    height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1662,9 +1928,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+  agentHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: 10,
+  },
   agentCreateButton: {
     height: 48,
-    minWidth: 92,
+    width: 118,
+    paddingHorizontal: 0,
+    overflow: 'hidden',
+  },
+  agentCreatePressable: {
+    width: '100%',
+    height: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1672,12 +1950,82 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   agentCreateButtonCompact: {
-    minWidth: 82,
-    paddingHorizontal: 12,
+    width: 106,
+    paddingHorizontal: 0,
   },
   agentCreateText: {
     color: '#0f172a',
     fontSize: 16,
+    fontWeight: '900',
+  },
+  appMenuBackdrop: {
+    flex: 1,
+    alignItems: 'flex-start',
+  },
+  appMenuScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15,23,42,0.24)',
+  },
+  appMenuPanel: {
+    width: '72%',
+    maxWidth: 320,
+    height: '100%',
+    paddingHorizontal: 14,
+    paddingBottom: Platform.select({ ios: 24, android: 18, default: 20 }),
+    borderTopLeftRadius: 0,
+    borderBottomLeftRadius: 0,
+    borderTopRightRadius: 22,
+    borderBottomRightRadius: 22,
+    backgroundColor: 'rgba(15,23,42,0.9)',
+  },
+  appMenuHead: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 14,
+  },
+  appMenuHeadCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  appMenuTitle: {
+    color: '#f8fafc',
+    fontWeight: '900',
+  },
+  appMenuList: {
+    gap: 4,
+  },
+  appMenuRow: {
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+  },
+  appMenuRowActive: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  appMenuIcon: {
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  appMenuIconActive: {
+    backgroundColor: '#2563eb',
+  },
+  appMenuRowText: {
+    flex: 1,
+    minWidth: 0,
+    color: '#dbe4ee',
+    fontWeight: '800',
+  },
+  appMenuRowTextActive: {
+    color: '#fff',
     fontWeight: '900',
   },
   content: {
@@ -1757,9 +2105,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
+  statPressable: {
+    flex: 1,
+  },
   homeSectionTitle: {
     color: '#172033',
-    fontSize: 25,
+    fontSize: 19,
     fontWeight: '900',
   },
   homeFeatureGrid: {
@@ -1830,11 +2181,14 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   statCard: {
-    flex: 1,
     minHeight: 110,
     padding: 14,
     gap: 6,
     justifyContent: 'space-between',
+  },
+  statCardActive: {
+    borderColor: 'rgba(37,99,235,0.34)',
+    backgroundColor: 'rgba(255,255,255,0.58)',
   },
   statIcon: {
     alignSelf: 'flex-start',
@@ -1857,7 +2211,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     color: '#202938',
-    fontSize: 20,
+    fontSize: 17,
     fontWeight: '900',
   },
   cardTitle: {
@@ -2112,6 +2466,13 @@ const styles = StyleSheet.create({
     minHeight: 92,
     paddingTop: 2,
   },
+  workspacePinButton: {
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 17,
+  },
   workspaceAvatarRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2298,12 +2659,13 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   streamingPill: {
-    minHeight: 44,
+    minHeight: 30,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 7,
-    paddingHorizontal: 13,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
   },
   streamingText: {
     color: '#0f9f6e',
@@ -2311,7 +2673,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   chatStreamingRow: {
-    marginTop: 6,
+    marginTop: 4,
     alignSelf: 'flex-start',
   },
   chatHeaderCard: {
@@ -2972,6 +3334,123 @@ const styles = StyleSheet.create({
   agentEditMockTextDisabled: {
     color: '#94a3b8',
   },
+  agentConfigPage: {
+    gap: 12,
+    paddingTop: 2,
+  },
+  agentConfigSheet: {
+    paddingTop: 12,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.select({ ios: 24, android: 18, default: 22 }),
+    borderRadius: 28,
+    gap: 12,
+  },
+  agentConfigPageHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  agentConfigBackButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.42)',
+  },
+  agentConfigContent: {
+    gap: 12,
+    paddingBottom: 8,
+  },
+  agentConfigGrid: {
+    gap: 12,
+  },
+  agentFormField: {
+    gap: 6,
+    zIndex: 1,
+  },
+  agentFormLabel: {
+    color: '#334155',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  agentFormInput: {
+    minHeight: 50,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.75)',
+    borderRadius: 16,
+    color: '#334155',
+    fontSize: 15,
+    fontWeight: '700',
+    backgroundColor: 'rgba(255,255,255,0.36)',
+  },
+  agentFormInputDisabled: {
+    color: '#64748b',
+    backgroundColor: 'rgba(226,232,240,0.38)',
+  },
+  agentFormTextarea: {
+    minHeight: 78,
+    paddingTop: 12,
+    lineHeight: 21,
+  },
+  agentFormTextareaTall: {
+    minHeight: 116,
+  },
+  agentSelectBox: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 16,
+    backgroundColor: '#f8fafc',
+  },
+  agentFormInputText: {
+    flex: 1,
+    minWidth: 0,
+    color: '#334155',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  agentProviderMenu: {
+    position: 'absolute',
+    top: 74,
+    left: 0,
+    right: 0,
+    zIndex: 20,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: '#dbe4ee',
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  agentProviderOption: {
+    minHeight: 38,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+  },
+  agentProviderOptionActive: {
+    backgroundColor: '#2563eb',
+  },
+  agentProviderOptionText: {
+    color: '#334155',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  agentProviderOptionTextActive: {
+    color: '#fff',
+  },
   chatComposer: {
     minHeight: 68,
     flexDirection: 'row',
@@ -3174,7 +3653,7 @@ const styles = StyleSheet.create({
   },
   codePanelTitle: {
     color: '#172033',
-    fontSize: 25,
+    fontSize: 19,
     fontWeight: '900',
   },
   diffBadge: {
