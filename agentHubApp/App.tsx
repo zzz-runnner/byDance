@@ -221,6 +221,11 @@ export default function App() {
                     setActiveWorkspaceId(nextWorkspace.id)
                     setActiveTab('chat')
                   }}
+                  onToggleWorkspacePin={workspaceId => {
+                    setWorkspaceList(current =>
+                      current.map(item => (item.id === workspaceId ? { ...item, pinned: !item.pinned } : item)),
+                    )
+                  }}
                   onOpenWorkspacePanel={() => {
                     setWorkspacePanelMode('switch')
                     setWorkspacePanelOpen(true)
@@ -284,6 +289,7 @@ function WorkbenchScreen({
   layoutTier,
   mobileScale,
   onOpenWorkspace,
+  onToggleWorkspacePin,
   onOpenWorkspacePanel,
 }: {
   workspaceList: Workspace[]
@@ -292,6 +298,7 @@ function WorkbenchScreen({
   layoutTier: LayoutTier
   mobileScale: MobileScale
   onOpenWorkspace: (workspace: Workspace) => void
+  onToggleWorkspacePin: (workspaceId: string) => void
   onOpenWorkspacePanel: () => void
 }) {
   const isCompact = layoutTier === 'compact'
@@ -387,14 +394,9 @@ function WorkbenchScreen({
         >
           <StatCard label="运行中" value={String(runningAgents)} icon="lightning-bolt-outline" tone="#db2777" active={focus === 'running'} />
         </Pressable>
-        <Pressable
-          style={styles.statPressable}
-          onPress={() => {
-            setFocus('artifacts')
-          }}
-        >
-          <StatCard label="产物" value={String(artifacts.length)} icon="package-variant-closed" tone="#059669" active={focus === 'artifacts'} />
-        </Pressable>
+        <View style={styles.statPressable}>
+          <StatCard label="产物" value={String(artifacts.length)} icon="package-variant-closed" tone="#059669" />
+        </View>
       </View>
 
       <GlassCard style={styles.searchCard}>
@@ -427,7 +429,7 @@ function WorkbenchScreen({
         <Text style={styles.workbenchSectionMeta}>{focusMeta}</Text>
       </View>
       {pinnedWorkspaces.map(item => (
-        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} />
+        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} onTogglePin={() => onToggleWorkspacePin(item.id)} />
       ))}
 
       <View style={styles.workbenchSectionHead}>
@@ -435,7 +437,7 @@ function WorkbenchScreen({
         <Text style={styles.workbenchSectionMeta}>按活跃度排序</Text>
       </View>
       {recentWorkspaces.slice(0, 3).map(item => (
-        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} />
+        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} onTogglePin={() => onToggleWorkspacePin(item.id)} />
       ))}
 
       {focusedWorkspaces.length === 0 ? (
@@ -844,7 +846,7 @@ function WorkspacePanelModal({
           <View style={styles.activityCenterHead}>
             <View style={styles.workspacePanelTitleCopy}>
               <Text style={styles.homeWorkspaceEyebrow}>WORKSPACE PANEL</Text>
-              <Text style={styles.artifactDetailTitle}>{mode === 'create' ? '创建工作区' : '工作区切换与创建'}</Text>
+              <Text style={styles.artifactDetailTitle}>{mode === 'create' ? '创建工作区' : '切换工作区'}</Text>
             </View>
             <Pressable style={styles.artifactCloseButton} onPress={onClose}>
               <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
@@ -876,7 +878,8 @@ function WorkspacePanelModal({
               </View>
             ) : null}
 
-            <View style={styles.workspacePanelSection}>
+            {mode === 'create' ? (
+              <View style={styles.workspacePanelSection}>
               <Text style={styles.workspacePanelSectionTitle}>创建工作区</Text>
               <TextInput
                 value={draftName}
@@ -927,7 +930,8 @@ function WorkspacePanelModal({
                 <MaterialCommunityIcons name="plus" size={20} color="#fff" />
                 <Text style={styles.workspaceCreateText}>创建并进入</Text>
               </Pressable>
-            </View>
+              </View>
+            ) : null}
           </ScrollView>
         </GlassCard>
       </View>
@@ -1326,7 +1330,7 @@ function Feature({ icon, label }: { icon: IconName; label: string }) {
   )
 }
 
-function WorkspaceCard({ workspace, layoutTier, mobileScale, onPress }: { workspace: Workspace; layoutTier: LayoutTier; mobileScale: MobileScale; onPress?: () => void }) {
+function WorkspaceCard({ workspace, layoutTier, mobileScale, onPress, onTogglePin }: { workspace: Workspace; layoutTier: LayoutTier; mobileScale: MobileScale; onPress?: () => void; onTogglePin?: () => void }) {
   const isCompact = layoutTier === 'compact'
   const iconName = workspace.kind === 'group' ? 'school-outline' : 'account-group-outline'
   const typeLabel = workspace.type === 'dev' ? 'dev' : workspace.type === 'chat' ? 'chat' : workspace.type === 'research' ? 'research' : 'writing'
@@ -1365,7 +1369,16 @@ function WorkspaceCard({ workspace, layoutTier, mobileScale, onPress }: { worksp
           </View>
         </View>
         <View style={styles.workspaceActionColumn}>
-          <MaterialCommunityIcons name="pin" size={22} color={workspace.pinned ? '#d97706' : '#c4c9d4'} />
+          <Pressable
+            style={styles.workspacePinButton}
+            hitSlop={8}
+            onPress={event => {
+              event.stopPropagation()
+              onTogglePin?.()
+            }}
+          >
+            <MaterialCommunityIcons name="pin" size={22} color={workspace.pinned ? '#d97706' : '#c4c9d4'} />
+          </Pressable>
           <MaterialCommunityIcons name="chevron-right" size={26} color="#64748b" />
         </View>
       </View>
@@ -2251,6 +2264,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     minHeight: 92,
     paddingTop: 2,
+  },
+  workspacePinButton: {
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 17,
   },
   workspaceAvatarRow: {
     flexDirection: 'row',
