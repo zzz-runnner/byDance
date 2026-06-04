@@ -53,6 +53,7 @@ import type {
 import { GlassPanel } from './GlassPanel'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { StatusPill } from './StatusPill'
+import { DocumentPreviewPane } from './DocumentPreviewPane'
 
 type CodeWorkspaceDialogProps = {
   open: boolean
@@ -2446,29 +2447,8 @@ export function CodeWorkspaceDialog({
                     </div>
                   ) : activeFileIsDocumentPreview && activeDocumentPreviewEntry?.error ? (
                     <div className="code-editor-empty code-editor-empty--error">{activeDocumentPreviewEntry.error}</div>
-                  ) : activeDocumentPreview?.kind === 'pdf' ? (
-                    <div className="code-document-preview">
-                      <iframe
-                        className="code-document-preview__frame"
-                        src={activeDocumentPreview.sourceUrl}
-                        title={activeDocumentPreview.path}
-                      />
-                    </div>
                   ) : activeDocumentPreview ? (
-                    <article className="code-document-preview code-document-preview--text">
-                      <header className="code-document-preview__header">
-                        <strong>{activeDocumentPreview.name}</strong>
-                        <span>{activeDocumentPreview.summary}</span>
-                      </header>
-                      <div className="code-document-preview__body">
-                        {(activeDocumentPreview.sections ?? []).map(section => (
-                          <section className="code-document-preview__section" key={`${activeDocumentPreview.path}-${section.title}`}>
-                            <h4>{section.title}</h4>
-                            <p>{section.content}</p>
-                          </section>
-                        ))}
-                      </div>
-                    </article>
+                    <DocumentPreviewPane preview={activeDocumentPreview} />
                   ) : activeFileContent && canMountEditor ? (
                     <Editor
                       height="100%"

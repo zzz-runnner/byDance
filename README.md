@@ -160,8 +160,8 @@ The backend still keeps the Nest business modules for:
 - The code dialog diff tab can now apply the current turn change-set directly through `/api/projects/:projectId/change-sets/:changeSetId/apply`.
 - The code dialog document preview now supports `pdf`, `docx`, and `pptx`:
   - PDF previews keep the original file URL for iframe display
-  - DOCX previews extract paragraph text from `word/document.xml`
-  - PPTX previews extract slide text from `ppt/slides/slide*.xml`
+  - DOCX previews render directly in the browser through `docx-preview`
+  - PPTX previews render directly in the browser through `@aiden0z/pptx-renderer`
 - Lightweight child-agent replies now use each agent's configured provider and model instead of always falling back to the global main-brain model path.
 - Windows-created Office archives are now normalized during local preview loading, so `Compress-Archive` generated `.docx` and `.pptx` files preview correctly.
 
@@ -326,8 +326,8 @@ Focused feature verification also passed on 2026-06-03:
   - this path now uses a temporary patch file on Windows so `already_applied` detection works reliably on larger change-sets
 - Document preview passed through the live backend:
   - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.pdf` returned a PDF preview payload with a runtime `sourceUrl`
-  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.docx` returned `kind: docx`, two extracted sections, and combined text content
-  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.pptx` returned `kind: pptx`, one extracted slide section, and combined text content
+  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.docx` returned `kind: docx` with a runtime `sourceUrl` for browser-side rendering
+  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.pptx` returned `kind: pptx` with a runtime `sourceUrl` for browser-side rendering
   - all temporary preview fixtures were removed after validation, and the validation workspace diff returned empty again
   - final visible reply sender was `product-manager`
   - SSE stream completed and state reload reflected the persisted reply

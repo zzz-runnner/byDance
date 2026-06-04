@@ -9,11 +9,14 @@
     "check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@aiden0z/pptx-renderer": "^1.0.3",
     "@dicebear/collection": "^9.4.2",
     "@dicebear/core": "^9.4.2",
     "@monaco-editor/react": "^4.7.0",
+    "docx-preview": "^0.3.7",
     "lucide-react": "^1.16.0",
     "monaco-editor": "^0.55.1",
+    "pdfjs-dist": "^5.7.284",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-markdown": "^10.1.0",

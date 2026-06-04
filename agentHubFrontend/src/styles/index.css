@@ -2872,9 +2872,10 @@ a {
   background: rgba(15, 23, 37, 0.9);
 }
 
-.code-document-preview--text {
+.code-document-preview--rich {
   overflow: auto;
-  align-content: start;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
 }
 
 .code-document-preview__frame {
@@ -2903,31 +2904,72 @@ a {
   padding: 16px 18px 20px;
 }
 
-.code-document-preview__section {
-  display: grid;
-  gap: 8px;
-  padding: 14px 16px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 14px;
-  background: rgba(11, 18, 32, 0.72);
+.code-document-preview__body--rendered {
+  display: block;
+  min-height: 0;
+  overflow: auto;
+  padding-top: 8px;
 }
 
-.code-document-preview__section h4,
-.code-document-preview__section p {
+.code-document-preview__body--rendered.is-hidden {
+  display: none;
+}
+
+.code-document-preview__render-surface {
+  min-height: 100%;
+}
+
+.code-document-preview__render-surface--docx,
+.code-document-preview__render-surface--pptx {
+  padding: 0 18px 24px;
+}
+
+.code-document-preview__status {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding: 24px 18px 18px;
+  color: #dbe7f3;
+  text-align: center;
+}
+
+.code-document-preview__status strong,
+.code-document-preview__status p {
   margin: 0;
 }
 
-.code-document-preview__section h4 {
-  color: #f8fafc;
-  font-size: 13px;
-}
-
-.code-document-preview__section p {
-  color: #dbe7f3;
+.code-document-preview__status p {
+  max-width: 520px;
+  color: #8ea0b8;
   font-size: 13px;
   line-height: 1.7;
-  white-space: pre-wrap;
-  word-break: break-word;
+}
+
+.code-document-preview__status.is-error {
+  color: #fecaca;
+}
+
+.code-document-preview__status.is-error p {
+  color: #fda4af;
+}
+
+.agenthub-docx-wrapper,
+.agenthub-docx {
+  color: #dbe7f3;
+}
+
+.agenthub-docx-wrapper {
+  padding: 18px 0 24px;
+}
+
+.agenthub-docx-wrapper > section.docx {
+  margin: 0 auto 18px;
+  box-shadow: 0 18px 48px rgba(15, 23, 37, 0.35);
+}
+
+.code-document-preview__render-surface--pptx > div {
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .code-diff-shell {

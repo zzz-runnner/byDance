@@ -140,11 +140,6 @@ export type WorkspaceDocumentPreview = {
   updatedAt: string
   sourceUrl: string
   summary: string
-  textContent?: string
-  sections?: Array<{
-    title: string
-    content: string
-  }>
 }
 
 export type WorkspaceDiffSnapshot = {

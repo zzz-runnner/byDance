@@ -124,7 +124,24 @@ export function createEmptyWorkbenchState(agents: AgentDefinition[] = []): AppSt
  */
 async function readJson<T>(response: Response, label: string): Promise<T> {
   if (!response.ok) {
-    throw new Error(`${label} failed: ${response.status}`)
+    let detail = ''
+    try {
+      const payload = await response.json() as { message?: string | string[] }
+      if (Array.isArray(payload.message)) {
+        detail = payload.message.join('; ')
+      } else if (typeof payload.message === 'string') {
+        detail = payload.message
+      }
+    } catch {
+      try {
+        detail = (await response.text()).trim()
+      } catch {
+        detail = ''
+      }
+    }
+
+    const suffix = detail ? `: ${detail}` : ''
+    throw new Error(`${label} failed: ${response.status}${suffix}`)
   }
 
   return response.json() as Promise<T>
