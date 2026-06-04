@@ -296,7 +296,7 @@ function WorkbenchScreen({
         <View style={styles.homeWorkspaceHead}>
           <View style={styles.workbenchActiveCopy}>
             <Text style={styles.homeWorkspaceEyebrow}>ACTIVE WORKSPACE</Text>
-            <Text style={styles.homeWorkspaceTitle}>{workspace.name}</Text>
+            <Text style={[styles.homeWorkspaceTitle, { fontSize: mobileScale.heroTitle }]} numberOfLines={1}>{workspace.name}</Text>
           </View>
           <View style={styles.workbenchIconWrap}>
             <AnimatedHomeIcon size={mobileScale.workspaceHeroIcon} />
@@ -426,7 +426,7 @@ function WorkbenchScreen({
         <View style={styles.homeWorkspaceHead}>
           <View>
             <Text style={styles.homeWorkspaceEyebrow}>ACTIVE WORKSPACE</Text>
-            <Text style={styles.homeWorkspaceTitle}>{workspace.name}</Text>
+            <Text style={[styles.homeWorkspaceTitle, { fontSize: mobileScale.heroTitle }]} numberOfLines={1}>{workspace.name}</Text>
           </View>
           <View style={styles.homeStatusPill}>
             <MaterialCommunityIcons name="waveform" size={16} color="#2563eb" />
@@ -1124,11 +1124,11 @@ function AgentScreen({ layoutTier, mobileScale }: { layoutTier: LayoutTier; mobi
     <View style={styles.agentScreen}>
       <GlassCard style={[styles.agentSummary, !showFullRegistry && styles.agentSummaryCompact]}>
         <View style={[styles.agentSummaryHero, !showFullRegistry && styles.agentSummaryHeroCompact]}>
-          <View style={styles.registryIcon}>
-            <MaterialCommunityIcons name="layers-triple" size={35} color="#5572ff" />
+          <View style={[styles.registryIcon, { width: mobileScale.workspaceCardIcon, height: mobileScale.workspaceCardIcon, borderRadius: Math.round(mobileScale.workspaceCardIcon * 0.27) }]}>
+            <MaterialCommunityIcons name="layers-triple" size={Math.round(mobileScale.workspaceCardIcon * 0.44)} color="#5572ff" />
           </View>
           <View style={styles.registryCopy}>
-            <Text style={styles.registryTitle}>Agent Registry</Text>
+            <Text style={[styles.registryTitle, { fontSize: mobileScale.registryTitle }]} numberOfLines={1}>Agent Registry</Text>
             <Text style={styles.agentSummaryText}>管理模型、提示词、工具权限和上下文策略</Text>
           </View>
         </View>
@@ -1500,7 +1500,7 @@ function AgentCard({ agent, layoutTier, mobileScale, onPress, onDelete }: { agen
       <AgentGlyph agentId={agent.id} size={avatarSize} />
       <View style={styles.agentCopy}>
         <View style={styles.agentCardTop}>
-          <Text style={styles.agentName} numberOfLines={1}>{agent.name}</Text>
+          <Text style={[styles.agentName, { fontSize: mobileScale.agentCardTitle }]} numberOfLines={1}>{agent.name}</Text>
           <View style={styles.agentCardActions}>
             {!isBuiltin ? (
               <Pressable
