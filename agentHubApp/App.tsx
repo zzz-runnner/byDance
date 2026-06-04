@@ -145,8 +145,8 @@ export default function App() {
                 {activeTab === 'chat' && tightChatHeader ? (
                   <View style={styles.chatStreamingRow}>
                     <GlassCard compact style={styles.streamingPill}>
-                      <MaterialCommunityIcons name="chart-timeline-variant-shimmer" size={17} color="#10b981" />
-                      <Text style={styles.streamingText}>streaming</Text>
+                      <MaterialCommunityIcons name="chart-timeline-variant-shimmer" size={14} color="#10b981" />
+                      <Text style={[styles.streamingText, { fontSize: mobileScale.labelText }]}>streaming</Text>
                     </GlassCard>
                   </View>
                 ) : null}
@@ -364,7 +364,7 @@ function WorkbenchScreen({
       </View>
 
       <View style={styles.workbenchSectionHead}>
-        <Text style={styles.homeSectionTitle}>置顶工作区</Text>
+        <Text style={[styles.homeSectionTitle, { fontSize: mobileScale.sectionTitle }]}>置顶工作区</Text>
         <Text style={styles.workbenchSectionMeta}>{pinnedWorkspaces.length} 个</Text>
       </View>
       {pinnedWorkspaces.map(item => (
@@ -372,7 +372,7 @@ function WorkbenchScreen({
       ))}
 
       <View style={styles.workbenchSectionHead}>
-        <Text style={styles.homeSectionTitle}>最近更新</Text>
+        <Text style={[styles.homeSectionTitle, { fontSize: mobileScale.sectionTitle }]}>最近更新</Text>
         <Text style={styles.workbenchSectionMeta}>按活跃度排序</Text>
       </View>
       {recentWorkspaces.slice(0, 3).map(item => (
@@ -542,7 +542,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
 
         <View style={styles.userMessageRow}>
           <GlassCard style={styles.userPromptBubble}>
-            <Text style={styles.userPromptText}>
+            <Text style={[styles.userPromptText, { fontSize: mobileScale.messageText, lineHeight: mobileScale.messageLineHeight }]}>
               <Text style={styles.mentionText}>@engineer</Text>
               {'  '}先把移动端 app 的主 UI 做出来，按 web 端功能做 mock。
             </Text>
@@ -559,7 +559,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
             </View>
           </View>
           <GlassCard style={styles.chatBubbleLarge}>
-            <Text style={styles.chatBubbleText}>我先快速梳理目标：移动端保留工作区、群聊、Agent 管理、代码/产物查看和交付状态。</Text>
+            <Text style={[styles.chatBubbleText, { fontSize: mobileScale.messageText, lineHeight: mobileScale.messageLineHeight }]}>我先快速梳理目标：移动端保留工作区、群聊、Agent 管理、代码/产物查看和交付状态。</Text>
           </GlassCard>
         </View>
 
@@ -567,10 +567,10 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
           <View style={styles.chatProcessHead}>
             <View style={styles.chatProcessTitleLine}>
               <MaterialCommunityIcons name="robot-outline" size={22} color="#2563eb" />
-              <Text style={styles.chatProcessTitle}>本轮过程</Text>
+              <Text style={[styles.chatProcessTitle, { fontSize: mobileScale.panelTitle }]}>本轮过程</Text>
             </View>
             <View style={styles.processStatePill}>
-              <Text style={styles.processStateText}>进行中</Text>
+              <Text style={[styles.processStateText, { fontSize: mobileScale.labelText }]}>进行中</Text>
             </View>
           </View>
           {[
@@ -582,9 +582,9 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
               <View style={[styles.chatProcessIcon, step.tone === 'done' && styles.chatProcessIconDone, step.tone === 'running' && styles.chatProcessIconRunning]}>
                 <MaterialCommunityIcons name={step.icon} size={19} color={step.tone === 'waiting' ? '#fff' : step.tone === 'done' ? '#10b981' : '#fff'} />
               </View>
-              <Text style={styles.chatProcessStepTitle}>{step.title}</Text>
-              <Text style={styles.chatProcessSummary} numberOfLines={1}>{step.summary}</Text>
-              <Text style={styles.chatProcessTime}>{step.time}</Text>
+              <Text style={[styles.chatProcessStepTitle, { fontSize: mobileScale.messageText }]}>{step.title}</Text>
+              <Text style={[styles.chatProcessSummary, { fontSize: mobileScale.messageText }]} numberOfLines={1}>{step.summary}</Text>
+              <Text style={[styles.chatProcessTime, { fontSize: mobileScale.metaText }]}>{step.time}</Text>
             </View>
           ))}
         </GlassCard>
@@ -598,7 +598,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
             </View>
           </View>
           <GlassCard style={styles.engineerBubble}>
-            <Text style={styles.chatBubbleText}>我会把 Monaco 和 iframe 能力先转成移动端摘要卡，后续再接真实接口。</Text>
+            <Text style={[styles.chatBubbleText, { fontSize: mobileScale.messageText, lineHeight: mobileScale.messageLineHeight }]}>我会把 Monaco 和 iframe 能力先转成移动端摘要卡，后续再接真实接口。</Text>
             <Text style={styles.chatBubbleTime}>21:14</Text>
           </GlassCard>
         </View>
@@ -1293,7 +1293,7 @@ function WorkspaceCard({ workspace, layoutTier, mobileScale, onPress }: { worksp
         </LinearGradient>
         <View style={styles.workspaceTitleWrap}>
           <View style={styles.workspaceTitleRow}>
-            <Text style={styles.workspaceTitle} numberOfLines={1}>{workspace.name}</Text>
+            <Text style={[styles.workspaceTitle, { fontSize: mobileScale.workspaceCardTitle }]} numberOfLines={1}>{workspace.name}</Text>
             <View style={styles.workspacePrimaryBadge}>
               <Text style={styles.workspacePrimaryText}>{primaryLabel}</Text>
             </View>
@@ -1519,22 +1519,22 @@ function AgentCard({ agent, layoutTier, mobileScale, onPress, onDelete }: { agen
         </View>
         <View style={styles.agentBadgeRow}>
           <View style={[styles.agentTypeBadge, isBuiltin ? styles.agentTypeBuiltin : styles.agentTypeCustom]}>
-            <Text style={[styles.agentTypeText, isBuiltin ? styles.agentTypeBuiltinText : styles.agentTypeCustomText]}>
+            <Text style={[styles.agentTypeText, { fontSize: mobileScale.labelText }, isBuiltin ? styles.agentTypeBuiltinText : styles.agentTypeCustomText]}>
               {isBuiltin ? '内置' : '自定义'}
             </Text>
           </View>
           <View style={[styles.agentStatusBadge, styles[statusTone]]}>
             <View style={[styles.agentStatusDot, styles[`${statusTone}Dot`]]} />
-            <Text style={[styles.agentStatusText, styles[`${statusTone}Text`]]}>{statusLabel}</Text>
+            <Text style={[styles.agentStatusText, { fontSize: mobileScale.labelText }, styles[`${statusTone}Text`]]}>{statusLabel}</Text>
           </View>
         </View>
-        <Text style={styles.agentProvider}>提供方： {agent.provider}</Text>
-        <Text style={styles.agentRole} numberOfLines={1}>{agent.role}</Text>
+        <Text style={[styles.agentProvider, { fontSize: mobileScale.metaText }]}>提供方： {agent.provider}</Text>
+        <Text style={[styles.agentRole, { fontSize: mobileScale.bodyText, lineHeight: mobileScale.bodyLineHeight }]} numberOfLines={1}>{agent.role}</Text>
         <View style={[styles.agentBottomRow, (isCompact || isStandard) && styles.agentBottomRowResponsive]}>
           <View style={styles.agentSkillLine}>
             {agent.skills.slice(0, 3).map(skill => (
               <View key={skill} style={[styles.agentSkillChip, agent.status === 'reviewing' ? styles.reviewSkillChip : agent.status === 'running' ? styles.runningSkillChip : undefined]}>
-                <Text style={[styles.agentSkillText, agent.status === 'reviewing' ? styles.reviewSkillText : agent.status === 'running' ? styles.runningSkillText : undefined]}>{skill}</Text>
+                <Text style={[styles.agentSkillText, { fontSize: mobileScale.labelText }, agent.status === 'reviewing' ? styles.reviewSkillText : agent.status === 'running' ? styles.runningSkillText : undefined]}>{skill}</Text>
               </View>
             ))}
           </View>
@@ -1768,7 +1768,7 @@ const styles = StyleSheet.create({
   },
   homeSectionTitle: {
     color: '#172033',
-    fontSize: 25,
+    fontSize: 19,
     fontWeight: '900',
   },
   homeFeatureGrid: {
@@ -1866,7 +1866,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     color: '#202938',
-    fontSize: 20,
+    fontSize: 17,
     fontWeight: '900',
   },
   cardTitle: {
@@ -2307,12 +2307,13 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   streamingPill: {
-    minHeight: 44,
+    minHeight: 30,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 7,
-    paddingHorizontal: 13,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
   },
   streamingText: {
     color: '#0f9f6e',
@@ -2320,7 +2321,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   chatStreamingRow: {
-    marginTop: 6,
+    marginTop: 4,
     alignSelf: 'flex-start',
   },
   chatHeaderCard: {
@@ -3183,7 +3184,7 @@ const styles = StyleSheet.create({
   },
   codePanelTitle: {
     color: '#172033',
-    fontSize: 25,
+    fontSize: 19,
     fontWeight: '900',
   },
   diffBadge: {
