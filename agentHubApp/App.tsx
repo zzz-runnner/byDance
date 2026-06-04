@@ -1594,17 +1594,15 @@ function AgentDetailModal({ agent, mobileScale, onClose, onEdit }: { agent: Agen
 }
 
 function AgentConfigPage({ agent, onBack, onSave }: { agent: Agent | null; onBack: () => void; onSave: (agent: Agent) => void }) {
-  const [agentId, setAgentId] = useState('')
   const [name, setName] = useState('')
   const [provider, setProvider] = useState<Agent['provider']>('claude')
   const [providerOpen, setProviderOpen] = useState(false)
-  const [model, setModel] = useState('default')
+  const [model, setModel] = useState('')
   const [role, setRole] = useState('Custom Agent')
   const [maxRunSeconds, setMaxRunSeconds] = useState('300')
   const [description, setDescription] = useState('User-created Agent')
   const [whenToUse, setWhenToUse] = useState('Use when the user explicitly selects or mentions this Agent.')
   const [systemPrompt, setSystemPrompt] = useState('You are a focused custom Agent. Follow the workspace context and return concise, actionable output.')
-  const [skillsText, setSkillsText] = useState('需求, 优先级, 验收')
   const providerOptions: { value: Agent['provider']; label: string }[] = [
     { value: 'claude', label: 'Claude' },
     { value: 'codex', label: 'Codex' },
@@ -1612,29 +1610,27 @@ function AgentConfigPage({ agent, onBack, onSave }: { agent: Agent | null; onBac
   ]
 
   useEffect(() => {
-    setAgentId(agent?.id ?? `agent-${Date.now().toString().slice(-5)}`)
     setName(agent?.name ?? '')
     setProvider(agent?.provider ?? 'claude')
-    setModel('default')
+    setModel('')
     setRole(agent?.role ?? 'Custom Agent')
     setMaxRunSeconds('300')
     setDescription(agent?.role ?? 'User-created Agent')
     setWhenToUse('Use when the user explicitly selects or mentions this Agent.')
     setSystemPrompt('You are a focused custom Agent. Follow the workspace context and return concise, actionable output.')
-    setSkillsText(agent?.skills.join(', ') ?? '需求, 优先级, 验收')
     setProviderOpen(false)
   }, [agent])
 
   const submit = () => {
     const fallbackName = name.trim() || '新建 Agent'
     const nextAgent: Agent = {
-      id: agentId.trim() || `agent-${Date.now()}`,
+      id: agent?.id ?? `agent-${Date.now()}`,
       name: fallbackName,
-      role: role.trim() || description.trim() || 'Custom Agent',
+      role: description.trim() || role.trim() || 'Custom Agent',
       provider,
       status: agent?.status ?? 'idle',
       color: agent?.color ?? '#f59e0b',
-      skills: skillsText.split(/[,，]/).map(skill => skill.trim()).filter(Boolean).slice(0, 5),
+      skills: agent?.skills ?? ['自定义', '指令', '配置'],
     }
     onSave(nextAgent)
   }
@@ -1656,9 +1652,17 @@ function AgentConfigPage({ agent, onBack, onSave }: { agent: Agent | null; onBac
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.agentConfigContent}>
           <View style={styles.agentConfigGrid}>
-            <AgentField label="Agent ID" value={agentId} onChangeText={setAgentId} placeholder="agent-id" editable={!agent} />
+            <AgentField label="name" value={name} onChangeText={setName} placeholder="Agent 显示名" />
+            <AgentField label="role" value={role} onChangeText={setRole} placeholder="例如 前端工程师 / 需求分析师" />
+          </View>
+
+          <AgentField label="description" value={description} onChangeText={setDescription} placeholder="简短说明这个 Agent 做什么" multiline />
+          <AgentField label="whenToUse" value={whenToUse} onChangeText={setWhenToUse} placeholder="什么时候应该调用它" multiline />
+          <AgentField label="systemPrompt" value={systemPrompt} onChangeText={setSystemPrompt} placeholder="Agent 的核心行为指令" multiline tall />
+
+          <View style={styles.agentConfigGrid}>
             <View style={styles.agentFormField}>
-              <Text style={styles.agentFormLabel}>Provider</Text>
+              <Text style={styles.agentFormLabel}>modelProvider</Text>
               <Pressable style={styles.agentSelectBox} onPress={() => setProviderOpen(open => !open)}>
                 <Text style={styles.agentFormInputText}>{providerOptions.find(option => option.value === provider)?.label}</Text>
                 <MaterialCommunityIcons name="menu-down" size={22} color="#334155" />
@@ -1680,16 +1684,9 @@ function AgentConfigPage({ agent, onBack, onSave }: { agent: Agent | null; onBac
                 </GlassCard>
               ) : null}
             </View>
-            <AgentField label="Name" value={name} onChangeText={setName} placeholder="Agent name" />
-            <AgentField label="Model" value={model} onChangeText={setModel} placeholder="default" />
-            <AgentField label="Role" value={role} onChangeText={setRole} placeholder="Custom Agent" />
-            <AgentField label="Max Run Seconds" value={maxRunSeconds} onChangeText={setMaxRunSeconds} placeholder="300" keyboardType="number-pad" />
+            <AgentField label="model" value={model} onChangeText={setModel} placeholder="不填用默认模型" />
+            <AgentField label="maxRunSeconds" value={maxRunSeconds} onChangeText={setMaxRunSeconds} placeholder="最大运行时间" keyboardType="number-pad" />
           </View>
-
-          <AgentField label="Description" value={description} onChangeText={setDescription} placeholder="User-created Agent" multiline />
-          <AgentField label="When To Use" value={whenToUse} onChangeText={setWhenToUse} multiline />
-          <AgentField label="System Prompt" value={systemPrompt} onChangeText={setSystemPrompt} multiline tall />
-          <AgentField label="Skills" value={skillsText} onChangeText={setSkillsText} placeholder="需求, 优先级, 验收" />
 
           <Pressable style={styles.workspaceCreateButton} onPress={submit}>
             <MaterialCommunityIcons name="content-save-outline" size={20} color="#fff" />
@@ -3408,9 +3405,9 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.75)',
+    borderColor: '#e2e8f0',
     borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.36)',
+    backgroundColor: '#f8fafc',
   },
   agentFormInputText: {
     flex: 1,
@@ -3426,13 +3423,22 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 20,
     padding: 4,
+    borderWidth: 1,
+    borderColor: '#dbe4ee',
     borderRadius: 14,
+    backgroundColor: '#ffffff',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
   },
   agentProviderOption: {
     minHeight: 38,
     justifyContent: 'center',
     paddingHorizontal: 12,
     borderRadius: 10,
+    backgroundColor: '#ffffff',
   },
   agentProviderOptionActive: {
     backgroundColor: '#2563eb',
