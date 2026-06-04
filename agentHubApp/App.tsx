@@ -107,7 +107,7 @@ export default function App() {
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false)
   const { width } = useWindowDimensions()
   const layoutTier: LayoutTier = width < 380 ? 'compact' : width < 430 ? 'standard' : 'wide'
-  const mobileScale = useMemo(() => createMobileScale(layoutTier), [layoutTier])
+  const mobileScale = useMemo(() => createMobileScale(layoutTier, width), [layoutTier, width])
   const tightChatHeader = activeTab === 'chat' && layoutTier !== 'wide'
   const activeWorkspace = workspaceList.find(workspace => workspace.id === activeWorkspaceId) ?? workspaceList[0]
   const runningAgents = agents.filter(agent => agent.status !== 'idle').length
@@ -302,7 +302,7 @@ function WorkbenchScreen({
             <AnimatedHomeIcon size={mobileScale.workspaceHeroIcon} />
           </View>
         </View>
-        <Text style={styles.homeWorkspaceDesc} numberOfLines={2}>{workspace.goal}</Text>
+        <Text style={[styles.homeWorkspaceDesc, { fontSize: mobileScale.bodyText, lineHeight: mobileScale.bodyLineHeight }]} numberOfLines={2}>{workspace.goal}</Text>
         <View style={styles.homeWorkspaceMetaRow}>
           <View style={styles.homeStatusPill}>
             <MaterialCommunityIcons name="waveform" size={16} color="#2563eb" />
@@ -433,7 +433,7 @@ function WorkbenchScreen({
             <Text style={styles.homeStatusText}>running</Text>
           </View>
         </View>
-        <Text style={styles.homeWorkspaceDesc} numberOfLines={2}>{workspace.goal}</Text>
+        <Text style={[styles.homeWorkspaceDesc, { fontSize: mobileScale.bodyText, lineHeight: mobileScale.bodyLineHeight }]} numberOfLines={2}>{workspace.goal}</Text>
         <View style={styles.homeWorkspaceMetaRow}>
           <View style={styles.homeMetaChip}>
             <Text style={styles.homeMetaTextBlue}>{workspace.type}</Text>
@@ -460,7 +460,8 @@ function WorkbenchScreen({
 
 function WorkspaceScreen({ layoutTier }: { layoutTier: LayoutTier }) {
   const isCompact = layoutTier === 'compact'
-  const mobileScale = useMemo(() => createMobileScale(layoutTier), [layoutTier])
+  const { width } = useWindowDimensions()
+  const mobileScale = useMemo(() => createMobileScale(layoutTier, width), [layoutTier, width])
   return (
     <View style={[styles.workspaceScreen, isCompact && styles.workspaceScreenCompact]}>
       <GlassCard style={styles.searchCard}>
@@ -1129,7 +1130,7 @@ function AgentScreen({ layoutTier, mobileScale }: { layoutTier: LayoutTier; mobi
           </View>
           <View style={styles.registryCopy}>
             <Text style={[styles.registryTitle, { fontSize: mobileScale.registryTitle }]} numberOfLines={1}>Agent Registry</Text>
-            <Text style={styles.agentSummaryText}>管理模型、提示词、工具权限和上下文策略</Text>
+            <Text style={[styles.agentSummaryText, { fontSize: mobileScale.bodyText, lineHeight: mobileScale.bodyLineHeight }]}>管理模型、提示词、工具权限和上下文策略</Text>
           </View>
         </View>
         {showFullRegistry ? (

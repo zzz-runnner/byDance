@@ -3,6 +3,7 @@ import { Platform } from 'react-native'
 export type LayoutTier = 'compact' | 'standard' | 'wide'
 
 const isAndroid = Platform.OS === 'android'
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
 export function scaledSize(size: number, androidScale = 0.88) {
   return Math.round(size * (isAndroid ? androidScale : 1))
@@ -12,16 +13,27 @@ export function tieredSize(tier: LayoutTier, values: { compact: number; standard
   return scaledSize(values[tier], androidScale)
 }
 
-export function createMobileScale(tier: LayoutTier) {
+export function fluidFontSize(size: number, screenWidth: number, options?: { min?: number; max?: number; androidScale?: number }) {
+  const baselineWidth = isAndroid ? 430 : 390
+  const widthScale = clamp(screenWidth / baselineWidth, isAndroid ? 0.72 : 0.82, isAndroid ? 0.96 : 1.08)
+  const platformScale = isAndroid ? options?.androidScale ?? 0.82 : 1
+  const min = options?.min ?? size * 0.72
+  const max = options?.max ?? size
+  return Math.round(clamp(size * widthScale * platformScale, min, max))
+}
+
+export function createMobileScale(tier: LayoutTier, screenWidth: number) {
   return {
     headerAvatar: tieredSize(tier, { compact: 40, standard: 46, wide: 54 }, 0.86),
     headerButton: tieredSize(tier, { compact: 46, standard: 50, wide: 54 }, 0.9),
     headerIcon: tieredSize(tier, { compact: 23, standard: 25, wide: 28 }, 0.9),
-    pageTitle: tieredSize(tier, { compact: 21, standard: 23, wide: 25 }, 0.84),
-    chatTitle: tieredSize(tier, { compact: 18, standard: 20, wide: 20 }, 0.9),
-    heroTitle: tieredSize(tier, { compact: 23, standard: 24, wide: 26 }, 0.78),
-    registryTitle: tieredSize(tier, { compact: 23, standard: 24, wide: 26 }, 0.78),
-    agentCardTitle: tieredSize(tier, { compact: 19, standard: 21, wide: 22 }, 0.84),
+    pageTitle: fluidFontSize(25, screenWidth, { min: 17, max: 25, androidScale: 0.78 }),
+    chatTitle: fluidFontSize(20, screenWidth, { min: 16, max: 20, androidScale: 0.82 }),
+    heroTitle: fluidFontSize(26, screenWidth, { min: 18, max: 26, androidScale: 0.72 }),
+    registryTitle: fluidFontSize(26, screenWidth, { min: 18, max: 26, androidScale: 0.72 }),
+    agentCardTitle: fluidFontSize(22, screenWidth, { min: 17, max: 22, androidScale: 0.78 }),
+    bodyText: fluidFontSize(15, screenWidth, { min: 12, max: 15, androidScale: 0.86 }),
+    bodyLineHeight: fluidFontSize(22, screenWidth, { min: 18, max: 22, androidScale: 0.9 }),
     workspaceHeroIcon: tieredSize(tier, { compact: 58, standard: 68, wide: 68 }, 0.86),
     workspaceCardIcon: tieredSize(tier, { compact: 76, standard: 84, wide: 96 }, 0.84),
     workspaceCardIconGlyph: tieredSize(tier, { compact: 38, standard: 42, wide: 48 }, 0.84),
