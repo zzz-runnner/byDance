@@ -126,7 +126,7 @@ export default function App() {
         <SafeAreaView style={styles.safe}>
           <StatusBar style="dark" />
           <View style={[styles.header, activeTab === 'agents' && styles.agentHeader, activeTab === 'chat' && styles.codeHeader]}>
-            <View style={[styles.headerLeft, activeTab === 'chat' && styles.codeHeaderLeft, tightChatHeader && styles.chatHeaderLeftTight]}>
+            <View style={[styles.headerLeft, activeTab === 'agents' && styles.agentHeaderLeft, activeTab === 'chat' && styles.codeHeaderLeft, tightChatHeader && styles.chatHeaderLeftTight]}>
               <Pressable style={styles.headerAvatarButton} onPress={() => setAppMenuOpen(true)}>
                 <AgentGlyph agentId="orchestrator" size={mobileScale.headerAvatar} />
               </Pressable>
@@ -178,7 +178,7 @@ export default function App() {
                 </GlassCard>
               </View>
             ) : activeTab === 'agents' ? (
-              <View style={styles.headerActions}>
+              <View style={styles.agentHeaderActions}>
                 <GlassCard compact style={[styles.agentCreateButton, layoutTier === 'compact' && styles.agentCreateButtonCompact]}>
                   <Pressable style={styles.agentCreatePressable} onPress={() => setAgentCreateSignal(signal => signal + 1)}>
                     <MaterialCommunityIcons name="plus" size={mobileScale.headerIcon - 3} color="#0f172a" />
@@ -1830,6 +1830,10 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 14,
   },
+  agentHeaderLeft: {
+    flexShrink: 1,
+    gap: 12,
+  },
   codeHeader: {
     paddingHorizontal: 16,
     paddingTop: Platform.select({ ios: 8, android: 6, default: 8 }),
@@ -1927,9 +1931,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+  agentHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: 10,
+  },
   agentCreateButton: {
     height: 48,
-    minWidth: 92,
+    width: 118,
     paddingHorizontal: 0,
     overflow: 'hidden',
   },
@@ -1943,7 +1953,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   agentCreateButtonCompact: {
-    minWidth: 82,
+    width: 106,
     paddingHorizontal: 0,
   },
   agentCreateText: {
