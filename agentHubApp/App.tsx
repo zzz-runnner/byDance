@@ -106,6 +106,7 @@ export default function App() {
   const [activityOpen, setActivityOpen] = useState(false)
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false)
   const [workspacePanelMode, setWorkspacePanelMode] = useState<'switch' | 'create'>('switch')
+  const [agentCreateSignal, setAgentCreateSignal] = useState(0)
   const { width } = useWindowDimensions()
   const layoutTier: LayoutTier = width < 380 ? 'compact' : width < 430 ? 'standard' : 'wide'
   const mobileScale = useMemo(() => createMobileScale(layoutTier, width), [layoutTier, width])
@@ -178,10 +179,12 @@ export default function App() {
               </View>
             ) : activeTab === 'agents' ? (
               <View style={styles.headerActions}>
-                <GlassCard compact style={[styles.agentCreateButton, layoutTier === 'compact' && styles.agentCreateButtonCompact]}>
-                  <MaterialCommunityIcons name="plus" size={mobileScale.headerIcon - 3} color="#0f172a" />
-                  <Text style={styles.agentCreateText}>新建</Text>
-                </GlassCard>
+                <Pressable onPress={() => setAgentCreateSignal(signal => signal + 1)}>
+                  <GlassCard compact style={[styles.agentCreateButton, layoutTier === 'compact' && styles.agentCreateButtonCompact]}>
+                    <MaterialCommunityIcons name="plus" size={mobileScale.headerIcon - 3} color="#0f172a" />
+                    <Text style={styles.agentCreateText}>新建</Text>
+                  </GlassCard>
+                </Pressable>
                 <GlassCard compact style={styles.headerAction}>
                   <MaterialCommunityIcons name="cog-outline" size={mobileScale.headerIcon - 2} color="#0f172a" />
                 </GlassCard>
@@ -232,7 +235,7 @@ export default function App() {
                   }}
                 />
               ) : null}
-              {activeTab === 'agents' ? <AgentScreen layoutTier={layoutTier} mobileScale={mobileScale} /> : null}
+              {activeTab === 'agents' ? <AgentScreen layoutTier={layoutTier} mobileScale={mobileScale} createSignal={agentCreateSignal} /> : null}
             </ScrollView>
           )}
 
@@ -1164,10 +1167,12 @@ function DeliveryStatusCard({ icon, title, status, body, time, tone }: { icon: I
   )
 }
 
-function AgentScreen({ layoutTier, mobileScale }: { layoutTier: LayoutTier; mobileScale: MobileScale }) {
+function AgentScreen({ layoutTier, mobileScale, createSignal }: { layoutTier: LayoutTier; mobileScale: MobileScale; createSignal: number }) {
   const showFullRegistry = layoutTier === 'wide'
   const [visibleAgents, setVisibleAgents] = useState<Agent[]>(agents)
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
+  const [agentConfigOpen, setAgentConfigOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<AgentFilter>('all')
   const runningCount = visibleAgents.filter(agent => agent.status !== 'idle').length
@@ -1187,6 +1192,20 @@ function AgentScreen({ layoutTier, mobileScale }: { layoutTier: LayoutTier; mobi
     setVisibleAgents(current => current.filter(agent => agent.id !== agentId))
     if (selectedAgent?.id === agentId) setSelectedAgent(null)
   }
+  const saveAgent = (nextAgent: Agent) => {
+    setVisibleAgents(current => {
+      const exists = current.some(agent => agent.id === nextAgent.id)
+      return exists ? current.map(agent => (agent.id === nextAgent.id ? nextAgent : agent)) : [nextAgent, ...current]
+    })
+    setSelectedAgent(nextAgent)
+  }
+
+  useEffect(() => {
+    if (createSignal === 0) return
+    setEditingAgent(null)
+    setSelectedAgent(null)
+    setAgentConfigOpen(true)
+  }, [createSignal])
 
   return (
     <View style={styles.agentScreen}>
@@ -1267,7 +1286,21 @@ function AgentScreen({ layoutTier, mobileScale }: { layoutTier: LayoutTier; mobi
         </GlassCard>
       ) : null}
       <Text style={styles.agentLoadedText}>已显示 {filteredAgents.length} / {visibleAgents.length} 个 Agent</Text>
-      <AgentDetailModal agent={selectedAgent} mobileScale={mobileScale} onClose={() => setSelectedAgent(null)} />
+      <AgentDetailModal
+        agent={selectedAgent}
+        mobileScale={mobileScale}
+        onClose={() => setSelectedAgent(null)}
+        onEdit={agent => {
+          setEditingAgent(agent)
+          setAgentConfigOpen(true)
+        }}
+      />
+      <AgentConfigModal
+        visible={agentConfigOpen}
+        agent={editingAgent}
+        onClose={() => setAgentConfigOpen(false)}
+        onSave={saveAgent}
+      />
     </View>
   )
 }
@@ -1463,7 +1496,7 @@ function ArtifactStrip({ artifacts: items }: { artifacts: Artifact[] }) {
   )
 }
 
-function AgentDetailModal({ agent, mobileScale, onClose }: { agent: Agent | null; mobileScale: MobileScale; onClose: () => void }) {
+function AgentDetailModal({ agent, mobileScale, onClose, onEdit }: { agent: Agent | null; mobileScale: MobileScale; onClose: () => void; onEdit: (agent: Agent) => void }) {
   if (!agent) return null
 
   const isBuiltin = agent.id === 'orchestrator' || agent.id === 'engineer'
@@ -1538,7 +1571,11 @@ function AgentDetailModal({ agent, mobileScale, onClose }: { agent: Agent | null
                 <Text style={styles.sectionTitle}>轻管理</Text>
                 <Text style={styles.bodyText}>{isBuiltin ? '内置 Agent 仅支持查看资料。' : '可编辑名称、简介、provider、model 与技能标签。'}</Text>
               </View>
-              <Pressable style={[styles.agentEditMockButton, isBuiltin && styles.agentEditMockButtonDisabled]}>
+              <Pressable
+                style={[styles.agentEditMockButton, isBuiltin && styles.agentEditMockButtonDisabled]}
+                disabled={isBuiltin}
+                onPress={() => onEdit(agent)}
+              >
                 <MaterialCommunityIcons name={isBuiltin ? 'lock-outline' : 'pencil-outline'} size={20} color={isBuiltin ? '#94a3b8' : '#fff'} />
                 <Text style={[styles.agentEditMockText, isBuiltin && styles.agentEditMockTextDisabled]}>{isBuiltin ? '不可编辑' : '基础编辑'}</Text>
               </Pressable>
@@ -1547,6 +1584,157 @@ function AgentDetailModal({ agent, mobileScale, onClose }: { agent: Agent | null
         </GlassCard>
       </View>
     </Modal>
+  )
+}
+
+function AgentConfigModal({ visible, agent, onClose, onSave }: { visible: boolean; agent: Agent | null; onClose: () => void; onSave: (agent: Agent) => void }) {
+  const [agentId, setAgentId] = useState('')
+  const [name, setName] = useState('')
+  const [provider, setProvider] = useState<Agent['provider']>('claude')
+  const [providerOpen, setProviderOpen] = useState(false)
+  const [model, setModel] = useState('default')
+  const [role, setRole] = useState('Custom Agent')
+  const [maxRunSeconds, setMaxRunSeconds] = useState('300')
+  const [description, setDescription] = useState('User-created Agent')
+  const [whenToUse, setWhenToUse] = useState('Use when the user explicitly selects or mentions this Agent.')
+  const [systemPrompt, setSystemPrompt] = useState('You are a focused custom Agent. Follow the workspace context and return concise, actionable output.')
+  const [skillsText, setSkillsText] = useState('需求, 优先级, 验收')
+  const providerOptions: { value: Agent['provider']; label: string }[] = [
+    { value: 'claude', label: 'Claude' },
+    { value: 'codex', label: 'Codex' },
+    { value: 'mock', label: 'Mock' },
+  ]
+
+  useEffect(() => {
+    if (!visible) return
+    setAgentId(agent?.id ?? `agent-${Date.now().toString().slice(-5)}`)
+    setName(agent?.name ?? '')
+    setProvider(agent?.provider ?? 'claude')
+    setModel('default')
+    setRole(agent?.role ?? 'Custom Agent')
+    setMaxRunSeconds('300')
+    setDescription(agent?.role ?? 'User-created Agent')
+    setWhenToUse('Use when the user explicitly selects or mentions this Agent.')
+    setSystemPrompt('You are a focused custom Agent. Follow the workspace context and return concise, actionable output.')
+    setSkillsText(agent?.skills.join(', ') ?? '需求, 优先级, 验收')
+    setProviderOpen(false)
+  }, [agent, visible])
+
+  const submit = () => {
+    const fallbackName = name.trim() || '新建 Agent'
+    const nextAgent: Agent = {
+      id: agentId.trim() || `agent-${Date.now()}`,
+      name: fallbackName,
+      role: role.trim() || description.trim() || 'Custom Agent',
+      provider,
+      status: agent?.status ?? 'idle',
+      color: agent?.color ?? '#f59e0b',
+      skills: skillsText.split(/[,，]/).map(skill => skill.trim()).filter(Boolean).slice(0, 5),
+    }
+    onSave(nextAgent)
+    onClose()
+  }
+
+  if (!visible) return null
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={styles.modalScrim} onPress={onClose} />
+        <GlassCard style={styles.agentConfigSheet}>
+          <View style={styles.artifactDetailHandle} />
+          <View style={styles.activityCenterHead}>
+            <View style={styles.workspacePanelTitleCopy}>
+              <Text style={styles.homeWorkspaceEyebrow}>AGENT MANAGEMENT</Text>
+              <Text style={styles.artifactDetailTitle}>{agent ? '编辑 Agent' : '新建 Agent'}</Text>
+            </View>
+            <Pressable style={styles.artifactCloseButton} onPress={onClose}>
+              <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
+            </Pressable>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.agentConfigContent}>
+            <View style={styles.agentConfigGrid}>
+              <AgentField label="Agent ID" value={agentId} onChangeText={setAgentId} placeholder="agent-id" editable={!agent} />
+              <View style={styles.agentFormField}>
+                <Text style={styles.agentFormLabel}>Provider</Text>
+                <Pressable style={styles.agentSelectBox} onPress={() => setProviderOpen(open => !open)}>
+                  <Text style={styles.agentFormInputText}>{providerOptions.find(option => option.value === provider)?.label}</Text>
+                  <MaterialCommunityIcons name="menu-down" size={22} color="#334155" />
+                </Pressable>
+                {providerOpen ? (
+                  <GlassCard compact style={styles.agentProviderMenu}>
+                    {providerOptions.map(option => (
+                      <Pressable
+                        key={option.value}
+                        style={[styles.agentProviderOption, provider === option.value && styles.agentProviderOptionActive]}
+                        onPress={() => {
+                          setProvider(option.value)
+                          setProviderOpen(false)
+                        }}
+                      >
+                        <Text style={[styles.agentProviderOptionText, provider === option.value && styles.agentProviderOptionTextActive]}>{option.label}</Text>
+                      </Pressable>
+                    ))}
+                  </GlassCard>
+                ) : null}
+              </View>
+              <AgentField label="Name" value={name} onChangeText={setName} placeholder="Agent name" />
+              <AgentField label="Model" value={model} onChangeText={setModel} placeholder="default" />
+              <AgentField label="Role" value={role} onChangeText={setRole} placeholder="Custom Agent" />
+              <AgentField label="Max Run Seconds" value={maxRunSeconds} onChangeText={setMaxRunSeconds} placeholder="300" keyboardType="number-pad" />
+            </View>
+
+            <AgentField label="Description" value={description} onChangeText={setDescription} placeholder="User-created Agent" multiline />
+            <AgentField label="When To Use" value={whenToUse} onChangeText={setWhenToUse} multiline />
+            <AgentField label="System Prompt" value={systemPrompt} onChangeText={setSystemPrompt} multiline tall />
+            <AgentField label="Skills" value={skillsText} onChangeText={setSkillsText} placeholder="需求, 优先级, 验收" />
+
+            <Pressable style={styles.workspaceCreateButton} onPress={submit}>
+              <MaterialCommunityIcons name="content-save-outline" size={20} color="#fff" />
+              <Text style={styles.workspaceCreateText}>{agent ? '保存配置' : '创建 Agent'}</Text>
+            </Pressable>
+          </ScrollView>
+        </GlassCard>
+      </View>
+    </Modal>
+  )
+}
+
+function AgentField({
+  label,
+  value,
+  onChangeText,
+  placeholder,
+  multiline = false,
+  tall = false,
+  editable = true,
+  keyboardType,
+}: {
+  label: string
+  value: string
+  onChangeText: (value: string) => void
+  placeholder?: string
+  multiline?: boolean
+  tall?: boolean
+  editable?: boolean
+  keyboardType?: 'default' | 'number-pad'
+}) {
+  return (
+    <View style={styles.agentFormField}>
+      <Text style={styles.agentFormLabel}>{label}</Text>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor="#94a3b8"
+        editable={editable}
+        keyboardType={keyboardType}
+        multiline={multiline}
+        textAlignVertical={multiline ? 'top' : 'center'}
+        style={[styles.agentFormInput, multiline && styles.agentFormTextarea, tall && styles.agentFormTextareaTall, !editable && styles.agentFormInputDisabled]}
+      />
+    </View>
   )
 }
 
@@ -3132,6 +3320,101 @@ const styles = StyleSheet.create({
   },
   agentEditMockTextDisabled: {
     color: '#94a3b8',
+  },
+  agentConfigSheet: {
+    width: '94%',
+    maxHeight: '86%',
+    marginHorizontal: 12,
+    marginBottom: Platform.select({ ios: 18, android: 12, default: 16 }),
+    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.select({ ios: 24, android: 18, default: 22 }),
+    borderRadius: 28,
+    gap: 12,
+  },
+  agentConfigContent: {
+    gap: 12,
+    paddingBottom: 8,
+  },
+  agentConfigGrid: {
+    gap: 12,
+  },
+  agentFormField: {
+    gap: 6,
+    zIndex: 1,
+  },
+  agentFormLabel: {
+    color: '#334155',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  agentFormInput: {
+    minHeight: 50,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.75)',
+    borderRadius: 16,
+    color: '#334155',
+    fontSize: 15,
+    fontWeight: '700',
+    backgroundColor: 'rgba(255,255,255,0.36)',
+  },
+  agentFormInputDisabled: {
+    color: '#64748b',
+    backgroundColor: 'rgba(226,232,240,0.38)',
+  },
+  agentFormTextarea: {
+    minHeight: 78,
+    paddingTop: 12,
+    lineHeight: 21,
+  },
+  agentFormTextareaTall: {
+    minHeight: 116,
+  },
+  agentSelectBox: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.75)',
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.36)',
+  },
+  agentFormInputText: {
+    flex: 1,
+    minWidth: 0,
+    color: '#334155',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  agentProviderMenu: {
+    position: 'absolute',
+    top: 74,
+    left: 0,
+    right: 0,
+    zIndex: 20,
+    padding: 4,
+    borderRadius: 14,
+  },
+  agentProviderOption: {
+    minHeight: 38,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  agentProviderOptionActive: {
+    backgroundColor: '#2563eb',
+  },
+  agentProviderOptionText: {
+    color: '#334155',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  agentProviderOptionTextActive: {
+    color: '#fff',
   },
   chatComposer: {
     minHeight: 68,
