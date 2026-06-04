@@ -1579,18 +1579,19 @@ const styles = StyleSheet.create({
     minWidth: 0,
     flex: 1,
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+    alignItems: 'flex-start',
+    gap: 16,
   },
   headerAvatarButton: {
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop: 2,
   },
   codeHeaderLeft: {
     flex: 1,
   },
   chatHeaderLeftTight: {
-    gap: 0,
+    gap: 14,
   },
   headerCopy: {
     minWidth: 0,
