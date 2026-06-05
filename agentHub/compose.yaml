@@ -1,0 +1,71 @@
+name: agenthub
+
+services:
+  agenthub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APT_DEBIAN_MIRROR: ${APT_DEBIAN_MIRROR:-http://mirrors.aliyun.com/debian}
+        APT_SECURITY_MIRROR: ${APT_SECURITY_MIRROR:-http://mirrors.aliyun.com/debian-security}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-true}
+        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.136.0}
+        INSTALL_CLAUDE_CODE: ${INSTALL_CLAUDE_CODE:-true}
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
+        INSTALL_MIMO2CODEX_BRIDGE: ${INSTALL_MIMO2CODEX_BRIDGE:-true}
+        MIMO2CODEX_VERSION: ${MIMO2CODEX_VERSION:-0.4.10}
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PORT: 8787
+      WEB_PORT: ${WEB_PORT:-5173}
+      AGENTHUB_CORS_ORIGINS: ${AGENTHUB_CORS_ORIGINS:-}
+      AGENTHUB_STORAGE: postgres
+      DATABASE_URL: postgres://${POSTGRES_USER:-agenthub}:${POSTGRES_PASSWORD:-agenthub_change_me}@host.docker.internal:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-agenthub_runtime}
+      AGENTHUB_RUNTIME_ROOT: /app/data/workspaces
+      AGENTHUB_CODEX_HOME: /app/.codex-agenthub
+      AGENTHUB_CODEX_BRIDGE_URL: ${AGENTHUB_CODEX_BRIDGE_URL:-http://codex-bridge:8788/v1}
+      AGENTHUB_REAL_AGENTS: ${AGENTHUB_REAL_AGENTS:-false}
+      AGENTHUB_ORCHESTRATOR_PROVIDER: ${AGENTHUB_ORCHESTRATOR_PROVIDER:-mock}
+      AGENTHUB_ORCHESTRATOR_MODEL: ${AGENTHUB_ORCHESTRATOR_MODEL:-deepseek-v4-pro}
+      AGENTHUB_ROUTER_MODEL: ${AGENTHUB_ROUTER_MODEL:-deepseek-v4-flash}
+    ports:
+      - "${AGENTHUB_PORT:-8787}:8787"
+    volumes:
+      - agenthub_runtime_data:/app/data
+      - agenthub_codex_home:/app/.codex-agenthub
+      - agenthub_node_home:/home/node
+
+  codex-bridge:
+    profiles:
+      - real-agents
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APT_DEBIAN_MIRROR: ${APT_DEBIAN_MIRROR:-http://mirrors.aliyun.com/debian}
+        APT_SECURITY_MIRROR: ${APT_SECURITY_MIRROR:-http://mirrors.aliyun.com/debian-security}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-true}
+        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.136.0}
+        INSTALL_CLAUDE_CODE: ${INSTALL_CLAUDE_CODE:-true}
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
+        INSTALL_MIMO2CODEX_BRIDGE: ${INSTALL_MIMO2CODEX_BRIDGE:-true}
+        MIMO2CODEX_VERSION: ${MIMO2CODEX_VERSION:-0.4.10}
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    command: ["npm", "run", "codex:bridge"]
+    expose:
+      - "8788"
+    healthcheck:
+      disable: true
+
+volumes:
+  agenthub_runtime_data:
+  agenthub_codex_home:
+  agenthub_node_home:

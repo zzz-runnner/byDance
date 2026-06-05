@@ -7,6 +7,17 @@ const ENV_FILES = ['.env', '.env.local']
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8787),
   WEB_PORT: z.coerce.number().int().positive().default(5173),
+  AGENTHUB_CORS_ORIGINS: z
+    .string()
+    .optional()
+    .transform(value =>
+      value
+        ? value
+            .split(',')
+            .map(origin => origin.trim())
+            .filter(Boolean)
+        : [],
+    ),
   AGENTHUB_STORAGE: z.enum(['memory', 'postgres']).default('memory'),
   DATABASE_URL: z.string().optional(),
   CLAUDE_CODE_BIN: z.string().min(1).default('claude'),

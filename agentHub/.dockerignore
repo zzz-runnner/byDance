@@ -1,0 +1,15 @@
+node_modules
+npm-debug.log
+.env
+.env.local
+.env.docker
+data
+.codex-agenthub
+coverage
+dist
+build
+tests
+ccOriginCode
+*.log
+*.err.log
+.DS_Store
