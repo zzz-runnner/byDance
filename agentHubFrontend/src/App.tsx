@@ -1054,7 +1054,7 @@ export function App() {
     connectionStatus === 'live' ? 'success' : loadingState || connectionStatus === 'connecting' ? 'running' : 'failed'
   const connectionPillLabel =
     connectionStatus === 'live' ? 'backend live' : loadingState || connectionStatus === 'connecting' ? 'connecting' : 'backend error'
-  const connectionTargetLabel = '业务后端 API / 127.0.0.1:8790'
+  const connectionTargetLabel = '业务后端 API / 120.79.130.49:8790'
   const ConnectionIcon = connectionStatus === 'error' ? ServerCrash : Wifi
 
   return (
@@ -1126,7 +1126,7 @@ export function App() {
             ) : (
               <BlockingWorkbenchState
                 kind="error"
-                message={connectionErrorMessage || '本地后端暂时不可用，请确认 127.0.0.1:8790 已启动。'}
+                message={connectionErrorMessage || '服务器后端暂时不可用，请确认 120.79.130.49:8790 已启动。'}
                 onRetry={() => void handleRefresh()}
               />
             )}

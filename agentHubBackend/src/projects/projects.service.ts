@@ -26,8 +26,11 @@ import type {
   ProjectDeliverySummaryResponse,
   ProjectStateResponse,
   ProjectWorkspaceDiff,
+  SortDirection,
   StoredProjectRecord,
   WorkbenchOverviewResponse,
+  WorkspaceListStatus,
+  WorkspaceSortField,
   WorkspaceType,
 } from '../types'
 import { ProjectMetadataStore } from './project-metadata.store'
@@ -47,6 +50,10 @@ import { readWorkspaceDocumentPreview } from './workspace-document-preview'
 interface SseParseResult {
   events: Record<string, unknown>[]
   rest: string
+}
+
+type ProjectPageCursor = {
+  offset: number
 }
 
 @Injectable()
@@ -104,7 +111,11 @@ export class ProjectsService {
    * Output: stored project metadata array.
    */
   async listProjects(): Promise<ProjectMetadata[]> {
-    return this.projectStore.listProjects()
+    const [state, projects] = await Promise.all([
+      this.agentHub.fetchState(),
+      this.projectStore.listProjects(),
+    ])
+    return mergeRuntimeProjects(state, projects)
   }
 
   /**
@@ -114,10 +125,19 @@ export class ProjectsService {
    */
   async getProject(projectId: string): Promise<ProjectMetadata> {
     const project = await this.projectStore.getProject(projectId)
-    if (!project) {
+    if (project) {
+      return this.hydrateProjectFromRuntime(project)
+    }
+
+    const [state, projects] = await Promise.all([
+      this.agentHub.fetchState(),
+      this.projectStore.listProjects(),
+    ])
+    const runtimeProject = runtimeProjectById(state, projectId, projects)
+    if (!runtimeProject) {
       throw new NotFoundException(`Project not found: ${projectId}`)
     }
-    return project
+    return runtimeProject
   }
 
   /**
@@ -128,7 +148,11 @@ export class ProjectsService {
   async getWorkbenchOverview(query: WorkbenchQueryDto): Promise<WorkbenchOverviewResponse> {
     const limit = query.pageSize ?? query.limit
     const searchQuery = query.query ?? query.q
-    const projectPage = await this.projectStore.listProjectsPage({
+    const [state, storedProjects] = await Promise.all([
+      this.agentHub.fetchState(),
+      this.projectStore.listProjects(),
+    ])
+    const projectPage = pageRuntimeProjects(mergeRuntimeProjects(state, storedProjects), {
       limit,
       cursor: query.cursor,
       query: searchQuery,
@@ -781,6 +805,16 @@ export class ProjectsService {
     await this.projectStore.saveProject(project)
   }
 
+  private async hydrateProjectFromRuntime(project: ProjectMetadata): Promise<ProjectMetadata> {
+    const state = await this.agentHub.fetchState()
+    const runtimeWorkspace = state.workspaces.find(workspace => workspace.id === project.workspaceId)
+    if (!runtimeWorkspace) {
+      return project
+    }
+
+    return mergeProjectWithRuntime(state, project, runtimeWorkspace)
+  }
+
   /**
    * Resolves the current target agent for one streamed message request.
    * Input: stored project binding, stream payload, and current runtime state.
@@ -872,6 +906,328 @@ const BLOCKED_FORWARD_HEADERS = new Set([
   'keep-alive',
   'transfer-encoding',
 ])
+
+const RUNTIME_PROJECT_ID_PREFIX = 'runtime-'
+const FALLBACK_TIMESTAMP = '1970-01-01T00:00:00.000Z'
+
+type RuntimeProjectPageInput = {
+  limit?: number
+  cursor?: string
+  query?: string
+  status?: WorkspaceListStatus
+  sortBy?: WorkspaceSortField
+  sortDirection?: SortDirection
+}
+
+type RuntimeProjectPage = {
+  items: ProjectMetadata[]
+  total: number
+  hasMore: boolean
+  nextCursor?: string
+}
+
+/**
+ * Projects AgentHub runtime workspaces into business-project metadata.
+ * Input: runtime state plus optional locally persisted metadata.
+ * Output: one project per runtime workspace, enriched with business fields.
+ */
+function mergeRuntimeProjects(
+  state: AgentHubState,
+  storedProjects: ProjectMetadata[],
+): ProjectMetadata[] {
+  const projectByWorkspaceId = latestProjectByWorkspaceId(storedProjects)
+
+  return state.workspaces
+    .map(workspace => {
+      const storedProject = projectByWorkspaceId.get(workspace.id)
+      return storedProject
+        ? mergeProjectWithRuntime(state, storedProject, workspace)
+        : projectFromRuntimeWorkspace(state, workspace)
+    })
+    .sort((left, right) => compareProjectsBySort(left, right, 'updatedAt', 'desc'))
+}
+
+/**
+ * Resolves a project id, virtual runtime project id, or raw workspace id.
+ * Input: runtime state, requested id, and optional stored project metadata.
+ * Output: merged project metadata when the workspace still exists.
+ */
+function runtimeProjectById(
+  state: AgentHubState,
+  projectId: string,
+  storedProjects: ProjectMetadata[] = [],
+): ProjectMetadata | undefined {
+  const storedProject = storedProjects.find(project => project.projectId === projectId)
+  if (storedProject) {
+    const workspace = state.workspaces.find(candidate => candidate.id === storedProject.workspaceId)
+    return workspace ? mergeProjectWithRuntime(state, storedProject, workspace) : storedProject
+  }
+
+  const workspace = state.workspaces.find(candidate =>
+    candidate.id === projectId || runtimeProjectId(candidate.id) === projectId,
+  )
+  if (!workspace) {
+    return undefined
+  }
+
+  const storedProjectForWorkspace = latestProjectByWorkspaceId(storedProjects).get(workspace.id)
+  return storedProjectForWorkspace
+    ? mergeProjectWithRuntime(state, storedProjectForWorkspace, workspace)
+    : projectFromRuntimeWorkspace(state, workspace)
+}
+
+/**
+ * Merges one stored business record with the current runtime workspace snapshot.
+ * Input: runtime state, stored project, and matching runtime workspace.
+ * Output: runtime-sourced project metadata with stored delivery fields preserved.
+ */
+function mergeProjectWithRuntime(
+  state: AgentHubState,
+  project: ProjectMetadata,
+  workspace: AgentHubWorkspace,
+): ProjectMetadata {
+  const storedConversation = project.conversationId
+    ? state.conversations.find(conversation =>
+        conversation.workspaceId === workspace.id && conversation.id === project.conversationId,
+      )
+    : undefined
+  const selectedConversation = storedConversation ?? selectProjectConversation(
+    state.conversations,
+    workspace.id,
+    project.conversationType ?? 'group',
+    project.targetAgentId,
+  )
+  const lastActivityAt = runtimeLastActivityAt(state, workspace, selectedConversation)
+
+  return {
+    ...project,
+    name: nonEmptyString(workspace.name, project.name),
+    goal: nonEmptyString(workspace.goal, project.goal),
+    workspaceId: workspace.id,
+    conversationId: selectedConversation?.id ?? project.conversationId,
+    conversationType: project.conversationType ?? selectedConversation?.type ?? 'group',
+    targetAgentId: project.targetAgentId ?? directConversationAgentId(selectedConversation),
+    agentHubPreviewUrl: previewUrlFor(workspace.id),
+    agentHubZipUrl: zipUrlFor(workspace.id),
+    versions: project.versions ?? [],
+    deployments: project.deployments ?? [],
+    createdAt: nonEmptyString(project.createdAt, nonEmptyString(workspace.createdAt, FALLBACK_TIMESTAMP)),
+    updatedAt: latestTimestamp(project.updatedAt, lastActivityAt),
+  }
+}
+
+/**
+ * Creates virtual business metadata for a runtime workspace with no stored record.
+ * Input: runtime state and workspace.
+ * Output: stable project metadata derived from AgentHub.
+ */
+function projectFromRuntimeWorkspace(
+  state: AgentHubState,
+  workspace: AgentHubWorkspace,
+): ProjectMetadata {
+  const conversation = selectProjectConversation(state.conversations, workspace.id, 'group')
+  const lastActivityAt = runtimeLastActivityAt(state, workspace, conversation)
+
+  return {
+    projectId: runtimeProjectId(workspace.id),
+    name: nonEmptyString(workspace.name, workspace.id),
+    goal: nonEmptyString(workspace.goal, ''),
+    workspaceId: workspace.id,
+    conversationId: conversation?.id,
+    conversationType: conversation?.type ?? 'group',
+    targetAgentId: directConversationAgentId(conversation),
+    agentHubPreviewUrl: previewUrlFor(workspace.id),
+    agentHubZipUrl: zipUrlFor(workspace.id),
+    versions: [],
+    deployments: [],
+    createdAt: nonEmptyString(workspace.createdAt, lastActivityAt),
+    updatedAt: lastActivityAt,
+  }
+}
+
+/**
+ * Pages the runtime-first project list after applying business filters.
+ * Input: merged projects plus page, search, status, and sort options.
+ * Output: one page of project metadata.
+ */
+function pageRuntimeProjects(
+  projects: ProjectMetadata[],
+  input: RuntimeProjectPageInput,
+): RuntimeProjectPage {
+  const limit = Math.max(1, Math.min(input.limit ?? 20, 100))
+  const normalizedQuery = input.query?.trim().toLowerCase() ?? ''
+  const status = input.status ?? 'active'
+  const sortBy = input.sortBy ?? 'updatedAt'
+  const sortDirection = input.sortDirection ?? 'desc'
+  const filtered = projects.filter(project =>
+    matchesProjectStatus(project, status) &&
+    (!normalizedQuery || matchesProjectQuery(project, normalizedQuery)),
+  )
+  const sorted = filtered
+    .slice()
+    .sort((left, right) => compareProjectsBySort(left, right, sortBy, sortDirection))
+  const decodedCursor = decodeProjectCursor(input.cursor)
+  const sliceStart = Math.max(0, Math.min(decodedCursor?.offset ?? 0, sorted.length))
+  const items = sorted.slice(sliceStart, sliceStart + limit)
+  const hasMore = sliceStart + items.length < sorted.length
+
+  return {
+    items,
+    total: sorted.length,
+    hasMore,
+    nextCursor: hasMore && items.length > 0 ? encodeProjectCursor(sliceStart + items.length) : undefined,
+  }
+}
+
+function runtimeProjectId(workspaceId: string): string {
+  return `${RUNTIME_PROJECT_ID_PREFIX}${workspaceId}`
+}
+
+function latestProjectByWorkspaceId(projects: ProjectMetadata[]): Map<string, ProjectMetadata> {
+  const result = new Map<string, ProjectMetadata>()
+
+  for (const project of projects) {
+    const current = result.get(project.workspaceId)
+    if (!current || project.updatedAt.localeCompare(current.updatedAt) > 0) {
+      result.set(project.workspaceId, project)
+    }
+  }
+
+  return result
+}
+
+function runtimeLastActivityAt(
+  state: AgentHubState,
+  workspace: AgentHubWorkspace,
+  selectedConversation: AgentHubState['conversations'][number] | undefined,
+): string {
+  const workspaceConversations = state.conversations.filter(conversation => conversation.workspaceId === workspace.id)
+  const conversationIds = new Set(workspaceConversations.map(conversation => conversation.id))
+  const latestConversationAt = latestTimestamp(...workspaceConversations.map(conversation => conversation.updatedAt))
+  const latestMessageAt = latestTimestamp(
+    ...state.messages
+      .filter(message => message.workspaceId === workspace.id || conversationIds.has(message.conversationId))
+      .map(message => message.createdAt),
+  )
+  const latestWorkflowEventAt = latestTimestamp(
+    ...state.workflowEvents
+      .filter(record => record.workspaceId === workspace.id || conversationIds.has(record.conversationId))
+      .map(record => record.createdAt),
+  )
+
+  return latestTimestamp(
+    workspace.updatedAt,
+    workspace.createdAt,
+    selectedConversation?.updatedAt,
+    latestConversationAt,
+    latestMessageAt,
+    latestWorkflowEventAt,
+  )
+}
+
+function latestTimestamp(...values: Array<string | undefined>): string {
+  return values
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => right.localeCompare(left))[0] ?? FALLBACK_TIMESTAMP
+}
+
+function directConversationAgentId(
+  conversation: AgentHubState['conversations'][number] | undefined,
+): string | undefined {
+  return conversation?.type === 'direct'
+    ? conversation.participants.find(participant => participant !== 'user')
+    : undefined
+}
+
+function nonEmptyString(value: string | undefined, fallback: string): string {
+  return value?.trim() ? value : fallback
+}
+
+function matchesProjectStatus(project: ProjectMetadata, status: WorkspaceListStatus): boolean {
+  if (status === 'all') {
+    return true
+  }
+  return status === 'archived' ? Boolean(project.archivedAt) : !project.archivedAt
+}
+
+function matchesProjectQuery(project: ProjectMetadata, query: string): boolean {
+  return [
+    project.name,
+    project.goal,
+    project.workspaceId,
+    project.projectId,
+    project.conversationType ?? '',
+    project.targetAgentId ?? '',
+  ]
+    .join(' ')
+    .toLowerCase()
+    .includes(query)
+}
+
+function compareProjectsBySort(
+  left: ProjectMetadata,
+  right: ProjectMetadata,
+  sortBy: WorkspaceSortField,
+  sortDirection: SortDirection,
+): number {
+  if (left.pinnedAt || right.pinnedAt) {
+    if (!left.pinnedAt) {
+      return 1
+    }
+    if (!right.pinnedAt) {
+      return -1
+    }
+    const pinnedComparison = right.pinnedAt.localeCompare(left.pinnedAt)
+    if (pinnedComparison !== 0) {
+      return pinnedComparison
+    }
+  }
+
+  const direction = sortDirection === 'asc' ? 1 : -1
+  const valueComparison = projectSortValue(left, sortBy).localeCompare(projectSortValue(right, sortBy))
+  if (valueComparison !== 0) {
+    return valueComparison * direction
+  }
+  return left.projectId.localeCompare(right.projectId)
+}
+
+function projectSortValue(project: ProjectMetadata, sortBy: WorkspaceSortField): string {
+  if (sortBy === 'name') {
+    return project.name.toLowerCase()
+  }
+  if (sortBy === 'createdAt') {
+    return project.createdAt
+  }
+  return project.updatedAt
+}
+
+function encodeProjectCursor(offset: number): string {
+  return Buffer.from(
+    JSON.stringify({
+      offset,
+    } satisfies ProjectPageCursor),
+    'utf8',
+  ).toString('base64url')
+}
+
+function decodeProjectCursor(cursor: string | undefined): ProjectPageCursor | undefined {
+  if (!cursor) {
+    return undefined
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Partial<ProjectPageCursor>
+    if (typeof parsed.offset === 'number' && Number.isInteger(parsed.offset) && parsed.offset >= 0) {
+      return {
+        offset: parsed.offset,
+      }
+    }
+  } catch {
+    return undefined
+  }
+
+  return undefined
+}
 
 type GitPatchCommandResult = {
   code: number

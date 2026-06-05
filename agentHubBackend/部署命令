@@ -1,0 +1,24 @@
+docker build -t agenthub-backend:latest .
+
+docker run -d \
+   --name agenthub-backend \
+   -p 8790:8790 \
+   -v /opt/agenthub/agenthub-backend-data:/opt/agenthub/agenthub-backend-data \
+   -v agenthub_agenthub_runtime_data:/agenthub-runtime-data:rw \
+   -v /var/run/docker.sock:/var/run/docker.sock \
+   --network agenthub_default \
+   --add-host host.docker.internal:host-gateway \
+   --restart always \
+   -e NODE_ENV=production \
+   -e PORT=8790 \
+   -e CORS_ORIGIN=http://120.79.130.49:5173 \
+   -e AGENTHUB_BASE_URL=http://agenthub:8787 \
+   -e AGENTHUB_RUNTIME_ROOT=/agenthub-runtime-data/workspaces \
+   -e APP_STORAGE_ROOT=/opt/agenthub/agenthub-backend-data \
+   -e APP_METADATA_STORE=local \
+   -e DOCKER_NODE_IMAGE=node:20-alpine \
+   -e BUILD_TIMEOUT_MS=300000 \
+   -e BUILD_CPU_LIMIT=1 \
+   -e BUILD_MEMORY_LIMIT=2g \
+   -e DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)" \
+   agenthub-backend:latest

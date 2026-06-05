@@ -65,6 +65,20 @@ type FetchWorkbenchOverviewInput = {
   sortDirection?: SortDirection
 }
 
+export function backendUrl(path: string): string {
+  return path.startsWith('/') ? path : `/${path}`
+}
+
+export function backendAssetUrl(url: string | undefined): string | undefined {
+  if (!url) {
+    return undefined
+  }
+
+  return url.startsWith('/') || /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(url) || url.startsWith('data:') || url.startsWith('blob:')
+    ? url
+    : `/${url}`
+}
+
 export type CreateBusinessAgentInput = {
   id?: string
   name: string
@@ -200,13 +214,13 @@ function extractProjectStateEnvelope(payload: ProjectStateEnvelopeResponse): Pro
  * Output: agent definition list.
  */
 export async function fetchBusinessAgents(): Promise<AgentDefinition[]> {
-  const response = await fetch('/api/agents')
+  const response = await fetch(backendUrl('/api/agents'))
   const payload = await readJson<AgentsResponse>(response, 'Load business agents')
   return extractAgents(payload)
 }
 
 export async function createBusinessAgent(input: CreateBusinessAgentInput): Promise<AgentDefinition> {
-  const response = await fetch('/api/agents', {
+  const response = await fetch(backendUrl('/api/agents'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -217,7 +231,7 @@ export async function createBusinessAgent(input: CreateBusinessAgentInput): Prom
 }
 
 export async function fetchBusinessProjectAgents(projectId: string): Promise<AgentDefinition[]> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/agents`)
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/agents`))
   return readJson<AgentDefinition[]>(response, 'Load project agents')
 }
 
@@ -225,7 +239,7 @@ export async function createBusinessProjectAgent(
   projectId: string,
   input: CreateBusinessAgentInput,
 ): Promise<AgentDefinition> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/agents`, {
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/agents`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -240,7 +254,7 @@ export async function updateBusinessProjectAgent(
   agentId: string,
   input: UpdateBusinessAgentInput,
 ): Promise<AgentDefinition> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentId)}`, {
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentId)}`), {
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
@@ -251,7 +265,7 @@ export async function updateBusinessProjectAgent(
 }
 
 export async function deleteBusinessProjectAgent(projectId: string, agentId: string): Promise<void> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentId)}`, {
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentId)}`), {
     method: 'DELETE',
   })
   await readJson<{ deleted: boolean; agentId: string; workspaceId: string }>(response, 'Delete project agent')
@@ -261,7 +275,7 @@ export async function updateBusinessAgent(
   agentId: string,
   input: UpdateBusinessAgentInput,
 ): Promise<AgentDefinition> {
-  const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}`, {
+  const response = await fetch(backendUrl(`/api/agents/${encodeURIComponent(agentId)}`), {
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
@@ -272,7 +286,7 @@ export async function updateBusinessAgent(
 }
 
 export async function deleteBusinessAgent(agentId: string): Promise<void> {
-  const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}`, {
+  const response = await fetch(backendUrl(`/api/agents/${encodeURIComponent(agentId)}`), {
     method: 'DELETE',
   })
   await readJson<{ deleted: boolean; agentId: string }>(response, 'Delete business agent')
@@ -306,7 +320,7 @@ export async function fetchBusinessWorkbenchOverview(
   if (input.sortDirection) {
     query.set('sortDirection', input.sortDirection)
   }
-  const response = await fetch(`/api/workbench${query.size ? `?${query.toString()}` : ''}`)
+  const response = await fetch(backendUrl(`/api/workbench${query.size ? `?${query.toString()}` : ''}`))
   const payload = await readJson<WorkbenchOverviewResponse>(response, 'Load workbench overview')
   return extractWorkbenchOverview(payload)
 }
@@ -315,7 +329,7 @@ export async function updateBusinessWorkspaceMetadata(
   projectId: string,
   input: WorkspaceMetadataUpdate,
 ): Promise<BusinessProject> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/metadata`, {
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/metadata`), {
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
@@ -337,7 +351,7 @@ export async function fetchBusinessProjectState(
   const query = new URLSearchParams({
     messageLimit: String(messageLimit),
   })
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/state?${query.toString()}`)
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/state?${query.toString()}`))
   const payload = await readJson<ProjectStateEnvelopeResponse>(response, 'Load business project state')
   return extractProjectStateEnvelope(payload)
 }
@@ -352,7 +366,7 @@ export async function streamBusinessProjectMessage(
   onEvent: (event: WorkflowEvent) => void,
 ): Promise<void> {
   const projectId = input.projectId ?? input.workspaceId
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/messages/stream`, {
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/messages/stream`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -412,7 +426,7 @@ export async function streamBusinessProjectMessage(
  * Output: nested file nodes rooted at the current workspace repo.
  */
 export async function fetchBusinessProjectFiles(projectId: string): Promise<WorkspaceFileTree> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`)
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/files`))
   return readJson<WorkspaceFileTree>(response, 'Load business project files')
 }
 
@@ -423,7 +437,7 @@ export async function fetchBusinessProjectFiles(projectId: string): Promise<Work
  */
 export async function fetchBusinessProjectFileContent(projectId: string, filePath: string): Promise<WorkspaceFileContent> {
   const query = new URLSearchParams({ path: filePath })
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files/content?${query.toString()}`)
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/files/content?${query.toString()}`))
   return readJson<WorkspaceFileContent>(response, 'Load business project file')
 }
 
@@ -437,7 +451,7 @@ export async function fetchBusinessProjectFilePreview(
   filePath: string,
 ): Promise<WorkspaceDocumentPreview> {
   const query = new URLSearchParams({ path: filePath })
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files/preview?${query.toString()}`)
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/files/preview?${query.toString()}`))
   return readJson<WorkspaceDocumentPreview>(response, 'Load business project file preview')
 }
 
@@ -447,7 +461,7 @@ export async function fetchBusinessProjectFilePreview(
  * Output: git status summary and unified patch text.
  */
 export async function fetchBusinessProjectDiff(projectId: string): Promise<WorkspaceDiffSnapshot> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/diff`)
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/diff`))
   return readJson<WorkspaceDiffSnapshot>(response, 'Load business project diff')
 }
 
@@ -461,7 +475,7 @@ export async function applyBusinessProjectChangeSet(
   changeSetId: string,
 ): Promise<{ status: 'applied' | 'already_applied'; changeSetId: string; summary: string }> {
   const response = await fetch(
-    `/api/projects/${encodeURIComponent(projectId)}/change-sets/${encodeURIComponent(changeSetId)}/apply`,
+    backendUrl(`/api/projects/${encodeURIComponent(projectId)}/change-sets/${encodeURIComponent(changeSetId)}/apply`),
     {
       method: 'POST',
     },
@@ -478,7 +492,7 @@ export async function pinBusinessProjectMessage(
   projectId: string,
   messageId: string,
 ): Promise<{ workspaceId: string; messageId: string; pinnedMessageIds: string[] }> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/messages/${encodeURIComponent(messageId)}/pin`, {
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/messages/${encodeURIComponent(messageId)}/pin`), {
     method: 'PUT',
   })
   return readJson(response, 'Pin business project message')
@@ -493,7 +507,7 @@ export async function unpinBusinessProjectMessage(
   projectId: string,
   messageId: string,
 ): Promise<{ workspaceId: string; messageId: string; pinnedMessageIds: string[] }> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/messages/${encodeURIComponent(messageId)}/pin`, {
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/messages/${encodeURIComponent(messageId)}/pin`), {
     method: 'DELETE',
   })
   return readJson(response, 'Unpin business project message')
@@ -505,7 +519,7 @@ export async function unpinBusinessProjectMessage(
  * Output: preview target list plus the default target when available.
  */
 export async function fetchBusinessProjectPreviewTargets(projectId: string): Promise<WorkspacePreviewTargets> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/preview-targets`)
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/preview-targets`))
   return readJson<WorkspacePreviewTargets>(response, 'Load business project preview targets')
 }
 
@@ -515,7 +529,7 @@ export async function fetchBusinessProjectPreviewTargets(projectId: string): Pro
  * Output: preview mode, targets, and optional build state.
  */
 export async function fetchBusinessProjectPreviewCapability(projectId: string): Promise<WorkspacePreviewCapability> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/preview-capability`)
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/preview-capability`))
   return readJson<WorkspacePreviewCapability>(response, 'Load business project preview capability')
 }
 
@@ -533,7 +547,7 @@ export async function triggerBusinessProjectPreviewBuild(
     query.set('force', 'true')
   }
   const response = await fetch(
-    `/api/projects/${encodeURIComponent(projectId)}/preview-build${query.size ? `?${query.toString()}` : ''}`,
+    backendUrl(`/api/projects/${encodeURIComponent(projectId)}/preview-build${query.size ? `?${query.toString()}` : ''}`),
     {
       method: 'POST',
     },
@@ -547,7 +561,7 @@ export async function triggerBusinessProjectPreviewBuild(
  * Output: latest source archive, build, and deployment status summary.
  */
 export async function fetchBusinessProjectDeliverySummary(projectId: string): Promise<WorkspaceDeliverySummary> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/delivery`)
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/delivery`))
   return readJson<WorkspaceDeliverySummary>(response, 'Load business project delivery summary')
 }
 
@@ -560,7 +574,7 @@ export async function createBusinessProjectVersion(
   projectId: string,
   message?: string,
 ): Promise<WorkspaceVersionRecord> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/versions`, {
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/versions`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -578,7 +592,7 @@ export async function createBusinessProjectVersion(
  * Output: version history ordered by backend default.
  */
 export async function fetchBusinessProjectVersions(projectId: string): Promise<WorkspaceVersionRecord[]> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/versions`)
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/versions`))
   return readJson<WorkspaceVersionRecord[]>(response, 'Load business project versions')
 }
 
@@ -596,7 +610,7 @@ export async function fetchBusinessProjectVersionDiff(
     v1,
     v2,
   })
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/version-diff?${query.toString()}`)
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/version-diff?${query.toString()}`))
   return readJson<WorkspaceVersionDiff>(response, 'Load business project version diff')
 }
 
@@ -613,7 +627,7 @@ export async function restoreBusinessProjectVersion(
     message?: string
   } = {},
 ): Promise<WorkspaceVersionRestoreResult> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}/restore`, {
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}/restore`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -632,7 +646,7 @@ export async function buildBusinessProjectVersion(
   projectId: string,
   versionId?: string,
 ): Promise<WorkspaceVersionRecord> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/builds`, {
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/builds`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -653,7 +667,7 @@ export async function deployBusinessProjectVersion(
   projectId: string,
   versionId?: string,
 ): Promise<WorkspaceDeploymentRecord> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/deploy`, {
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/deploy`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -676,7 +690,7 @@ export async function createBusinessWorkspace(
   workspaceType: Workspace['workspaceType'] = 'dev',
   targetAgentId?: string,
 ): Promise<BusinessProject> {
-  const response = await fetch('/api/projects', {
+  const response = await fetch(backendUrl('/api/projects'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
