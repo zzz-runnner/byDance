@@ -88,6 +88,10 @@ export type ProjectStatePage = {
   limit: number
   total: number
   hasMore: boolean
+  cursor?: string
+  nextCursor?: string
+  offset?: number
+  endOffset?: number
 }
 
 export type ProjectStateEnvelope = {

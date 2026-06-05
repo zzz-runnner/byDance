@@ -162,6 +162,16 @@ export class ProjectStateQueryDto {
   @IsInt()
   @Min(1)
   messageLimit?: number
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  messagePageSize?: number
+
+  @IsOptional()
+  @IsString()
+  messageCursor?: string
 }
 
 export class WorkbenchQueryDto {

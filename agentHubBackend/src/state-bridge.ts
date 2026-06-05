@@ -19,6 +19,10 @@ const DEFAULT_MESSAGE_LIMIT = 40
 const MAX_MESSAGE_LIMIT = 200
 const DEFAULT_WORKSPACE_AGENT_ORDER = ['orchestrator', 'product-manager', 'engineer', 'reviewer']
 
+type MessagePageCursor = {
+  offset: number
+}
+
 function compareWorkspaceAgentOrder(leftId: string, rightId: string): number {
   const leftOrder = DEFAULT_WORKSPACE_AGENT_ORDER.indexOf(leftId)
   const rightOrder = DEFAULT_WORKSPACE_AGENT_ORDER.indexOf(rightId)
@@ -139,6 +143,8 @@ export function selectProjectState(
   },
   options?: {
     messageLimit?: number
+    messagePageSize?: number
+    messageCursor?: string
   },
 ): ProjectStateResponse {
   const workspaceId = project.workspaceId
@@ -168,7 +174,10 @@ export function selectProjectState(
     : []
   const mergedMessages = [...allMessages, ...deliveryMessages]
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-  const messagePage = paginateMessages(mergedMessages, options?.messageLimit)
+  const messagePage = paginateMessages(mergedMessages, {
+    limit: options?.messagePageSize ?? options?.messageLimit,
+    cursor: options?.messageCursor,
+  })
   const visibleTurnIds = new Set(
     messagePage.messages
       .map(message => typeof message.turnId === 'string' ? message.turnId : undefined)
@@ -229,6 +238,10 @@ export function selectProjectState(
       limit: messagePage.limit,
       total: messagePage.total,
       hasMore: messagePage.hasMore,
+      cursor: messagePage.cursor,
+      nextCursor: messagePage.nextCursor,
+      offset: messagePage.offset,
+      endOffset: messagePage.endOffset,
     },
   }
 }
@@ -418,22 +431,61 @@ function attachProjectMetadata(
 }
 
 /**
- * Slices one complete message list into the recent page exposed to the frontend.
- * Input: ordered message list and optional requested limit.
+ * Slices one complete message list into a newest-first cursor page exposed to
+ * the frontend. Returned messages stay chronological inside the page.
+ * Input: ordered message list plus optional requested limit and older-page cursor.
  * Output: paged messages plus page metadata.
  */
 function paginateMessages(
   messages: FrontendAppState['messages'],
-  requestedLimit?: number,
+  input: {
+    limit?: number
+    cursor?: string
+  } = {},
 ): ProjectStatePage & { messages: FrontendAppState['messages'] } {
-  const limit = Math.max(1, Math.min(requestedLimit ?? DEFAULT_MESSAGE_LIMIT, MAX_MESSAGE_LIMIT))
-  const pagedMessages = messages.slice(-limit)
+  const limit = Math.max(1, Math.min(input.limit ?? DEFAULT_MESSAGE_LIMIT, MAX_MESSAGE_LIMIT))
+  const decodedCursor = decodeMessageCursor(input.cursor)
+  const endOffset = Math.max(0, Math.min(decodedCursor?.offset ?? messages.length, messages.length))
+  const offset = Math.max(0, endOffset - limit)
+  const pagedMessages = messages.slice(offset, endOffset)
   return {
     limit,
     total: messages.length,
-    hasMore: messages.length > pagedMessages.length,
+    hasMore: offset > 0,
+    cursor: input.cursor,
+    nextCursor: offset > 0 ? encodeMessageCursor(offset) : undefined,
+    offset,
+    endOffset,
     messages: pagedMessages,
   }
+}
+
+function encodeMessageCursor(offset: number): string {
+  return Buffer.from(
+    JSON.stringify({
+      offset,
+    } satisfies MessagePageCursor),
+    'utf8',
+  ).toString('base64url')
+}
+
+function decodeMessageCursor(cursor: string | undefined): MessagePageCursor | undefined {
+  if (!cursor) {
+    return undefined
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Partial<MessagePageCursor>
+    if (typeof parsed.offset === 'number' && Number.isInteger(parsed.offset) && parsed.offset >= 0) {
+      return {
+        offset: parsed.offset,
+      }
+    }
+  } catch {
+    return undefined
+  }
+
+  return undefined
 }
 
 type DeliveryProjectionInput = {

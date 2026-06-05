@@ -149,6 +149,68 @@ function mergeWorkspaceRooms(currentRooms: WorkspaceRoom[], nextRooms: Workspace
   ]
 }
 
+type ChronologicalRecord = {
+  id: string
+  createdAt?: string
+}
+
+/**
+ * Merges paged runtime records by id while keeping chronological display order.
+ * Input: already loaded records and one freshly fetched page.
+ * Output: deduplicated records where the fresh page wins on conflicts.
+ */
+function mergeChronologicalRecords<T extends ChronologicalRecord>(currentRecords: T[], nextRecords: T[]): T[] {
+  const recordsById = new Map(currentRecords.map(record => [record.id, record]))
+  nextRecords.forEach(record => {
+    recordsById.set(record.id, record)
+  })
+  return Array.from(recordsById.values()).sort((left, right) =>
+    (left.createdAt ?? '').localeCompare(right.createdAt ?? '') ||
+    left.id.localeCompare(right.id),
+  )
+}
+
+/**
+ * Merges one paged project state into the already loaded active room state.
+ * Input: current state and freshly fetched state page.
+ * Output: next state with messages and workflow events accumulated across pages.
+ */
+function mergeProjectStatePage(currentState: AppState, nextState: AppState): AppState {
+  return {
+    ...nextState,
+    messages: mergeChronologicalRecords(currentState.messages, nextState.messages),
+    workflowEvents: mergeChronologicalRecords(currentState.workflowEvents, nextState.workflowEvents),
+  }
+}
+
+/**
+ * Keeps the older-page cursor stable when a latest-page refresh is merged into
+ * already loaded history.
+ * Input: current page metadata, freshly fetched page metadata, and load mode.
+ * Output: page metadata that points to the next not-yet-loaded older page.
+ */
+function mergeMessagePageMetadata(
+  currentPage: ProjectStatePage,
+  nextPage: ProjectStatePage,
+  mode: 'initial' | 'select' | 'refresh' | 'older',
+): ProjectStatePage {
+  if (
+    mode === 'refresh' &&
+    currentPage.offset !== undefined &&
+    nextPage.offset !== undefined &&
+    currentPage.offset < nextPage.offset
+  ) {
+    return {
+      ...nextPage,
+      hasMore: currentPage.hasMore,
+      nextCursor: currentPage.nextCursor,
+      offset: currentPage.offset,
+    }
+  }
+
+  return nextPage
+}
+
 /**
  * Normalizes unknown runtime errors into one readable message.
  * Input: thrown error value.
@@ -237,7 +299,7 @@ export function App() {
     total: 0,
     hasMore: false,
   })
-  const [messageLimitByWorkspace, setMessageLimitByWorkspace] = useState<Record<string, number>>({})
+  const [messagePageSizeByWorkspace, setMessagePageSizeByWorkspace] = useState<Record<string, number>>({})
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [appliedWorkspaceQuery, setAppliedWorkspaceQuery] = useState('')
   const [workspaceStatusFilter, setWorkspaceStatusFilter] = useState<WorkspaceListStatus>('active')
@@ -358,13 +420,14 @@ export function App() {
 
   /**
    * Loads one active workspace state page for the chat pane.
-   * Input: selected room, message limit, and loading mode.
+   * Input: selected room, message page size, loading mode, and optional older-page cursor.
    * Output: updates the active AppState only when the request is still current.
    */
   async function loadProjectRoomState(
     room: WorkspaceRoom,
-    messageLimit: number,
+    messagePageSize: number,
     mode: 'initial' | 'select' | 'refresh' | 'older',
+    messageCursor?: string,
   ) {
     const requestId = ++detailRequestRef.current
     if (mode === 'older') {
@@ -376,16 +439,23 @@ export function App() {
     try {
       const nextEnvelope = await fetchBusinessProjectState(
         room.workspace.projectId ?? room.workspace.id,
-        messageLimit,
+        {
+          messagePageSize,
+          messageCursor,
+        },
       )
 
       if (requestId !== detailRequestRef.current) {
         return
       }
 
-      setState(nextEnvelope.state)
-      setMessagePage(nextEnvelope.messagePage)
-      setMessageLimitByWorkspace(previous => ({
+      setState(previous =>
+        mode === 'older' || mode === 'refresh'
+          ? mergeProjectStatePage(previous, nextEnvelope.state)
+          : nextEnvelope.state,
+      )
+      setMessagePage(previous => mergeMessagePageMetadata(previous, nextEnvelope.messagePage, mode))
+      setMessagePageSizeByWorkspace(previous => ({
         ...previous,
         [room.id]: nextEnvelope.messagePage.limit,
       }))
@@ -475,7 +545,7 @@ export function App() {
         setLiveWorkflowEvents([])
         setState(createEmptyWorkbenchState(nextOverview.agents))
         setMessagePage({
-          limit: messageLimitByWorkspace[nextWorkspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
+          limit: messagePageSizeByWorkspace[nextWorkspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
           total: 0,
           hasMore: false,
         })
@@ -483,7 +553,7 @@ export function App() {
 
       await loadProjectRoomState(
         nextRoom,
-        messageLimitByWorkspace[nextWorkspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
+        messagePageSizeByWorkspace[nextWorkspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
         shouldResetActiveState ? 'initial' : 'refresh',
       )
     } catch (error) {
@@ -613,13 +683,13 @@ export function App() {
     setLiveWorkflowEvents([])
     setState(createEmptyWorkbenchState(overview.agents))
     setMessagePage({
-      limit: messageLimitByWorkspace[workspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
+      limit: messagePageSizeByWorkspace[workspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
       total: 0,
       hasMore: false,
     })
     await loadProjectRoomState(
       nextRoom,
-      messageLimitByWorkspace[workspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
+      messagePageSizeByWorkspace[workspaceId] ?? INITIAL_MESSAGE_PAGE_LIMIT,
       'select',
     )
   }
@@ -931,17 +1001,21 @@ export function App() {
   }
 
   /**
-   * Loads one older message page for the active workspace by widening the recent message window.
+   * Loads one older message page for the active workspace with the backend cursor.
    * Input: none.
-   * Output: refreshes only the current workspace state with a larger message page.
+   * Output: prepends the fetched history page into the current workspace state.
    */
   async function handleLoadOlderMessages() {
-    if (!activeRoom || loadingOlderMessages || workspaceLoading || !messagePage.hasMore) {
+    if (!activeRoom || loadingOlderMessages || workspaceLoading || !messagePage.hasMore || !messagePage.nextCursor) {
       return
     }
 
-    const nextLimit = (messageLimitByWorkspace[activeRoom.id] ?? messagePage.limit ?? INITIAL_MESSAGE_PAGE_LIMIT) + MESSAGE_PAGE_STEP
-    await loadProjectRoomState(activeRoom, nextLimit, 'older')
+    await loadProjectRoomState(
+      activeRoom,
+      messagePageSizeByWorkspace[activeRoom.id] ?? MESSAGE_PAGE_STEP,
+      'older',
+      messagePage.nextCursor,
+    )
   }
 
   /**
@@ -994,7 +1068,7 @@ export function App() {
       }
       await loadProjectRoomState(
         activeRoom,
-        messageLimitByWorkspace[activeRoom.id] ?? messagePage.limit ?? INITIAL_MESSAGE_PAGE_LIMIT,
+        messagePageSizeByWorkspace[activeRoom.id] ?? messagePage.limit ?? INITIAL_MESSAGE_PAGE_LIMIT,
         'refresh',
       )
     } catch (error) {

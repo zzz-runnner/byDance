@@ -244,7 +244,8 @@ DELETE /api/projects/:projectId/archive
 ### 2.5 项目状态 / 对话主数据
 
 ```text
-GET /api/projects/:projectId/state?messageLimit=80
+GET /api/projects/:projectId/state?messagePageSize=80
+GET /api/projects/:projectId/state?messagePageSize=80&messageCursor=eyJvZmZzZXQiOjQwfQ
 ```
 
 路径参数：
@@ -257,7 +258,9 @@ GET /api/projects/:projectId/state?messageLimit=80
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| `messageLimit` | `number` | 可选 | `40` | 最近消息数量限制，最小 1，最大按 200 截断。 |
+| `messagePageSize` | `number` | 可选 | `40` | 单页消息数量，最小 1，最大按 200 截断。 |
+| `messageCursor` | `string` | 可选 | 无 | 更早消息页游标；首次拉取不传，后续传上一次响应里的 `messagePage.nextCursor`。 |
+| `messageLimit` | `number` | 可选 | `40` | 兼容旧参数，等价于不传 cursor 时的 `messagePageSize`。 |
 
 主要响应字段：
 
@@ -266,7 +269,7 @@ GET /api/projects/:projectId/state?messageLimit=80
 | `state` | `object` | 必填 | 当前项目过滤后的 runtime 状态。 |
 | `state.workspaces` | `Workspace[]` | 必填 | 当前工作区列表，通常只有一个元素。 |
 | `state.conversations` | `Conversation[]` | 必填 | 当前工作区会话列表，可为空数组。 |
-| `state.messages` | `Message[]` | 必填 | 最近消息列表，可为空数组。 |
+| `state.messages` | `Message[]` | 必填 | 当前消息页，按时间正序排列，可为空数组。 |
 | `state.agents` | `Agent[]` | 必填 | 当前工作区可见 Agent 列表，可为空数组。 |
 | `state.workspaceAgentMembers` | `object[]` | 必填 | 工作区 Agent 成员覆盖信息，可为空数组。 |
 | `state.agentSessions` | `object[]` | 必填 | Agent 会话列表，可为空数组。 |
@@ -279,9 +282,13 @@ GET /api/projects/:projectId/state?messageLimit=80
 | `state.workflowEvents` | `object[]` | 必填 | 过程事件列表，可为空数组。 |
 | `state.diagnosticLogs` | `object[]` | 必填 | 诊断日志，可为空数组。 |
 | `messagePage` | `object` | 必填 | 消息分页摘要。 |
-| `messagePage.limit` | `number` | 必填 | 本次使用的消息数量限制。 |
+| `messagePage.limit` | `number` | 必填 | 本次使用的单页消息数量。 |
 | `messagePage.total` | `number` | 必填 | 当前项目全部消息数量。 |
 | `messagePage.hasMore` | `boolean` | 必填 | 是否还有更早消息。 |
+| `messagePage.nextCursor` | `string` | 可选 | 下一页更早消息游标；`hasMore=false` 时通常为空。 |
+| `messagePage.cursor` | `string` | 可选 | 本次请求使用的游标，首次页为空。 |
+| `messagePage.offset` | `number` | 可选 | 当前页第一条消息在完整时间线中的偏移。 |
+| `messagePage.endOffset` | `number` | 可选 | 当前页后一位偏移。 |
 
 用途：
 
@@ -306,8 +313,9 @@ GET /api/projects/:projectId/state?messageLimit=80
 
 注意：
 
-- 当前只支持最近消息数量限制，最大 200。
-- 暂无消息游标分页；如果 App 要完整历史滚动，后续需要补充移动端消息分页接口。
+- 首次进入会话不传 `messageCursor`，接口返回最新一页消息。
+- 上拉加载历史时继续请求同一接口，并传 `messageCursor=messagePage.nextCursor`。
+- 每页最大 200；旧的 `messageLimit` 仍保留兼容，但新接入建议使用 `messagePageSize`。
 - `state.messages[]` 和 `state.artifacts[]` 会包含业务后端合成的本地交付消息和 artifact。
 
 ### 2.6 发送消息和流式回复

@@ -237,6 +237,8 @@ export class ProjectsService {
     const state = await this.agentHub.fetchState()
     return selectProjectState(state, project, {
       messageLimit: query.messageLimit,
+      messagePageSize: query.messagePageSize,
+      messageCursor: query.messageCursor,
     })
   }
 

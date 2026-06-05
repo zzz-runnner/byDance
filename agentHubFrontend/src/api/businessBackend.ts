@@ -65,6 +65,12 @@ type FetchWorkbenchOverviewInput = {
   sortDirection?: SortDirection
 }
 
+export type FetchProjectStateInput = {
+  messagePageSize?: number
+  messageCursor?: string
+  messageLimit?: number
+}
+
 export function backendUrl(path: string): string {
   return path.startsWith('/') ? path : `/${path}`
 }
@@ -341,16 +347,24 @@ export async function updateBusinessWorkspaceMetadata(
 
 /**
  * Loads one paged project state from the business backend.
- * Input: project id and requested recent-message limit.
+ * Input: project id plus requested message page size and optional older-page cursor.
  * Output: active-room state plus pagination metadata.
  */
 export async function fetchBusinessProjectState(
   projectId: string,
-  messageLimit = 40,
+  input: number | FetchProjectStateInput = 40,
 ): Promise<ProjectStateEnvelope> {
-  const query = new URLSearchParams({
-    messageLimit: String(messageLimit),
-  })
+  const normalized = typeof input === 'number' ? { messagePageSize: input } : input
+  const query = new URLSearchParams()
+  if (normalized.messagePageSize) {
+    query.set('messagePageSize', String(normalized.messagePageSize))
+  }
+  if (normalized.messageCursor) {
+    query.set('messageCursor', normalized.messageCursor)
+  }
+  if (normalized.messageLimit) {
+    query.set('messageLimit', String(normalized.messageLimit))
+  }
   const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/state?${query.toString()}`))
   const payload = await readJson<ProjectStateEnvelopeResponse>(response, 'Load business project state')
   return extractProjectStateEnvelope(payload)
