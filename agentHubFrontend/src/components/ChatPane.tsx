@@ -26,6 +26,7 @@ import {
   formatTime,
   workspaceRoomKindLabel,
 } from '../appModel'
+import { backendAssetUrl } from '../api/businessBackend'
 import {
   buildChatTimeline,
   type ChatProcessTone,
@@ -285,7 +286,7 @@ function buildTurnResultBundle(artifacts: ChatTurnArtifact[]): TurnResultBundle 
     kind: artifact.kind,
     title: artifact.title,
     summary: artifact.summary,
-    url: artifact.url,
+    url: backendAssetUrl(artifact.url),
     verdict: artifact.verdict,
     issues: artifact.issues,
     detailText: artifact.detailText,
@@ -302,7 +303,7 @@ function buildTurnResultBundle(artifacts: ChatTurnArtifact[]): TurnResultBundle 
     preview: latestPreview?.url ? {
       title: latestPreview.title,
       summary: latestPreview.summary,
-      url: latestPreview.url,
+      url: backendAssetUrl(latestPreview.url) ?? latestPreview.url,
     } : undefined,
     diff: latestDiff ? {
       changeSetId: latestDiff.id,
@@ -316,8 +317,8 @@ function buildTurnResultBundle(artifacts: ChatTurnArtifact[]): TurnResultBundle 
       summary: latestReview.summary,
       issues: latestReview.issues,
     } : undefined,
-    sourceArchiveUrl: latestZip?.url,
-    deploymentUrl: latestDeploy?.url,
+    sourceArchiveUrl: backendAssetUrl(latestZip?.url),
+    deploymentUrl: backendAssetUrl(latestDeploy?.url),
   }
 
   return {

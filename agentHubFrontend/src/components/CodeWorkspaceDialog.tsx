@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import {
   applyBusinessProjectChangeSet,
+  backendAssetUrl,
   buildBusinessProjectVersion,
   createBusinessProjectVersion,
   deployBusinessProjectVersion,
@@ -497,7 +498,7 @@ function createExternalPreviewTarget(
 
   return {
     path,
-    url,
+    url: backendAssetUrl(url) ?? url,
   }
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, LoaderCircle } from 'lucide-react'
+import { backendAssetUrl } from '../api/businessBackend'
 import type { WorkspaceDocumentPreview } from '../types'
 
 type DocumentPreviewPaneProps = {
@@ -14,6 +15,7 @@ type DocumentPreviewPaneProps = {
 export function DocumentPreviewPane({ preview }: DocumentPreviewPaneProps) {
   const docxContainerRef = useRef<HTMLDivElement | null>(null)
   const pptxContainerRef = useRef<HTMLDivElement | null>(null)
+  const sourceUrl = backendAssetUrl(preview.sourceUrl) ?? preview.sourceUrl
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>(
     preview.kind === 'pdf' ? 'ready' : 'loading',
   )
@@ -39,7 +41,7 @@ export function DocumentPreviewPane({ preview }: DocumentPreviewPaneProps) {
 
     async function loadPreview(target: HTMLDivElement): Promise<void> {
       try {
-        const response = await fetch(preview.sourceUrl)
+        const response = await fetch(sourceUrl)
         if (!response.ok) {
           throw new Error(`预览文件加载失败：${response.status}`)
         }
@@ -92,14 +94,14 @@ export function DocumentPreviewPane({ preview }: DocumentPreviewPaneProps) {
       viewer?.destroy()
       container.innerHTML = ''
     }
-  }, [preview.kind, preview.sourceUrl])
+  }, [preview.kind, sourceUrl])
 
   if (preview.kind === 'pdf') {
     return (
       <div className="code-document-preview">
         <iframe
           className="code-document-preview__frame"
-          src={preview.sourceUrl}
+          src={sourceUrl}
           title={preview.path}
         />
       </div>
