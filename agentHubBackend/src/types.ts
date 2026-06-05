@@ -27,6 +27,10 @@ export interface ProjectStatePage {
   limit: number
   total: number
   hasMore: boolean
+  cursor?: string
+  nextCursor?: string
+  offset?: number
+  endOffset?: number
 }
 
 export interface WorkspaceSignal {

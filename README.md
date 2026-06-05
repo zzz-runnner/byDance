@@ -106,7 +106,7 @@ The backend still keeps the Nest business modules for:
 - The left workspace rail uses server-backed paging through `/api/workbench`.
 - The left workspace rail also supports backend-backed search, status filtering, sorting, pinning, and archiving.
 - The right chat pane loads only the active workspace state through `/api/projects/:projectId/state`.
-- Older messages load incrementally through the `messageLimit` window instead of loading the full conversation at startup.
+- Older messages load incrementally through `messagePageSize + messageCursor` instead of loading the full conversation at startup.
 - The chat surface renders one grouped turn:
   - user message
   - process block
@@ -152,7 +152,7 @@ The backend still keeps the Nest business modules for:
   - older historical messages without `turnId` fall back to the nearest visible unmatched user turn
   - the frontend no longer groups turns by array index
 - Project state recovery now keeps message and event windows aligned:
-  - `/api/projects/:projectId/state` still returns a recent message window
+  - `/api/projects/:projectId/state` returns the latest message page first and exposes `messagePage.nextCursor` for older history
   - returned `workflowEvents` are now restricted to the visible message window turns instead of full-history replay
 - The chat surface no longer fabricates routing placeholder bubbles such as "main brain is deciding who should reply".
 - Waiting placeholders are now limited to turns with a real streaming reply, so completed history no longer shows empty running cards after refresh.
