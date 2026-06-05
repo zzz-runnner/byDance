@@ -117,6 +117,9 @@ The backend still keeps the Nest business modules for:
 - Frontend artifact affordances now stay capability-aware:
   - entries without a real URL no longer advertise a fake external page
   - preview and delivery open actions only appear when a real target exists
+- Workspace bootstrap now prefers real text files and document-preview assets correctly:
+  - `.docx/.pptx/.pdf` no longer get misclassified as editor text files
+  - one bad initial file preload no longer kills the whole workspace dialog
 - When one turn contains multiple repair attempts, the main chat flow now collapses them into one result entry instead of repeating similar preview and diff cards.
 - Quote replies and code selections are structured inputs, not plain text hacks.
 - AI output, process summaries, and artifact text use the unified Markdown renderer.
@@ -157,8 +160,8 @@ The backend still keeps the Nest business modules for:
 - The code dialog diff tab can now apply the current turn change-set directly through `/api/projects/:projectId/change-sets/:changeSetId/apply`.
 - The code dialog document preview now supports `pdf`, `docx`, and `pptx`:
   - PDF previews keep the original file URL for iframe display
-  - DOCX previews extract paragraph text from `word/document.xml`
-  - PPTX previews extract slide text from `ppt/slides/slide*.xml`
+  - DOCX previews render directly in the browser through `docx-preview`
+  - PPTX previews render directly in the browser through `@aiden0z/pptx-renderer`
 - Lightweight child-agent replies now use each agent's configured provider and model instead of always falling back to the global main-brain model path.
 - Windows-created Office archives are now normalized during local preview loading, so `Compress-Archive` generated `.docx` and `.pptx` files preview correctly.
 
@@ -323,11 +326,38 @@ Focused feature verification also passed on 2026-06-03:
   - this path now uses a temporary patch file on Windows so `already_applied` detection works reliably on larger change-sets
 - Document preview passed through the live backend:
   - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.pdf` returned a PDF preview payload with a runtime `sourceUrl`
-  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.docx` returned `kind: docx`, two extracted sections, and combined text content
-  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.pptx` returned `kind: pptx`, one extracted slide section, and combined text content
+  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.docx` returned `kind: docx` with a runtime `sourceUrl` for browser-side rendering
+  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.pptx` returned `kind: pptx` with a runtime `sourceUrl` for browser-side rendering
   - all temporary preview fixtures were removed after validation, and the validation workspace diff returned empty again
   - final visible reply sender was `product-manager`
   - SSE stream completed and state reload reflected the persisted reply
+
+Additional custom-agent interaction verification passed on 2026-06-04 through the live services already running on `127.0.0.1:8787` and `127.0.0.1:8790`:
+
+- Created one fresh validation project:
+  - project: `proj-f114d6cb-48b5-41e1-bad3-931a6171efe1`
+  - workspace: `ws-dc027d8e-a489-4471-8bd2-bdaf22b9071b`
+- Created one workspace custom agent:
+  - `ux-copy-agent-verify`
+  - display name: `UX Copy Agent`
+  - provider: `mock`
+- Frontend create-agent dialog regression was fixed:
+  - clicking `New Agent` no longer exits create mode immediately
+  - the dialog now stays in create mode until the user selects an existing agent or finishes creation
+- Real explicit mention routing passed:
+  - `@ux-copy-agent-verify ...`
+  - persisted reply sender id stayed `ux-copy-agent-verify`
+  - `routing_finished.speakerAgentId` stayed `ux-copy-agent-verify`
+- Real custom-agent execution passed:
+  - `@ux-copy-agent-verify /run Return exactly three short login empty-state lines and nothing else.`
+  - persisted `agentRun.id = run-6d39db67-ffcf-4796-a451-88ab8ca98e2e`
+  - persisted `agentRun.provider = mock`
+  - persisted `agentRun.status = success`
+  - persisted handoff target stayed `ux-copy-agent-verify`
+- Real dynamic visible-speaker routing was also rechecked:
+  - English UI-copy request without `@mention` routed to `ux-copy-agent-verify`
+  - Chinese planning-style UI-copy request without `@mention` routed to `product-manager`
+  - current behavior therefore supports automatic custom-agent selection in some chat turns, but it is still sensitive to task-stage detection and routing-profile match quality
 
 Portable delivery preview smoke also passed on 2026-06-02 through one isolated backend instance on `127.0.0.1:8791`:
 

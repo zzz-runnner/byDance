@@ -188,13 +188,16 @@ export function AgentManagementDialog({
     if (!open) {
       return
     }
+    if (creating) {
+      return
+    }
     const firstAgent = sortedAgents[0]
     if (!selectedAgentId && firstAgent) {
       setSelectedAgentId(firstAgent.id)
       setDraft(draftFromAgent(firstAgent))
       setCreating(false)
     }
-  }, [open, selectedAgentId, sortedAgents])
+  }, [creating, open, selectedAgentId, sortedAgents])
 
   useEffect(() => {
     if (!open || creating || !selectedAgentId) {

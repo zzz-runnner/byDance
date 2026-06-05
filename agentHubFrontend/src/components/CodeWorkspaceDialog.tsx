@@ -53,6 +53,7 @@ import type {
 import { GlassPanel } from './GlassPanel'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { StatusPill } from './StatusPill'
+import { DocumentPreviewPane } from './DocumentPreviewPane'
 
 type CodeWorkspaceDialogProps = {
   open: boolean
@@ -193,7 +194,7 @@ type FileTreeNodeProps = {
 
 /**
  * Returns the first text-like file path from a nested workspace file tree.
- * Input: nested file nodes. Output: first file path or undefined.
+ * Input: nested file nodes. Output: first text file path or undefined.
  */
 function firstTextFilePath(nodes: WorkspaceFileNode[]): string | undefined {
   for (const node of nodes) {
@@ -220,6 +221,33 @@ function isDocumentPreviewableFile(filePath: string | undefined): boolean {
     return false
   }
   return /\.(pdf|docx|pptx)$/i.test(filePath)
+}
+
+/**
+ * Returns the first document-previewable file path from a nested workspace tree.
+ * Input: nested file nodes. Output: first previewable document path or undefined.
+ */
+function firstDocumentPreviewableFilePath(nodes: WorkspaceFileNode[]): string | undefined {
+  for (const node of nodes) {
+    if (node.kind === 'file' && isDocumentPreviewableFile(node.path)) {
+      return node.path
+    }
+    if (node.kind === 'directory' && node.children?.length) {
+      const nestedPath = firstDocumentPreviewableFilePath(node.children)
+      if (nestedPath) {
+        return nestedPath
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Chooses the first safe browser target for the workspace dialog.
+ * Input: nested file nodes. Output: preferred text file, or a previewable document fallback.
+ */
+function firstBrowsableFilePath(nodes: WorkspaceFileNode[]): string | undefined {
+  return firstTextFilePath(nodes) ?? firstDocumentPreviewableFilePath(nodes)
 }
 
 /**
@@ -999,6 +1027,20 @@ export function CodeWorkspaceDialog({
   }
 
   /**
+   * Prefetches the first selected workspace asset without failing the whole dialog bootstrap.
+   * Input: project id and the initial active file path.
+   * Output: local file or preview cache warmed when possible.
+   */
+  async function prefetchInitialActiveAsset(currentProjectId: string, filePath: string): Promise<void> {
+    if (isDocumentPreviewableFile(filePath)) {
+      await loadDocumentPreviewIntoCache(currentProjectId, filePath)
+      return
+    }
+
+    await loadFileContentIntoCache(currentProjectId, filePath)
+  }
+
+  /**
    * Applies one preview capability payload while preserving the best available active target.
    * Input: next preview capability and an optional preferred target path.
    * Output: preview capability, target selection, and iframe retry state updated.
@@ -1174,7 +1216,7 @@ export function CodeWorkspaceDialog({
       ])
 
       const nextTree = treeSnapshot.entries
-      const firstFile = firstTextFilePath(nextTree)
+      const firstFile = firstBrowsableFilePath(nextTree)
       const nextActiveFilePath =
         preferredActiveFilePath && treeContainsPath(nextTree, preferredActiveFilePath)
           ? preferredActiveFilePath
@@ -1190,7 +1232,7 @@ export function CodeWorkspaceDialog({
         ...expandAncestors(nextActiveFilePath),
       }))
       if (options?.prefetchInitialFileContent && nextActiveFilePath) {
-        await loadFileContentIntoCache(projectId, nextActiveFilePath)
+        await prefetchInitialActiveAsset(projectId, nextActiveFilePath).catch(() => undefined)
       }
       setActiveFilePath(nextActiveFilePath)
       return {
@@ -2405,29 +2447,8 @@ export function CodeWorkspaceDialog({
                     </div>
                   ) : activeFileIsDocumentPreview && activeDocumentPreviewEntry?.error ? (
                     <div className="code-editor-empty code-editor-empty--error">{activeDocumentPreviewEntry.error}</div>
-                  ) : activeDocumentPreview?.kind === 'pdf' ? (
-                    <div className="code-document-preview">
-                      <iframe
-                        className="code-document-preview__frame"
-                        src={activeDocumentPreview.sourceUrl}
-                        title={activeDocumentPreview.path}
-                      />
-                    </div>
                   ) : activeDocumentPreview ? (
-                    <article className="code-document-preview code-document-preview--text">
-                      <header className="code-document-preview__header">
-                        <strong>{activeDocumentPreview.name}</strong>
-                        <span>{activeDocumentPreview.summary}</span>
-                      </header>
-                      <div className="code-document-preview__body">
-                        {(activeDocumentPreview.sections ?? []).map(section => (
-                          <section className="code-document-preview__section" key={`${activeDocumentPreview.path}-${section.title}`}>
-                            <h4>{section.title}</h4>
-                            <p>{section.content}</p>
-                          </section>
-                        ))}
-                      </div>
-                    </article>
+                    <DocumentPreviewPane preview={activeDocumentPreview} />
                   ) : activeFileContent && canMountEditor ? (
                     <Editor
                       height="100%"
