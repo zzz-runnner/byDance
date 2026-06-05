@@ -1806,7 +1806,7 @@ function ChatComposer({
     disabledReason ||
     (room?.kind === 'direct'
       ? `发送给 ${targetAgentName ?? room.targetAgentId ?? 'Agent'}，例如：/run 检查当前产物并给出结论`
-      : '给群聊工作区发送任务，例如：@main 先拆分需求，或 @engineer 实现页面并让 @reviewer 验收')
+      : '给群聊工作区发送任务，例如：@engineer 实现页面。显式 @ 某个 Agent 时，本轮只会由该 Agent 执行并回复。')
   const filteredMentionOptions =
     room?.kind === 'group' && mentionMatch
       ? mentionOptions.filter(option => {

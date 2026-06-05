@@ -428,6 +428,7 @@ export const MainBrainTurnSchema = z.object({
   targetAgents: z.array(z.string()).default([]),
   speakerAgentId: z.string().optional(),
   finalizationMode: TurnFinalizationModeSchema.optional(),
+  lockedAgentId: z.string().optional(),
   internalNote: z.string().optional(),
 })
 export type MainBrainTurn = z.infer<typeof MainBrainTurnSchema>
@@ -514,6 +515,7 @@ export const RoutingFinishedEventSchema = WorkflowEventBaseSchema.extend({
   error: z.string().optional(),
   speakerAgentId: z.string().optional(),
   finalizationMode: TurnFinalizationModeSchema.optional(),
+  lockedAgentId: z.string().optional(),
   taskStage: WorkflowTaskStageSchema.optional(),
   executionReadiness: ExecutionReadinessSchema.optional(),
   needsUserConfirmation: z.boolean().optional(),

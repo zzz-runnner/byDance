@@ -213,7 +213,7 @@ function parseRoutingDecision(content: string, agents: AgentDefinition[], route?
  * Input: routing request. Output: whether deterministic routing should run immediately.
  */
 function shouldBypassPlanner(input: PlannerInput): boolean {
-  return Boolean(input.targetAgentId) || input.conversation.type === 'direct'
+  return Boolean(input.lockedAgentId || input.targetAgentId) || input.conversation.type === 'direct'
 }
 
 /**
