@@ -3,6 +3,7 @@ import {
   Animated,
   Easing,
   ImageBackground,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -16,6 +17,7 @@ import {
 } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { LinearGradient } from 'expo-linear-gradient'
+import * as Clipboard from 'expo-clipboard'
 import { MaterialCommunityIcons } from '@expo/vector-icons'
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import Fuse from 'fuse.js'
@@ -23,6 +25,36 @@ import { AgentGlyph } from './src/components/AgentGlyph'
 import { GlassCard } from './src/components/GlassCard'
 import { Pill } from './src/components/Pill'
 import { createMobileScale, type LayoutTier } from './src/styles/mobileScale'
+import {
+  BUSINESS_API_BASE_URL,
+  archiveWorkspace,
+  createBusinessWorkspace,
+  fetchBusinessHealth,
+  fetchProjectState,
+  fetchWorkbenchOverview,
+  pinWorkspace,
+  streamProjectMessage,
+  unarchiveWorkspace,
+  unpinWorkspace,
+  updateWorkspaceMetadata,
+  PROJECT_WORKFLOW_STREAM_EVENT_NAMES,
+  type BusinessProject,
+  type CreateWorkspaceInput,
+  type ProjectArtifact,
+  type ProjectAgent,
+  type ProjectMessage,
+  type ProjectMessageStream,
+  type ProjectStateEnvelope,
+  type ProjectStreamEvent,
+  type ProjectWorkflowEvent,
+  type ProjectWorkflowStreamEvent,
+  type StreamProjectMessageInput,
+  type SortDirection,
+  type WorkbenchOverview,
+  type WorkbenchRoom,
+  type WorkspaceListStatus,
+  type WorkspaceSortField,
+} from './src/api/businessBackend'
 import {
   agents,
   artifacts,
@@ -41,12 +73,593 @@ const homeIcon = require('./assets/home/icon.png')
 
 type TabKey = 'workbench' | 'chat' | 'agents'
 type MobileScale = ReturnType<typeof createMobileScale>
+type BackendStatus = 'checking' | 'ready' | 'unavailable'
+type WorkbenchPageState = {
+  hasMore: boolean
+  nextCursor?: string
+  total: number
+}
+type WorkbenchFilterState = {
+  status: WorkspaceListStatus
+  sortBy: WorkspaceSortField
+  sortDirection: SortDirection
+}
+type BackendRetryDialogState = {
+  visible: boolean
+  title: string
+  message: string
+  detail?: string
+  retrying?: boolean
+  onRetry: () => void
+}
+type BackendResponseDialogState = {
+  visible: boolean
+  title: string
+  body: string
+}
+type ChatProcessStep = {
+  id: string
+  icon: IconName
+  title: string
+  summary: string
+  time: string
+  tone: 'done' | 'running' | 'waiting' | 'failed'
+}
+type ChatMessageView = ChatMessage & {
+  createdAt?: string
+  turnId?: string
+}
+type ChatProcessGroup = {
+  id: string
+  turnId: string
+  steps: ChatProcessStep[]
+  startedAt?: string
+  updatedAt?: string
+  status: 'done' | 'running' | 'waiting' | 'failed'
+  local?: boolean
+}
+type ChatTimelineItem =
+  | { type: 'message'; id: string; message: ChatMessageView }
+  | { type: 'process'; id: string; group: ChatProcessGroup }
+type ChatStateView = {
+  messages: ChatMessageView[]
+  processGroups: ChatProcessGroup[]
+  timelineItems: ChatTimelineItem[]
+  artifacts: ArtifactView[]
+  agents: ProjectAgent[]
+  conversationId?: string
+  messagePage?: ProjectStateEnvelope['messagePage']
+}
+type FailedChatSend = {
+  content: string
+  agentId?: string
+}
+const PROCESS_PREVIEW_STEP_COUNT = 3
+const STREAM_WORKFLOW_EVENT_NAME_SET = new Set<string>(PROJECT_WORKFLOW_STREAM_EVENT_NAMES)
+const IOS_KEYBOARD_COMPOSER_GAP = 8
+const CHAT_COMPOSER_VERTICAL_PADDING = 6
 
 const tabs: { key: TabKey; label: string; icon: IconName }[] = [
   { key: 'workbench', label: '工作台', icon: 'view-dashboard-outline' },
   { key: 'chat', label: '对话', icon: 'message-processing-outline' },
   { key: 'agents', label: 'Agent', icon: 'account' },
 ]
+
+const WORKBENCH_PAGE_SIZE = 10
+const PINNED_WORKBENCH_PAGE_SIZE = 50
+const DEFAULT_WORKBENCH_FILTERS: WorkbenchFilterState = {
+  status: 'active',
+  sortBy: 'updatedAt',
+  sortDirection: 'desc',
+}
+
+function formatActivityTime(value?: string): string {
+  if (!value) return '刚刚'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+
+  const now = Date.now()
+  const diff = now - date.getTime()
+  if (diff < 60 * 1000) return '刚刚'
+  if (diff < 24 * 60 * 60 * 1000) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+  }
+  if (diff < 48 * 60 * 60 * 1000) return '昨天'
+  return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+}
+
+function formatMessageTime(value?: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+function compactText(value?: string, fallback = '暂无内容'): string {
+  const text = value?.replace(/\s+/g, ' ').trim()
+  if (!text) return fallback
+  return text.length > 120 ? `${text.slice(0, 120)}...` : text
+}
+
+function mapRuntimeStatus(status?: string): Workspace['status'] {
+  if (status === 'failed' || status === 'error') return 'failed'
+  if (status === 'running' || status === 'busy') return 'running'
+  return 'ready'
+}
+
+function getWorkspaceKey(workspace: Workspace): string {
+  return workspace.projectId || workspace.id
+}
+
+function mapWorkbenchRoomToWorkspace(room: WorkbenchRoom): Workspace {
+  const projectId = room.workspace.projectId
+  return {
+    id: projectId || room.workspace.id || room.id,
+    projectId,
+    name: room.workspace.name || room.title || '未命名工作区',
+    goal: room.workspace.goal || room.subtitle || '暂无目标描述',
+    kind: room.kind,
+    type: room.workspace.workspaceType ?? (room.kind === 'direct' ? 'chat' : 'dev'),
+    status: mapRuntimeStatus(room.workspace.runtimeStatus),
+    pinned: Boolean(room.workspace.pinnedAt),
+    archived: Boolean(room.workspace.archivedAt),
+    agents: room.participantAgentIds ?? [],
+    runningAgents: room.signal?.runningAgents ?? 0,
+    artifactCount: room.signal?.artifactCount ?? 0,
+    messageCount: room.signal?.messageCount ?? 0,
+    latestEventLabel: room.signal?.latestEventLabel ?? '暂无新事件',
+    updatedAt: formatActivityTime(room.lastActivityAt ?? room.workspace.updatedAt),
+  }
+}
+
+function mapProjectMessageToChatMessage(message: ProjectMessage): ChatMessageView {
+  return {
+    id: message.id,
+    sender: message.senderType === 'user' ? 'user' : 'agent',
+    agentId: message.senderType === 'user' ? undefined : message.senderId ?? 'orchestrator',
+    text: message.content ?? '',
+    time: formatMessageTime(message.createdAt),
+    createdAt: message.createdAt,
+    turnId: message.turnId,
+  }
+}
+
+function mapProjectArtifactToArtifactView(artifact: ProjectArtifact): ArtifactView {
+  const type = artifact.type === 'preview' || artifact.type === 'diff' || artifact.type === 'review' || artifact.type === 'text' ? artifact.type : 'text'
+  return {
+    id: artifact.id,
+    type,
+    title: artifact.title ?? '未命名产物',
+    summary: compactText(artifact.summary ?? artifact.content, '暂无摘要'),
+    metric: artifact.createdByAgentId ?? artifact.type ?? 'artifact',
+    icon: type === 'preview' ? 'cellphone-screenshot' : type === 'diff' ? 'source-branch' : type === 'review' ? 'shield-check-outline' : 'file-document-outline',
+    status: 'ready',
+    statusLabel: '可查看',
+  }
+}
+
+function getProjectAgentColor(agent?: ProjectAgent): string | undefined {
+  if (agent?.modelProvider === 'codex') return '#10b981'
+  if (agent?.modelProvider === 'claude') return '#7c3aed'
+  if (agent?.modelProvider === 'mock') return '#64748b'
+  return undefined
+}
+
+function findProjectAgent(agentList: ProjectAgent[], agentId?: string): ProjectAgent | undefined {
+  if (!agentId) return undefined
+  return agentList.find(agent => agent.id === agentId)
+}
+
+function getVisibleChatAgents(workspace: Workspace, agentList: ProjectAgent[]): ProjectAgent[] {
+  if (agentList.length === 0) {
+    return workspace.agents.map(id => ({ id }))
+  }
+
+  const participantIds = new Set(workspace.agents)
+  const matchingAgents = agentList.filter(agent => participantIds.size === 0 || participantIds.has(agent.id))
+
+  return matchingAgents.length > 0 ? matchingAgents : agentList
+}
+
+function getAgentMentionHandle(agent: ProjectAgent): string {
+  return agent.id.trim()
+}
+
+function findActiveMentionToken(text: string, cursor: number): { start: number; end: number; query: string } | null {
+  const boundedCursor = Math.max(0, Math.min(cursor, text.length))
+  const beforeCursor = text.slice(0, boundedCursor)
+  const match = /(^|\s)@([A-Za-z0-9._-]*)$/.exec(beforeCursor)
+  if (!match) return null
+
+  return {
+    start: beforeCursor.length - match[0].length + match[1].length,
+    end: boundedCursor,
+    query: match[2].toLowerCase(),
+  }
+}
+
+function projectAgentMatchesMentionQuery(agent: ProjectAgent, query: string): boolean {
+  if (!query) return true
+  return [agent.id, agent.name, agent.role, agent.description, agent.whenToUse, agent.modelProvider]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .some(value => value.toLowerCase().includes(query))
+}
+
+function findMentionedProjectAgentId(content: string, agentList: ProjectAgent[]): string | undefined {
+  const mentionTokens = content
+    .split(/\s+/)
+    .map(token => token.replace(/^[([{]+|[)\]},.!?;:]+$/g, '').toLowerCase())
+
+  return agentList.find(agent => mentionTokens.includes(`@${getAgentMentionHandle(agent).toLowerCase()}`))?.id
+}
+
+function mapWorkflowEventToStep(event: ProjectWorkflowEvent): ChatProcessStep | null {
+  const detail = event.event
+  if (!detail?.type) return null
+
+  const type = detail.type
+  const status = detail.status
+  const failed = status === 'failed' || status === 'error' || type === 'assistant_message_error' || type === 'model_call_failed'
+  const warning = status === 'partial' || detail.verdict === 'partial'
+  const completed =
+    status === 'completed' ||
+    status === 'success' ||
+    type === 'workflow_finished' ||
+    type === 'agent_finished' ||
+    type === 'assistant_message_finished' ||
+    type === 'model_call_finished' ||
+    type === 'context_finished' ||
+    type === 'agent_output_finished' ||
+    type === 'artifact_created' ||
+    type === 'change_set_created' ||
+    type === 'preview_ready' ||
+    type === 'zip_ready' ||
+    type === 'synthesis_finished'
+  const agentName = detail.agentName ?? detail.agentId ?? 'Agent'
+  const provider = detail.provider ?? '模型'
+  const titleByType: Record<string, string> = {
+    turn_started: '本轮开始',
+    workflow_received: '已接收本轮消息',
+    routing_started: '主脑正在判断由谁处理',
+    routing_finished: '路由判断完成',
+    task_stage_updated: `当前阶段：${detail.taskStage ?? '执行中'}`,
+    context_started: '正在整理上下文',
+    context_finished: '上下文整理完成',
+    model_call_started: `${detail.agentName ?? 'Agent'} 正在调用 ${provider}`,
+    model_call_finished: `模型调用完成：${provider}`,
+    model_call_failed: `模型调用失败：${provider}`,
+    handoff_created: '任务已分配',
+    handoff_updated: `${agentName} 状态更新`,
+    agent_task_dispatched: `已派发给 ${agentName}`,
+    agent_started: `${agentName} 已开始执行`,
+    agent_progress: `${agentName} 执行进展`,
+    agent_output_started: `${agentName} 开始输出`,
+    agent_stdout_delta: `${agentName} 执行输出`,
+    agent_stderr_delta: `${agentName} 异常输出`,
+    agent_output_finished: `${agentName} 输出结束`,
+    agent_finished: `${agentName}${status === 'failed' ? '执行失败' : status === 'partial' ? '部分完成' : '执行完成'}`,
+    delivery_validation_finished: `交付校验：${status ?? '完成'}`,
+    review_verdict: `审查结论：${detail.verdict ?? '完成'}`,
+    artifact_created: `已生成产物：${detail.title ?? detail.artifactType ?? '产物'}`,
+    change_set_created: '已生成代码 Diff',
+    preview_ready: '已生成本地预览',
+    zip_ready: '已打包源码',
+    agent_session_started: `${agentName} 会话开始`,
+    agent_session_finished: `${agentName} 会话完成`,
+    assistant_message_started: `${detail.senderName ?? detail.senderId ?? 'Agent'} 正在输出结果`,
+    assistant_message_finished: '结果输出完成',
+    assistant_message_error: '结果输出失败',
+    synthesis_started: '主脑正在汇总多 Agent 结果',
+    synthesis_finished: '主脑已完成结果汇总',
+    workflow_finished: '本轮已完成',
+  }
+  const detailParts = [
+    detail.scope ? `范围：${detail.scope}` : undefined,
+    detail.tokenEstimate ? `约 ${detail.tokenEstimate} tokens` : undefined,
+    detail.contextTokens ? `上下文：${detail.contextTokens} tokens` : undefined,
+    detail.elapsedMs ? `${Math.round(detail.elapsedMs)}ms` : undefined,
+    detail.contentLength ? `内容长度：${detail.contentLength} chars` : undefined,
+    detail.fileCount ? `${detail.fileCount} files` : undefined,
+  ]
+  const summary =
+    detail.summary ??
+    detail.task ??
+    detail.reason ??
+    detail.message ??
+    detail.error ??
+    detail.previewUrl ??
+    detail.zipUrl ??
+    detailParts.filter(Boolean).join(' | ') ??
+    status ??
+    detail.verdict
+
+  const stepId =
+    detail.messageId && (type === 'assistant_message_started' || type === 'assistant_message_finished' || type === 'assistant_message_error')
+      ? `reply-${detail.messageId}`
+      : detail.runId && (type.startsWith('agent_') || type === 'delivery_validation_finished' || type === 'review_verdict')
+        ? `${type.includes('stdout') || type.includes('stderr') || type === 'agent_output_finished' ? 'agent-log' : 'agent-run'}-${detail.runId}`
+        : type.startsWith('model_call_')
+          ? `model-call-${detail.scope ?? 'main'}-${detail.provider ?? detail.agentId ?? 'model'}`
+          : detail.handoffId
+            ? `handoff-${detail.handoffId}`
+            : detail.artifactId
+              ? `artifact-${detail.artifactId}-${type}`
+              : type === 'synthesis_started' || type === 'synthesis_finished'
+                ? 'synthesis-state'
+                : type === 'workflow_finished'
+                  ? 'workflow-finished'
+                  : event.id
+
+  return {
+    id: stepId,
+    icon: failed ? 'close-circle-outline' : completed ? 'check-circle-outline' : warning ? 'alert-circle-outline' : 'progress-clock',
+    title: titleByType[type] ?? `过程更新：${type.replace(/_/g, ' ')}`,
+    summary: compactText(summary, '已记录过程更新'),
+    time: formatMessageTime(event.createdAt),
+    tone: failed ? 'failed' : completed || warning ? 'done' : 'running',
+  }
+}
+
+function getTimeMs(value?: string): number {
+  if (!value) return 0
+  const time = new Date(value).getTime()
+  return Number.isNaN(time) ? 0 : time
+}
+
+function summarizeProcessGroupStatus(steps: ChatProcessStep[]): ChatProcessGroup['status'] {
+  const lastStep = steps[steps.length - 1]
+  if (lastStep?.title === '本轮已完成') return 'done'
+  if (steps.some(step => step.tone === 'failed')) return 'failed'
+  if (steps.some(step => step.tone === 'running')) return 'running'
+  if (steps.some(step => step.tone === 'waiting')) return 'waiting'
+  return 'done'
+}
+
+function isFinalAgentMessage(message: ChatMessageView): boolean {
+  return message.sender === 'agent' && !message.id.startsWith('streaming-') && !message.id.startsWith('local-')
+}
+
+function hasFinalAgentMessageForGroup(group: ChatProcessGroup, messages: ChatMessageView[], targetMessage: ChatMessageView): boolean {
+  const matchingTurnMessage = messages.some(message => isFinalAgentMessage(message) && !!message.turnId && message.turnId === group.turnId)
+  if (matchingTurnMessage) return true
+
+  const targetTime = getTimeMs(targetMessage.createdAt)
+  const groupTime = getTimeMs(group.startedAt ?? group.updatedAt)
+  const nextUserMessage = messages.find(message => {
+    const messageTime = getTimeMs(message.createdAt)
+    return message.sender === 'user' && messageTime > targetTime
+  })
+  const nextUserTime = getTimeMs(nextUserMessage?.createdAt)
+  const lowerBound = groupTime > 0 ? groupTime : targetTime
+
+  return messages.some(message => {
+    if (!isFinalAgentMessage(message)) return false
+    const messageTime = getTimeMs(message.createdAt)
+    if (messageTime === 0) return false
+    if (lowerBound > 0 && messageTime < lowerBound) return false
+    if (nextUserTime > 0 && messageTime >= nextUserTime) return false
+    return true
+  })
+}
+
+function resolveProcessGroupForTimeline(group: ChatProcessGroup, messages: ChatMessageView[], targetMessage: ChatMessageView): ChatProcessGroup {
+  if (group.status !== 'running') return group
+  if (!hasFinalAgentMessageForGroup(group, messages, targetMessage)) return group
+
+  return {
+    ...group,
+    status: 'done',
+  }
+}
+
+function buildProcessGroups(events: ProjectWorkflowEvent[]): ChatProcessGroup[] {
+  const groupMap = new Map<string, ChatProcessGroup>()
+
+  events.forEach(event => {
+    const step = mapWorkflowEventToStep(event)
+    if (!step) return
+
+    const turnId = event.event?.turnId ?? `event-${event.id}`
+    const previous = groupMap.get(turnId)
+    const eventTime = getTimeMs(event.createdAt)
+    const previousStartedAt = getTimeMs(previous?.startedAt)
+    const previousUpdatedAt = getTimeMs(previous?.updatedAt)
+    const steps = previous ? [...previous.steps.filter(item => item.id !== step.id), step] : [step]
+
+    groupMap.set(turnId, {
+      id: `process-${turnId}`,
+      turnId,
+      steps,
+      startedAt: !previous || (eventTime > 0 && (previousStartedAt === 0 || eventTime < previousStartedAt)) ? event.createdAt : previous.startedAt,
+      updatedAt: !previous || eventTime >= previousUpdatedAt ? event.createdAt : previous.updatedAt,
+      status: summarizeProcessGroupStatus(steps),
+    })
+  })
+
+  return [...groupMap.values()].sort((left, right) => getTimeMs(left.startedAt ?? left.updatedAt) - getTimeMs(right.startedAt ?? right.updatedAt))
+}
+
+function buildChatTimeline(messages: ChatMessageView[], processGroups: ChatProcessGroup[]): ChatTimelineItem[] {
+  const sortedMessages = [...messages].sort((left, right) => getTimeMs(left.createdAt) - getTimeMs(right.createdAt))
+  const sortedGroups = [...processGroups].sort((left, right) => getTimeMs(left.startedAt ?? left.updatedAt) - getTimeMs(right.startedAt ?? right.updatedAt))
+  const groupsAfterMessage = new Map<string, ChatProcessGroup[]>()
+  const leadingGroups: ChatProcessGroup[] = []
+
+  sortedGroups.forEach(group => {
+    const groupTime = getTimeMs(group.startedAt ?? group.updatedAt)
+    let targetMessage: ChatMessageView | undefined
+
+    for (const message of sortedMessages) {
+      const messageTime = getTimeMs(message.createdAt)
+      if (message.sender === 'user' && groupTime > 0 && messageTime > 0 && messageTime <= groupTime) {
+        targetMessage = message
+      }
+    }
+
+    if (!targetMessage && sortedMessages.length > 0) {
+      targetMessage = sortedMessages.find(message => message.sender === 'user') ?? sortedMessages[0]
+    }
+
+    if (!targetMessage) {
+      leadingGroups.push(group)
+      return
+    }
+
+    const previous = groupsAfterMessage.get(targetMessage.id) ?? []
+    groupsAfterMessage.set(targetMessage.id, [...previous, resolveProcessGroupForTimeline(group, sortedMessages, targetMessage)])
+  })
+
+  const timeline: ChatTimelineItem[] = leadingGroups.map(group => ({
+    type: 'process',
+    id: group.id,
+    group,
+  }))
+
+  sortedMessages.forEach(message => {
+    timeline.push({ type: 'message', id: message.id, message })
+    const attachedGroups = groupsAfterMessage.get(message.id) ?? []
+    attachedGroups.forEach(group => {
+      timeline.push({ type: 'process', id: group.id, group })
+    })
+  })
+
+  return timeline
+}
+
+function createChatStateView(input: Omit<ChatStateView, 'timelineItems'>): ChatStateView {
+  return {
+    ...input,
+    timelineItems: buildChatTimeline(input.messages, input.processGroups),
+  }
+}
+
+function createEmptyChatState(): ChatStateView {
+  return createChatStateView({
+    messages: [],
+    processGroups: [],
+    artifacts: [],
+    agents: [],
+  })
+}
+
+function parseStreamPayload(rawData: string | null, fallbackType: ProjectStreamEvent): ProjectWorkflowEvent['event'] | undefined {
+  if (!rawData) return fallbackType === 'message' ? undefined : { type: fallbackType }
+
+  try {
+    const payload = JSON.parse(rawData) as Record<string, unknown>
+    const detailPayload = (payload.event && typeof payload.event === 'object' ? payload.event : payload) as Record<string, unknown>
+    const type = typeof detailPayload.type === 'string' ? detailPayload.type : fallbackType === 'message' ? undefined : fallbackType
+    if (!type) return undefined
+    return {
+      ...detailPayload,
+      type,
+    } as ProjectWorkflowEvent['event']
+  } catch {
+    return fallbackType === 'assistant_delta'
+      ? { type: 'assistant_delta', message: rawData }
+      : fallbackType === 'message'
+        ? undefined
+        : { type: fallbackType, summary: rawData }
+  }
+}
+
+function streamingMessageId(messageId?: string): string {
+  return `streaming-${messageId ?? 'local-streaming-message'}`
+}
+
+function upsertStreamingAssistantMessage(messages: ChatMessageView[], input: { messageId?: string; agentId?: string; turnId?: string; delta?: string; createdAt: string }): ChatMessageView[] {
+  const id = streamingMessageId(input.messageId)
+  const previous = messages.find(message => message.id === id)
+  const nextMessage: ChatMessageView = {
+    id,
+    sender: 'agent',
+    agentId: input.agentId ?? previous?.agentId ?? 'orchestrator',
+    text: `${previous?.text ?? ''}${input.delta ?? ''}`,
+    time: previous?.time ?? formatMessageTime(input.createdAt),
+    createdAt: previous?.createdAt ?? input.createdAt,
+    turnId: input.turnId ?? previous?.turnId,
+  }
+
+  if (previous) {
+    return messages.map(message => message.id === id ? nextMessage : message)
+  }
+
+  return [...messages, nextMessage]
+}
+
+function useIosKeyboardBottomSpacing(bottomInset: number): number {
+  const [keyboardSpacing, setKeyboardSpacing] = useState(0)
+
+  useEffect(() => {
+    if (Platform.OS !== 'ios') {
+      setKeyboardSpacing(0)
+      return
+    }
+
+    const keyboardFrameSubscription = Keyboard.addListener('keyboardWillChangeFrame', event => {
+      setKeyboardSpacing(Math.max(0, event.endCoordinates.height - bottomInset + IOS_KEYBOARD_COMPOSER_GAP))
+    })
+    const keyboardHideSubscription = Keyboard.addListener('keyboardWillHide', () => {
+      setKeyboardSpacing(0)
+    })
+
+    return () => {
+      keyboardFrameSubscription.remove()
+      keyboardHideSubscription.remove()
+    }
+  }, [bottomInset])
+
+  return keyboardSpacing
+}
+
+function appendProcessStepToGroups(groups: ChatProcessGroup[], turnId: string, step: ChatProcessStep, options?: { local?: boolean; createdAt?: string }): ChatProcessGroup[] {
+  const groupId = `process-${turnId}`
+  const previous = groups.find(group => group.turnId === turnId)
+  const createdAt = options?.createdAt ?? new Date().toISOString()
+
+  if (!previous) {
+    return [
+      ...groups,
+      {
+        id: groupId,
+        turnId,
+        steps: [step],
+        startedAt: createdAt,
+        updatedAt: createdAt,
+        status: step.tone,
+        local: options?.local,
+      },
+    ]
+  }
+
+  const nextSteps = [...previous.steps.filter(item => item.id !== step.id), step]
+  return groups.map(group =>
+    group.turnId === turnId
+      ? {
+          ...group,
+          steps: nextSteps,
+          updatedAt: createdAt,
+          status: summarizeProcessGroupStatus(nextSteps),
+          local: group.local || options?.local,
+        }
+      : group,
+  )
+}
+
+function buildChatStateView(envelope: ProjectStateEnvelope): ChatStateView {
+  const messages = (envelope.state.messages ?? []).map(mapProjectMessageToChatMessage)
+  const processGroups = buildProcessGroups(envelope.state.workflowEvents ?? [])
+  const artifacts = (envelope.state.artifacts ?? []).slice(-4).map(mapProjectArtifactToArtifactView)
+
+  return createChatStateView({
+    messages,
+    processGroups,
+    artifacts,
+    agents: envelope.state.agents ?? [],
+    conversationId: envelope.state.conversations?.[0]?.id,
+    messagePage: envelope.messagePage,
+  })
+}
 
 function AnimatedHomeIcon({ size }: { size: number }) {
   const floatValue = useRef(new Animated.Value(0)).current
@@ -99,25 +712,329 @@ function AnimatedHomeIcon({ size }: { size: number }) {
 }
 
 export default function App() {
+  const [backendStatus, setBackendStatus] = useState<BackendStatus>('checking')
+  const [backendErrorMessage, setBackendErrorMessage] = useState('')
+  const [backendRetryDialog, setBackendRetryDialog] = useState<BackendRetryDialogState>({
+    visible: false,
+    title: '',
+    message: '',
+    onRetry: () => undefined,
+  })
+  const [backendResponseDialog, setBackendResponseDialog] = useState<BackendResponseDialogState>({
+    visible: false,
+    title: '',
+    body: '',
+  })
+  const [retryCount, setRetryCount] = useState(0)
   const [activeTab, setActiveTab] = useState<TabKey>('workbench')
   const [appMenuOpen, setAppMenuOpen] = useState(false)
   const [workspaceList, setWorkspaceList] = useState<Workspace[]>(workspaces)
+  const [pinnedWorkspaceList, setPinnedWorkspaceList] = useState<Workspace[]>(workspaces.filter(workspace => workspace.pinned).slice(0, 5))
+  const [workbenchAgentList, setWorkbenchAgentList] = useState<ProjectAgent[]>([])
+  const [workbenchLoading, setWorkbenchLoading] = useState(false)
+  const [loadingMoreWorkspaces, setLoadingMoreWorkspaces] = useState(false)
+  const [workbenchPage, setWorkbenchPage] = useState<WorkbenchPageState>({
+    hasMore: false,
+    total: workspaces.length,
+  })
+  const [workspaceQuery, setWorkspaceQuery] = useState('')
+  const [workbenchFilters, setWorkbenchFilters] = useState<WorkbenchFilterState>(DEFAULT_WORKBENCH_FILTERS)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(workspaces[0]?.id ?? '')
   const [activityOpen, setActivityOpen] = useState(false)
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false)
   const [workspacePanelMode, setWorkspacePanelMode] = useState<'switch' | 'create'>('switch')
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false)
   const [agentCreateSignal, setAgentCreateSignal] = useState(0)
   const { width } = useWindowDimensions()
   const layoutTier: LayoutTier = width < 380 ? 'compact' : width < 430 ? 'standard' : 'wide'
   const mobileScale = useMemo(() => createMobileScale(layoutTier, width), [layoutTier, width])
   const tightChatHeader = activeTab === 'chat' && layoutTier !== 'wide'
-  const activeWorkspace = workspaceList.find(workspace => workspace.id === activeWorkspaceId) ?? workspaceList[0]
-  const runningAgents = agents.filter(agent => agent.status !== 'idle').length
+  const knownWorkspaceList = useMemo(() => {
+    const byId = new Map<string, Workspace>()
+    ;[...pinnedWorkspaceList, ...workspaceList].forEach(workspace => {
+      byId.set(getWorkspaceKey(workspace), workspace)
+    })
+    return Array.from(byId.values())
+  }, [pinnedWorkspaceList, workspaceList])
+  const activeWorkspace = knownWorkspaceList.find(workspace => workspace.id === activeWorkspaceId) ?? knownWorkspaceList[0] ?? workspaces[0]
+  const runningAgents = workspaceList.reduce((sum, item) => sum + item.runningAgents, 0)
   const title = useMemo(() => {
     if (activeTab === 'workbench') return '工作台'
     if (activeTab === 'chat') return '对话'
     return '我的 Agent'
   }, [activeTab])
+  const retryBackendHealth = () => setRetryCount(count => count + 1)
+
+  function showBackendRetryDialog(input: Omit<BackendRetryDialogState, 'visible'>) {
+    setBackendRetryDialog({
+      ...input,
+      visible: true,
+    })
+  }
+
+  function hideBackendRetryDialog() {
+    setBackendRetryDialog(previous => ({
+      ...previous,
+      visible: false,
+    }))
+  }
+
+  async function loadWorkbenchPage(input?: {
+    cursor?: string
+    append?: boolean
+    showResponse?: boolean
+    query?: string
+    filters?: WorkbenchFilterState
+  }) {
+    const append = input?.append ?? false
+    if (append) {
+      setLoadingMoreWorkspaces(true)
+    } else {
+      setWorkbenchLoading(true)
+    }
+
+    const requestFilters = input?.filters ?? workbenchFilters
+    const request = {
+      pageSize: WORKBENCH_PAGE_SIZE,
+      cursor: input?.cursor,
+      query: input?.query ?? workspaceQuery,
+      status: requestFilters.status,
+      sortBy: requestFilters.sortBy,
+      sortDirection: requestFilters.sortDirection,
+    }
+
+    try {
+      const overview = await fetchWorkbenchOverview(request)
+      if (input?.showResponse) {
+        setBackendResponseDialog({
+          visible: true,
+          title: '筛选工作区响应体',
+          body: JSON.stringify({ request, response: overview }, null, 2),
+        })
+      }
+      const nextWorkspaces = overview.rooms.map(mapWorkbenchRoomToWorkspace)
+      setWorkbenchAgentList(overview.agents ?? [])
+      const pinnedFromCurrentPage = nextWorkspaces.filter(item => item.pinned)
+      setPinnedWorkspaceList(pinnedFromCurrentPage.slice(0, 5))
+      setWorkspaceList(current => {
+        if (!append) return nextWorkspaces
+        const existingIds = new Set(current.map(getWorkspaceKey))
+        return [...current, ...nextWorkspaces.filter(item => !existingIds.has(getWorkspaceKey(item)))]
+      })
+      setWorkbenchPage({
+        hasMore: overview.page.hasMore,
+        nextCursor: overview.page.nextCursor,
+        total: overview.page.total,
+      })
+      if (!append) {
+        setActiveWorkspaceId(current => nextWorkspaces.some(item => item.id === current) ? current : nextWorkspaces[0]?.id ?? '')
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '工作区列表加载失败。'
+      showBackendRetryDialog({
+        title: '工作区加载失败',
+        message: '后端暂时无法返回工作区列表，请点击重试。',
+        detail: message,
+        onRetry: () => {
+          void loadWorkbenchPage(input)
+        },
+      })
+    } finally {
+      setWorkbenchLoading(false)
+      setLoadingMoreWorkspaces(false)
+    }
+  }
+
+  async function loadPinnedWorkspaces() {
+    try {
+      const overview = await fetchWorkbenchOverview({
+        pageSize: PINNED_WORKBENCH_PAGE_SIZE,
+        status: 'active',
+        sortBy: 'updatedAt',
+        sortDirection: 'desc',
+      })
+      const nextPinnedWorkspaces = overview.rooms
+        .map(mapWorkbenchRoomToWorkspace)
+        .filter(item => item.pinned)
+      setWorkbenchAgentList(overview.agents ?? [])
+      setPinnedWorkspaceList(nextPinnedWorkspaces.slice(0, 5))
+    } catch {
+      setPinnedWorkspaceList(current => current)
+    }
+  }
+
+  function applyWorkbenchFilters(next: {
+    status?: WorkspaceListStatus
+    sortBy?: WorkspaceSortField
+    sortDirection?: SortDirection
+  }) {
+    const nextFilters: WorkbenchFilterState = {
+      status: next.status ?? workbenchFilters.status,
+      sortBy: next.sortBy ?? workbenchFilters.sortBy,
+      sortDirection: next.sortDirection ?? workbenchFilters.sortDirection,
+    }
+
+    setWorkbenchFilters(nextFilters)
+
+    void loadWorkbenchPage({
+      query: workspaceQuery,
+      filters: nextFilters,
+      showResponse: true,
+    })
+  }
+
+  async function handleCreateWorkspace(input: CreateWorkspaceInput) {
+    setCreatingWorkspace(true)
+
+    try {
+      const project = await createBusinessWorkspace(input)
+      await loadWorkbenchPage()
+      setActiveWorkspaceId(project.projectId || project.workspaceId)
+      setWorkspacePanelOpen(false)
+      setActiveTab('chat')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '创建工作区失败。'
+      showBackendRetryDialog({
+        title: '创建工作区失败',
+        message: '后端暂时没有成功创建工作区，请检查内容后重试。',
+        detail: message,
+        onRetry: () => {
+          void handleCreateWorkspace(input)
+        },
+      })
+    } finally {
+      setCreatingWorkspace(false)
+    }
+  }
+
+  function showBackendResponseDialog(title: string, payload: BusinessProject) {
+    setBackendResponseDialog({
+      visible: true,
+      title,
+      body: JSON.stringify(payload, null, 2),
+    })
+  }
+
+  async function handleUpdateWorkspaceMetadata(workspace: Workspace, input: { pinned?: boolean; archived?: boolean }, options?: { showResponse?: boolean }) {
+    const projectId = workspace.projectId ?? workspace.id
+
+    try {
+      const response = await updateWorkspaceMetadata(projectId, input)
+      if (options?.showResponse) {
+        showBackendResponseDialog(input.archived ? '归档响应体' : '取消归档响应体', response)
+      }
+      await loadWorkbenchPage()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '更新工作区状态失败。'
+      showBackendRetryDialog({
+        title: '工作区状态更新失败',
+        message: '后端暂时没有成功更新，请点击重试。',
+        detail: message,
+        onRetry: () => {
+          void handleUpdateWorkspaceMetadata(workspace, input)
+        },
+      })
+    }
+  }
+
+  async function handleToggleWorkspacePin(workspace: Workspace) {
+    const projectId = workspace.projectId ?? workspace.id
+
+    try {
+      const response = workspace.pinned ? await unpinWorkspace(projectId) : await pinWorkspace(projectId)
+      showBackendResponseDialog(workspace.pinned ? '取消置顶响应体' : '置顶响应体', response)
+      await loadWorkbenchPage()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '更新工作区置顶状态失败。'
+      showBackendRetryDialog({
+        title: '工作区置顶状态更新失败',
+        message: '后端暂时没有成功更新置顶状态，请点击重试。',
+        detail: message,
+        onRetry: () => {
+          void handleToggleWorkspacePin(workspace)
+        },
+      })
+    }
+  }
+
+  async function handleToggleWorkspaceArchive(workspace: Workspace) {
+    const projectId = workspace.projectId ?? workspace.id
+
+    try {
+      const response = workspace.archived ? await unarchiveWorkspace(projectId) : await archiveWorkspace(projectId)
+      showBackendResponseDialog(workspace.archived ? '取消归档响应体' : '归档响应体', response)
+      await loadWorkbenchPage()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '更新工作区归档状态失败。'
+      showBackendRetryDialog({
+        title: '工作区归档状态更新失败',
+        message: '后端暂时没有成功更新归档状态，请点击重试。',
+        detail: message,
+        onRetry: () => {
+          void handleToggleWorkspaceArchive(workspace)
+        },
+      })
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function checkBackend() {
+      setBackendStatus('checking')
+      setBackendErrorMessage('')
+
+      try {
+        const health = await fetchBusinessHealth()
+        if (cancelled) {
+          return
+        }
+
+        if (health.ok) {
+          setBackendStatus('ready')
+          return
+        }
+
+        setBackendStatus('unavailable')
+        setBackendErrorMessage('后端暂时没有返回可用状态。')
+        showBackendRetryDialog({
+          title: '工作台暂时不可用',
+          message: '后端已经响应，但当前没有返回可用状态。请稍后重试。',
+          detail: BUSINESS_API_BASE_URL,
+          onRetry: retryBackendHealth,
+        })
+      } catch (error) {
+        if (cancelled) {
+          return
+        }
+
+        setBackendStatus('unavailable')
+        const message = error instanceof Error ? error.message : '无法连接业务后端。'
+        setBackendErrorMessage(message)
+        showBackendRetryDialog({
+          title: '连接后端失败',
+          message: '可能是网络波动或服务正在启动。请稍后重试。',
+          detail: message,
+          onRetry: retryBackendHealth,
+        })
+      }
+    }
+
+    void checkBackend()
+
+    return () => {
+      cancelled = true
+    }
+  }, [retryCount])
+
+  useEffect(() => {
+    if (backendStatus !== 'ready') return
+    const timeoutId = setTimeout(() => {
+      void loadWorkbenchPage()
+    }, 260)
+
+    return () => clearTimeout(timeoutId)
+  }, [backendStatus, workspaceQuery])
 
   return (
     <SafeAreaProvider>
@@ -125,6 +1042,16 @@ export default function App() {
         <LinearGradient colors={['rgba(255,255,255,0.22)', 'rgba(255,255,255,0.08)', 'rgba(241,245,249,0.26)']} style={styles.overlay} />
         <SafeAreaView style={styles.safe}>
           <StatusBar style="dark" />
+          {backendStatus !== 'ready' ? (
+            <BackendGate
+              status={backendStatus}
+              errorMessage={backendErrorMessage}
+              layoutTier={layoutTier}
+              mobileScale={mobileScale}
+              onRetry={retryBackendHealth}
+            />
+          ) : (
+            <>
           <View style={[styles.header, activeTab === 'agents' && styles.agentHeader, activeTab === 'chat' && styles.codeHeader]}>
             <View style={[styles.headerLeft, activeTab === 'agents' && styles.agentHeaderLeft, activeTab === 'chat' && styles.codeHeaderLeft, tightChatHeader && styles.chatHeaderLeftTight]}>
               <Pressable style={styles.headerAvatarButton} onPress={() => setAppMenuOpen(true)}>
@@ -216,22 +1143,51 @@ export default function App() {
               {activeTab === 'workbench' ? (
                 <WorkbenchScreen
                   workspaceList={workspaceList}
+                  pinnedWorkspaceList={pinnedWorkspaceList}
+                  page={workbenchPage}
+                  loading={workbenchLoading}
+                  loadingMore={loadingMoreWorkspaces}
                   runningAgents={runningAgents}
+                  agentList={workbenchAgentList}
                   workspace={activeWorkspace}
+                  query={workspaceQuery}
+                  statusFilter={workbenchFilters.status}
+                  sortBy={workbenchFilters.sortBy}
+                  sortDirection={workbenchFilters.sortDirection}
                   layoutTier={layoutTier}
                   mobileScale={mobileScale}
+                  onQueryChange={setWorkspaceQuery}
+                  onStatusFilterChange={status => {
+                    applyWorkbenchFilters({ status })
+                  }}
+                  onSortByChange={nextSortBy => {
+                    applyWorkbenchFilters({ sortBy: nextSortBy })
+                  }}
+                  onSortDirectionChange={direction => {
+                    applyWorkbenchFilters({ sortDirection: direction })
+                  }}
+                  onLoadMore={() => {
+                    if (!loadingMoreWorkspaces && workbenchPage.hasMore && workbenchPage.nextCursor) {
+                      void loadWorkbenchPage({ cursor: workbenchPage.nextCursor, append: true, filters: workbenchFilters })
+                    }
+                  }}
                   onOpenWorkspace={nextWorkspace => {
                     setActiveWorkspaceId(nextWorkspace.id)
                     setActiveTab('chat')
                   }}
-                  onToggleWorkspacePin={workspaceId => {
-                    setWorkspaceList(current =>
-                      current.map(item => (item.id === workspaceId ? { ...item, pinned: !item.pinned } : item)),
-                    )
+                  onToggleWorkspacePin={workspace => {
+                    if (!workspace.pinned && workspaceList.filter(item => item.pinned).length >= 5) {
+                      showBackendRetryDialog({
+                        title: '置顶数量已满',
+                        message: '置顶工作区最多 5 条。请先移出一个置顶工作区，再添加新的置顶。',
+                        onRetry: () => undefined,
+                      })
+                      return
+                    }
+                    void handleToggleWorkspacePin(workspace)
                   }}
-                  onOpenWorkspacePanel={() => {
-                    setWorkspacePanelMode('switch')
-                    setWorkspacePanelOpen(true)
+                  onToggleWorkspaceArchive={workspace => {
+                    void handleToggleWorkspaceArchive(workspace)
                   }}
                 />
               ) : null}
@@ -255,20 +1211,36 @@ export default function App() {
             workspaceList={workspaceList}
             activeWorkspaceId={activeWorkspace.id}
             layoutTier={layoutTier}
+            creating={creatingWorkspace}
             onClose={() => setWorkspacePanelOpen(false)}
             onSwitch={nextWorkspace => {
               setActiveWorkspaceId(nextWorkspace.id)
               setWorkspacePanelOpen(false)
               setActiveTab('chat')
             }}
-            onCreate={nextWorkspace => {
-              setWorkspaceList(current => [nextWorkspace, ...current])
-              setActiveWorkspaceId(nextWorkspace.id)
-              setWorkspacePanelOpen(false)
-              setActiveTab('chat')
-            }}
+            onCreate={input => void handleCreateWorkspace(input)}
           />
           <ActivityCenterModal visible={activityOpen} onClose={() => setActivityOpen(false)} />
+            </>
+          )}
+          <BackendRetryDialog
+            visible={backendRetryDialog.visible}
+            title={backendRetryDialog.title}
+            message={backendRetryDialog.message}
+            detail={backendRetryDialog.detail}
+            retrying={backendStatus === 'checking' || backendRetryDialog.retrying}
+            onRetry={() => {
+              hideBackendRetryDialog()
+              backendRetryDialog.onRetry()
+            }}
+            onClose={hideBackendRetryDialog}
+          />
+          <BackendResponseDialog
+            visible={backendResponseDialog.visible}
+            title={backendResponseDialog.title}
+            body={backendResponseDialog.body}
+            onClose={() => setBackendResponseDialog(previous => ({ ...previous, visible: false }))}
+          />
         </SafeAreaView>
       </ImageBackground>
     </SafeAreaProvider>
@@ -277,6 +1249,7 @@ export default function App() {
 
 type WorkspaceFilter = 'active' | 'updated' | 'pinned' | 'archived'
 type WorkbenchFocus = 'workspaces' | 'running' | 'artifacts'
+type WorkspaceDropdownKey = 'status' | 'sortBy' | 'sortDirection'
 type AgentFilter = 'all' | 'running' | 'reviewing' | 'idle' | 'builtin'
 type ArtifactStatus = 'generating' | 'partial' | 'ready' | 'failed'
 
@@ -285,54 +1258,281 @@ type ArtifactView = Artifact & {
   statusLabel: string
 }
 
-function WorkbenchScreen({
-  workspaceList,
-  runningAgents,
-  workspace,
+function BackendGate({
+  status,
+  errorMessage,
   layoutTier,
   mobileScale,
-  onOpenWorkspace,
-  onToggleWorkspacePin,
-  onOpenWorkspacePanel,
+  onRetry,
 }: {
-  workspaceList: Workspace[]
-  runningAgents: number
-  workspace: Workspace
+  status: BackendStatus
+  errorMessage: string
   layoutTier: LayoutTier
   mobileScale: MobileScale
+  onRetry: () => void
+}) {
+  const checking = status === 'checking'
+  const isCompact = layoutTier === 'compact'
+
+  return (
+    <View style={[styles.backendGate, isCompact && styles.backendGateCompact]}>
+      <GlassCard style={[styles.backendGateCard, isCompact && styles.backendGateCardCompact]}>
+        <View style={styles.backendGateIconWrap}>
+          <MaterialCommunityIcons
+            name={checking ? 'cloud-sync-outline' : 'cloud-alert-outline'}
+            size={isCompact ? 34 : 42}
+            color={checking ? '#2563eb' : '#dc2626'}
+          />
+        </View>
+        <Text style={[styles.backendGateTitle, { fontSize: mobileScale.heroTitle }]}>
+          {checking ? '正在连接工作台' : '暂时连接不上工作台'}
+        </Text>
+        <Text style={[styles.backendGateBody, { fontSize: mobileScale.bodyText, lineHeight: mobileScale.bodyLineHeight }]}>
+          {checking
+            ? '我们正在确认业务后端是否可用，马上就好。'
+            : '可能是网络波动或服务正在启动。请稍后重试，已有内容不会丢失。'}
+        </Text>
+        <View style={styles.backendEndpointPill}>
+          <MaterialCommunityIcons name="server-network" size={16} color="#2563eb" />
+          <Text style={styles.backendEndpointText} numberOfLines={1}>{BUSINESS_API_BASE_URL}</Text>
+        </View>
+        {!checking ? (
+          <>
+            {errorMessage ? <Text style={styles.backendGateError} numberOfLines={2}>{errorMessage}</Text> : null}
+            <Pressable style={styles.backendRetryButton} onPress={onRetry}>
+              <MaterialCommunityIcons name="refresh" size={20} color="#fff" />
+              <Text style={styles.backendRetryText}>重试连接</Text>
+            </Pressable>
+          </>
+        ) : null}
+      </GlassCard>
+    </View>
+  )
+}
+
+function BackendRetryDialog({
+  visible,
+  title,
+  message,
+  detail,
+  retrying = false,
+  onRetry,
+  onClose,
+}: {
+  visible: boolean
+  title: string
+  message: string
+  detail?: string
+  retrying?: boolean
+  onRetry: () => void
+  onClose: () => void
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.backendDialogBackdrop}>
+        <Pressable style={styles.backendDialogScrim} onPress={onClose} />
+        <GlassCard style={styles.backendDialogCard}>
+          <View style={styles.backendDialogIconWrap}>
+            <MaterialCommunityIcons name="server-network-off" size={30} color="#dc2626" />
+          </View>
+          <Text style={styles.backendDialogTitle}>{title}</Text>
+          <Text style={styles.backendDialogBody}>{message}</Text>
+          {detail ? <Text style={styles.backendDialogDetail} numberOfLines={3}>{detail}</Text> : null}
+          <View style={styles.backendDialogActions}>
+            <Pressable style={styles.backendDialogSecondaryButton} onPress={onClose}>
+              <Text style={styles.backendDialogSecondaryText}>稍后再说</Text>
+            </Pressable>
+            <Pressable style={[styles.backendDialogPrimaryButton, retrying && styles.backendDialogPrimaryButtonDisabled]} onPress={onRetry} disabled={retrying}>
+              <MaterialCommunityIcons name="refresh" size={18} color="#fff" />
+              <Text style={styles.backendDialogPrimaryText}>{retrying ? '重试中' : '重试'}</Text>
+            </Pressable>
+          </View>
+        </GlassCard>
+      </View>
+    </Modal>
+  )
+}
+
+function WorkspaceFilterDropdown<T extends string>({
+  label,
+  open,
+  options,
+  onToggle,
+  onSelect,
+}: {
+  label: string
+  open: boolean
+  options: { value: T; label: string }[]
+  onToggle: () => void
+  onSelect: (value: T) => void
+}) {
+  return (
+    <View style={styles.workspaceDropdownWrap}>
+      <Pressable style={[styles.workspaceDropdownButton, open && styles.workspaceDropdownButtonOpen]} onPress={onToggle}>
+        <Text style={styles.workspaceDropdownText} numberOfLines={1}>{label}</Text>
+        <MaterialCommunityIcons name={open ? 'chevron-up' : 'chevron-down'} size={17} color="#475569" />
+      </Pressable>
+      {open ? (
+        <GlassCard style={styles.workspaceDropdownMenu}>
+          {options.map(option => (
+            <Pressable key={option.value} style={styles.workspaceDropdownOption} onPress={() => onSelect(option.value)}>
+              <Text style={styles.workspaceDropdownOptionText}>{option.label}</Text>
+            </Pressable>
+          ))}
+        </GlassCard>
+      ) : null}
+    </View>
+  )
+}
+
+function BackendResponseDialog({
+  visible,
+  title,
+  body,
+  onClose,
+}: {
+  visible: boolean
+  title: string
+  body: string
+  onClose: () => void
+}) {
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (!visible) {
+      setCopied(false)
+    }
+  }, [visible])
+
+  async function copyResponseBody() {
+    await Clipboard.setStringAsync(body)
+    setCopied(true)
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.backendDialogBackdrop}>
+        <Pressable style={styles.backendDialogScrim} onPress={onClose} />
+        <GlassCard style={styles.responseDialogCard}>
+          <View style={styles.activityCenterHead}>
+            <View style={styles.workspacePanelTitleCopy}>
+              <Text style={styles.homeWorkspaceEyebrow}>BACKEND RESPONSE</Text>
+              <Text style={styles.backendDialogTitle}>{title}</Text>
+            </View>
+            <Pressable style={styles.artifactCloseButton} onPress={onClose}>
+              <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
+            </Pressable>
+          </View>
+          <View style={styles.responseDialogContent}>
+            <TextInput
+              value={body}
+              multiline
+              editable={false}
+              selectTextOnFocus
+              scrollEnabled
+              textAlignVertical="top"
+              style={styles.responseDialogTextInput}
+            />
+          </View>
+          <Pressable style={styles.responseCopyButton} onPress={copyResponseBody}>
+            <MaterialCommunityIcons name={copied ? 'check' : 'content-copy'} size={18} color="#2563eb" />
+            <Text style={styles.responseCopyText}>{copied ? '已复制' : '复制响应体'}</Text>
+          </Pressable>
+          <Pressable style={styles.filterTestConfirmButton} onPress={onClose}>
+            <Text style={styles.backendDialogPrimaryText}>关闭</Text>
+          </Pressable>
+        </GlassCard>
+      </View>
+    </Modal>
+  )
+}
+
+function WorkbenchScreen({
+  workspaceList,
+  pinnedWorkspaceList,
+  page,
+  loading,
+  loadingMore,
+  runningAgents,
+  agentList,
+  workspace,
+  query,
+  statusFilter,
+  sortBy,
+  sortDirection,
+  layoutTier,
+  mobileScale,
+  onQueryChange,
+  onStatusFilterChange,
+  onSortByChange,
+  onSortDirectionChange,
+  onLoadMore,
+  onOpenWorkspace,
+  onToggleWorkspacePin,
+  onToggleWorkspaceArchive,
+}: {
+  workspaceList: Workspace[]
+  pinnedWorkspaceList: Workspace[]
+  page: WorkbenchPageState
+  loading: boolean
+  loadingMore: boolean
+  runningAgents: number
+  agentList: ProjectAgent[]
+  workspace: Workspace
+  query: string
+  statusFilter: WorkspaceListStatus
+  sortBy: WorkspaceSortField
+  sortDirection: SortDirection
+  layoutTier: LayoutTier
+  mobileScale: MobileScale
+  onQueryChange: (query: string) => void
+  onStatusFilterChange: (status: WorkspaceListStatus) => void
+  onSortByChange: (sortBy: WorkspaceSortField) => void
+  onSortDirectionChange: (direction: SortDirection) => void
+  onLoadMore: () => void
   onOpenWorkspace: (workspace: Workspace) => void
-  onToggleWorkspacePin: (workspaceId: string) => void
-  onOpenWorkspacePanel: () => void
+  onToggleWorkspacePin: (workspace: Workspace) => void
+  onToggleWorkspaceArchive: (workspace: Workspace) => void
 }) {
   const isCompact = layoutTier === 'compact'
-  const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<WorkspaceFilter>('active')
   const [focus, setFocus] = useState<WorkbenchFocus>('workspaces')
-  const workspaceSearch = useMemo(
-    () => new Fuse<Workspace>(workspaceList, { keys: ['name', 'goal', 'latestEventLabel', 'type'], threshold: 0.36 }),
-    [workspaceList],
-  )
-  const searchedWorkspaces = query.trim() ? workspaceSearch.search(query.trim()).map(result => result.item) : workspaceList
-  const filteredWorkspaces = searchedWorkspaces.filter(item => {
-    if (filter === 'archived') return item.archived
-    if (filter === 'pinned') return item.pinned && !item.archived
-    return !item.archived
-  })
-  const sortedWorkspaces = [...filteredWorkspaces].sort((a, b) => {
-    if (filter === 'pinned') return Number(b.pinned) - Number(a.pinned)
-    if (filter === 'updated') return b.updatedAt.localeCompare(a.updatedAt)
-    return Number(b.status === 'running') - Number(a.status === 'running')
-  })
+  const [pinnedExpanded, setPinnedExpanded] = useState(false)
+  const [openDropdown, setOpenDropdown] = useState<WorkspaceDropdownKey | null>(null)
+  const activeWorkspaceAgents = getVisibleChatAgents(workspace, agentList)
+  const pinnedWorkspaces = pinnedWorkspaceList.slice(0, 5)
+  const pinnedOverflowCount = Math.max(0, pinnedWorkspaceList.length - 5)
+  const visiblePinnedWorkspaces = pinnedExpanded ? pinnedWorkspaces : pinnedWorkspaces.slice(0, 2)
+  const nonPinnedWorkspaces = workspaceList.filter(item => !item.pinned)
   const focusedWorkspaces =
     focus === 'running'
-      ? sortedWorkspaces.filter(item => item.status === 'running')
+      ? nonPinnedWorkspaces.filter(item => item.status === 'running')
       : focus === 'artifacts'
-        ? sortedWorkspaces.filter(item => item.artifactCount > 0)
-        : sortedWorkspaces
-  const pinnedWorkspaces = focusedWorkspaces.filter(item => item.pinned)
-  const recentWorkspaces = focusedWorkspaces.filter(item => !item.pinned)
+        ? nonPinnedWorkspaces.filter(item => item.artifactCount > 0)
+        : nonPinnedWorkspaces
   const focusTitle = focus === 'workspaces' ? '置顶工作区' : focus === 'running' ? '进行中的项目' : '产物相关项目'
-  const focusMeta = focus === 'workspaces' ? `${pinnedWorkspaces.length} 个` : focus === 'running' ? `${focusedWorkspaces.length} 个运行中` : `${focusedWorkspaces.length} 个有产物`
+  const listTitle =
+    focus === 'running'
+      ? '进行中的工作区'
+      : focus === 'artifacts'
+        ? '有产物的工作区'
+        : statusFilter === 'archived'
+          ? '归档工作区'
+          : '工作区'
+  const sortText = `${sortBy === 'updatedAt' ? '更新' : sortBy === 'createdAt' ? '创建' : '名称'} ${sortDirection === 'desc' ? '降序' : '升序'}`
+  const statusOptions: { value: WorkspaceListStatus; label: string }[] = [
+    { value: 'active', label: 'Active' },
+    { value: 'archived', label: 'Archived' },
+    { value: 'all', label: 'All' },
+  ]
+  const sortByOptions: { value: WorkspaceSortField; label: string }[] = [
+    { value: 'updatedAt', label: 'Updated' },
+    { value: 'createdAt', label: 'Created' },
+    { value: 'name', label: 'Name' },
+  ]
+  const sortDirectionOptions: { value: SortDirection; label: string }[] = [
+    { value: 'desc', label: 'Desc' },
+    { value: 'asc', label: 'Asc' },
+  ]
 
   return (
     <View style={[styles.workbenchScreen, isCompact && styles.workspaceScreenCompact]}>
@@ -364,9 +1564,9 @@ function WorkbenchScreen({
           </View>
         </View>
         <View style={styles.homeAvatarRow}>
-          {workspace.agents.slice(0, 4).map((agentId, index) => (
-            <View key={agentId} style={{ marginLeft: index === 0 ? 0 : -10 }}>
-              <AgentGlyph agentId={agentId} size={mobileScale.workspaceAgentAvatar} />
+          {activeWorkspaceAgents.slice(0, 4).map((agent, index) => (
+            <View key={agent.id} style={{ marginLeft: index === 0 ? 0 : -10 }}>
+              <AgentGlyph agentId={agent.id} label={agent.name} provider={agent.modelProvider} color={getProjectAgentColor(agent)} size={mobileScale.workspaceAgentAvatar} />
             </View>
           ))}
           <Text style={styles.homeAvatarText}>{workspace.latestEventLabel}</Text>
@@ -383,7 +1583,6 @@ function WorkbenchScreen({
           style={styles.statPressable}
           onPress={() => {
             setFocus('workspaces')
-            onOpenWorkspacePanel()
           }}
         >
           <StatCard label="工作区" value={String(workspaceList.length)} icon="view-grid-outline" tone="#2563eb" active={focus === 'workspaces'} />
@@ -392,7 +1591,7 @@ function WorkbenchScreen({
           style={styles.statPressable}
           onPress={() => {
             setFocus('running')
-            setFilter('active')
+            onStatusFilterChange('active')
           }}
         >
           <StatCard label="运行中" value={String(runningAgents)} icon="lightning-bolt-outline" tone="#db2777" active={focus === 'running'} />
@@ -408,42 +1607,72 @@ function WorkbenchScreen({
           placeholder="搜索工作区"
           placeholderTextColor="#94a3b8"
           value={query}
-          onChangeText={setQuery}
+          onChangeText={onQueryChange}
           style={styles.searchInput}
         />
       </GlassCard>
-      <View style={styles.workspaceFilterLine}>
-        <Pressable onPress={() => setFilter('active')}>
-          <Pill label="Active" tone={filter === 'active' ? 'blue' : 'muted'} icon="check-circle-outline" />
-        </Pressable>
-        <Pressable onPress={() => setFilter('updated')}>
-          <Pill label="Updated" tone={filter === 'updated' ? 'blue' : 'muted'} icon="sort-clock-descending-outline" />
-        </Pressable>
-        <Pressable onPress={() => setFilter('pinned')}>
-          <Pill label="Pinned first" tone={filter === 'pinned' ? 'amber' : 'muted'} icon="pin-outline" />
-        </Pressable>
-        <Pressable onPress={() => setFilter('archived')}>
-          <Pill label="归档" tone={filter === 'archived' ? 'blue' : 'muted'} icon="archive-outline" />
-        </Pressable>
+      <View style={styles.workspaceDropdownLine}>
+        <WorkspaceFilterDropdown
+          label={statusOptions.find(item => item.value === statusFilter)?.label ?? 'Active'}
+          open={openDropdown === 'status'}
+          options={statusOptions}
+          onToggle={() => setOpenDropdown(current => current === 'status' ? null : 'status')}
+          onSelect={value => {
+            onStatusFilterChange(value)
+            setOpenDropdown(null)
+          }}
+        />
+        <WorkspaceFilterDropdown
+          label={sortByOptions.find(item => item.value === sortBy)?.label ?? 'Updated'}
+          open={openDropdown === 'sortBy'}
+          options={sortByOptions}
+          onToggle={() => setOpenDropdown(current => current === 'sortBy' ? null : 'sortBy')}
+          onSelect={value => {
+            onSortByChange(value)
+            setOpenDropdown(null)
+          }}
+        />
+        <WorkspaceFilterDropdown
+          label={sortDirectionOptions.find(item => item.value === sortDirection)?.label ?? 'Desc'}
+          open={openDropdown === 'sortDirection'}
+          options={sortDirectionOptions}
+          onToggle={() => setOpenDropdown(current => current === 'sortDirection' ? null : 'sortDirection')}
+          onSelect={value => {
+            onSortDirectionChange(value)
+            setOpenDropdown(null)
+          }}
+        />
       </View>
 
       <View style={styles.workbenchSectionHead}>
-        <Text style={[styles.homeSectionTitle, { fontSize: mobileScale.sectionTitle }]}>{focusTitle}</Text>
-        <Text style={styles.workbenchSectionMeta}>{focusMeta}</Text>
+        <Text style={[styles.homeSectionTitle, { fontSize: mobileScale.sectionTitle }]}>置顶工作区</Text>
+        <Text style={styles.workbenchSectionMeta}>{pinnedWorkspaces.length} 个</Text>
       </View>
-      {pinnedWorkspaces.map(item => (
-        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} onTogglePin={() => onToggleWorkspacePin(item.id)} />
+      {pinnedOverflowCount > 0 ? (
+        <GlassCard style={styles.pinnedLimitNotice}>
+          <MaterialCommunityIcons name="pin-off-outline" size={18} color="#b45309" />
+          <Text style={styles.pinnedLimitText}>置顶最多展示 5 条，请移出 {pinnedOverflowCount} 个置顶后再添加。</Text>
+        </GlassCard>
+      ) : null}
+      {visiblePinnedWorkspaces.map((item, index) => (
+        <WorkspaceCard key={`${getWorkspaceKey(item)}-${index}`} workspace={item} agentList={agentList} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} onTogglePin={() => onToggleWorkspacePin(item)} onToggleArchive={() => onToggleWorkspaceArchive(item)} />
       ))}
+      {pinnedWorkspaces.length > 2 ? (
+        <Pressable style={styles.pinnedExpandButton} onPress={() => setPinnedExpanded(expanded => !expanded)}>
+          <Text style={styles.pinnedExpandText}>{pinnedExpanded ? '收起置顶工作区' : `展开 ${pinnedWorkspaces.length - 2} 个置顶工作区`}</Text>
+          <MaterialCommunityIcons name={pinnedExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#64748b" />
+        </Pressable>
+      ) : null}
 
       <View style={styles.workbenchSectionHead}>
-        <Text style={[styles.homeSectionTitle, { fontSize: mobileScale.sectionTitle }]}>最近更新</Text>
-        <Text style={styles.workbenchSectionMeta}>按活跃度排序</Text>
+        <Text style={[styles.homeSectionTitle, { fontSize: mobileScale.sectionTitle }]}>{listTitle}</Text>
+        <Text style={styles.workbenchSectionMeta}>{sortText}</Text>
       </View>
-      {recentWorkspaces.slice(0, 3).map(item => (
-        <WorkspaceCard key={item.id} workspace={item} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} onTogglePin={() => onToggleWorkspacePin(item.id)} />
+      {focusedWorkspaces.map((item, index) => (
+        <WorkspaceCard key={`${getWorkspaceKey(item)}-${index}`} workspace={item} agentList={agentList} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => onOpenWorkspace(item)} onTogglePin={() => onToggleWorkspacePin(item)} onToggleArchive={() => onToggleWorkspaceArchive(item)} />
       ))}
 
-      {focusedWorkspaces.length === 0 ? (
+      {!loading && focusedWorkspaces.length === 0 ? (
         <GlassCard style={styles.emptyStateCard}>
           <MaterialCommunityIcons name="database-search-outline" size={28} color="#64748b" />
           <Text style={styles.cardTitle}>没有匹配的工作区</Text>
@@ -451,9 +1680,9 @@ function WorkbenchScreen({
         </GlassCard>
       ) : null}
 
-      <Pressable style={styles.loadMoreButton}>
-        <Text style={styles.loadMoreText}>查看归档与更多工作区</Text>
-        <MaterialCommunityIcons name="chevron-down" size={18} color="#64748b" />
+      <Pressable style={[styles.loadMoreButton, (!page.hasMore || loadingMore) && styles.loadMoreButtonDisabled]} onPress={onLoadMore} disabled={!page.hasMore || loadingMore}>
+        <Text style={styles.loadMoreText}>{loadingMore ? '加载中' : page.hasMore ? '查看归档与更多工作区' : `已显示全部 ${page.total} 个工作区`}</Text>
+        <MaterialCommunityIcons name={loadingMore ? 'progress-clock' : 'chevron-down'} size={18} color="#64748b" />
       </Pressable>
     </View>
   )
@@ -550,6 +1779,470 @@ function WorkspaceScreen({ layoutTier }: { layoutTier: LayoutTier }) {
 }
 
 function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }: { workspace: Workspace; layoutTier: LayoutTier; mobileScale: MobileScale; onOpenWorkspacePanel: () => void }) {
+  const isCompact = layoutTier === 'compact'
+  const isStandard = layoutTier === 'standard'
+  const isWide = layoutTier === 'wide'
+  const insets = useSafeAreaInsets()
+  const keyboardBottomSpacing = useIosKeyboardBottomSpacing(insets.bottom)
+  const keyboardOffset = 0
+  const composerBottomSpacing = Platform.OS === 'ios' ? keyboardBottomSpacing : 0
+  const composerSafePadding = Platform.OS === 'ios' ? Math.max(insets.bottom, 10) : 0
+  const projectId = workspace.projectId ?? workspace.id
+  const [chatState, setChatState] = useState<ChatStateView>(() => createEmptyChatState())
+  const [draftMessage, setDraftMessage] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
+  const [chatError, setChatError] = useState('')
+  const [streaming, setStreaming] = useState(false)
+  const [expandedProcessIds, setExpandedProcessIds] = useState<Set<string>>(() => new Set())
+  const [draftSelection, setDraftSelection] = useState({ start: 0, end: 0 })
+  const [selectedMentionAgentId, setSelectedMentionAgentId] = useState<string | undefined>()
+  const streamRef = useRef<ProjectMessageStream | null>(null)
+  const lastFailedMessageRef = useRef<FailedChatSend | null>(null)
+  const visibleChatAgents = getVisibleChatAgents(workspace, chatState.agents)
+  const activeMentionToken = workspace.kind === 'group' ? findActiveMentionToken(draftMessage, draftSelection.start) : null
+  const mentionCandidates = useMemo(() => {
+    if (workspace.kind !== 'group' || !activeMentionToken) return []
+    return visibleChatAgents
+      .filter(agent => projectAgentMatchesMentionQuery(agent, activeMentionToken.query))
+      .slice(0, 8)
+  }, [activeMentionToken?.query, visibleChatAgents, workspace.kind])
+  const showMentionMenu = workspace.kind === 'group' && !streaming && !!activeMentionToken && mentionCandidates.length > 0
+
+  function handleDraftMessageChange(nextText: string) {
+    setDraftMessage(nextText)
+    if (selectedMentionAgentId && findMentionedProjectAgentId(nextText, visibleChatAgents) !== selectedMentionAgentId) {
+      setSelectedMentionAgentId(undefined)
+    }
+    if (draftSelection.start === draftMessage.length && draftSelection.end === draftMessage.length) {
+      setDraftSelection({ start: nextText.length, end: nextText.length })
+    }
+  }
+
+  function insertMentionAgent(agent: ProjectAgent) {
+    const token = activeMentionToken ?? { start: draftSelection.start, end: draftSelection.end, query: '' }
+    const mentionText = `@${getAgentMentionHandle(agent)} `
+    const nextMessage = `${draftMessage.slice(0, token.start)}${mentionText}${draftMessage.slice(token.end)}`
+    const nextCursor = token.start + mentionText.length
+
+    setDraftMessage(nextMessage)
+    setSelectedMentionAgentId(agent.id)
+    setDraftSelection({ start: nextCursor, end: nextCursor })
+  }
+
+  async function loadChatState() {
+    setChatLoading(true)
+    setChatError('')
+
+    try {
+      const envelope = await fetchProjectState(projectId, { messageLimit: 40 })
+      setChatState(buildChatStateView(envelope))
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : '对话加载失败。')
+    } finally {
+      setChatLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    streamRef.current?.close()
+    streamRef.current = null
+    setChatState(createEmptyChatState())
+    setExpandedProcessIds(new Set())
+    setDraftMessage('')
+    setDraftSelection({ start: 0, end: 0 })
+    setSelectedMentionAgentId(undefined)
+    lastFailedMessageRef.current = null
+    setStreaming(false)
+    void loadChatState()
+
+    return () => {
+      streamRef.current?.close()
+      streamRef.current = null
+    }
+  }, [projectId])
+
+  function appendStreamingMessage(detail: ProjectWorkflowEvent['event'], createdAt: string) {
+    if (!detail) return
+    const delta = detail.type === 'assistant_delta'
+      ? detail.delta ?? detail.content ?? detail.text ?? detail.message ?? ''
+      : ''
+    if (detail.type === 'assistant_delta' && !delta) return
+
+    setChatState(current => {
+      const nextMessages = upsertStreamingAssistantMessage(current.messages, {
+        messageId: detail.messageId,
+        agentId: detail.senderId ?? detail.agentId,
+        turnId: detail.turnId,
+        delta,
+        createdAt,
+      })
+      return createChatStateView({ ...current, messages: nextMessages })
+    })
+  }
+
+  function appendWorkflowEventToTimeline(eventType: ProjectWorkflowStreamEvent, rawData: string | null, parsedDetail?: ProjectWorkflowEvent['event']) {
+    const createdAt = new Date().toISOString()
+    let payload: Record<string, unknown> = {}
+
+    if (rawData) {
+      try {
+        payload = JSON.parse(rawData) as Record<string, unknown>
+      } catch {
+        payload = { summary: rawData }
+      }
+    }
+
+    const detailPayload = (payload.event && typeof payload.event === 'object' ? payload.event : payload) as Record<string, unknown>
+    const eventDetail = {
+      ...detailPayload,
+      type: typeof detailPayload.type === 'string' ? detailPayload.type : eventType === 'workflow_event' ? undefined : eventType,
+    } as ProjectWorkflowEvent['event']
+
+    const detail = parsedDetail ?? eventDetail
+
+    if (!detail?.type || detail.type === 'assistant_delta') return
+
+    const workflowEvent: ProjectWorkflowEvent = {
+      id: typeof payload.id === 'string' ? payload.id : `stream-event-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      workspaceId: typeof payload.workspaceId === 'string' ? payload.workspaceId : undefined,
+      conversationId: typeof payload.conversationId === 'string' ? payload.conversationId : chatState.conversationId,
+      event: detail,
+      createdAt: typeof payload.createdAt === 'string' ? payload.createdAt : createdAt,
+    }
+    const step = mapWorkflowEventToStep(workflowEvent)
+    if (!step) return
+
+    setChatState(current => {
+      const nextGroups = appendProcessStepToGroups(current.processGroups, detail.turnId ?? 'local-streaming-turn', step, {
+        createdAt: workflowEvent.createdAt,
+      })
+      return createChatStateView({ ...current, processGroups: nextGroups })
+    })
+  }
+
+  function handleProjectStreamEvent(eventType: ProjectStreamEvent, rawData: string | null, onWorkflowFinished?: () => void) {
+    const detail = parseStreamPayload(rawData, eventType)
+    if (!detail?.type) return
+
+    if (detail.type === 'assistant_message_started' || detail.type === 'assistant_delta') {
+      appendStreamingMessage(detail, new Date().toISOString())
+    }
+
+    if (STREAM_WORKFLOW_EVENT_NAME_SET.has(detail.type)) {
+      appendWorkflowEventToTimeline(detail.type as ProjectWorkflowStreamEvent, rawData, detail)
+    }
+
+    if (detail.type === 'workflow_finished') {
+      onWorkflowFinished?.()
+    }
+  }
+
+  async function sendMessage(retryPayload?: FailedChatSend) {
+    const content = (retryPayload?.content ?? draftMessage).trim()
+    if (!content || streaming) return
+    const targetAgentId =
+      workspace.kind === 'direct'
+        ? workspace.agents[0]
+        : retryPayload?.agentId ?? selectedMentionAgentId ?? findMentionedProjectAgentId(content, visibleChatAgents)
+
+    const now = new Date().toISOString()
+    const optimisticMessage: ChatMessageView = {
+      id: `local-${Date.now()}`,
+      sender: 'user',
+      text: content,
+      time: formatMessageTime(now),
+      createdAt: now,
+    }
+    if (!retryPayload) {
+      setDraftMessage('')
+      setDraftSelection({ start: 0, end: 0 })
+      setSelectedMentionAgentId(undefined)
+    }
+    setStreaming(true)
+    setChatError('')
+    lastFailedMessageRef.current = null
+    const sentProcessStep: ChatProcessStep = {
+      id: `local-process-${Date.now()}`,
+      icon: 'progress-clock',
+      title: '消息已发送',
+      summary: '正在等待后端流式响应',
+      time: formatMessageTime(now),
+      tone: 'running',
+    }
+
+    setChatState(current => {
+      const nextMessages = [...current.messages, optimisticMessage]
+      const nextGroups = appendProcessStepToGroups(current.processGroups, 'local-streaming-turn', sentProcessStep, {
+        local: true,
+        createdAt: now,
+      })
+      return createChatStateView({ ...current, messages: nextMessages, processGroups: nextGroups })
+    })
+
+    const body: StreamProjectMessageInput = {
+      conversationId: chatState.conversationId,
+      content,
+      agentId: targetAgentId,
+    }
+
+    let finalized = false
+    const finishStream = () => {
+      if (finalized) return
+      finalized = true
+      setStreaming(false)
+      streamRef.current?.close()
+      streamRef.current = null
+      void loadChatState()
+    }
+
+    streamRef.current = streamProjectMessage(projectId, body, {
+      onEvent: ({ eventType, rawData }) => {
+        handleProjectStreamEvent(eventType, rawData, finishStream)
+      },
+      onError: error => {
+        setChatError(error.message)
+        lastFailedMessageRef.current = { content, agentId: targetAgentId }
+        finishStream()
+      },
+      onClose: () => {
+        finishStream()
+      },
+    })
+  }
+
+  const messageCountText = chatState.messagePage ? `第 ${chatState.messagePage.page ?? 1} 页 · ${chatState.messagePage.total} 条消息` : `${chatState.messages.length} 条消息`
+
+  return (
+    <KeyboardAvoidingView style={[styles.chatScreen, { paddingBottom: composerBottomSpacing }]} behavior={Platform.OS === 'ios' ? undefined : 'height'} keyboardVerticalOffset={keyboardOffset}>
+      <ScrollView
+        style={styles.chatScroll}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={[
+          styles.chatScrollInner,
+          isCompact && styles.chatScrollInnerCompact,
+          isStandard && styles.chatScrollInnerStandard,
+          isWide && styles.chatScrollInnerWide,
+          { paddingBottom: 24 + composerSafePadding },
+        ]}
+      >
+        <GlassCard style={[styles.chatWorkspaceCard, isCompact && styles.chatWorkspaceCardCompact, isStandard && styles.chatWorkspaceCardStandard]}>
+          <View style={styles.chatWorkspaceTop}>
+            <View style={styles.chatWorkspaceCopy}>
+              <Text style={styles.homeWorkspaceEyebrow}>{workspace.kind === 'group' ? 'GROUP WORKSPACE' : 'DIRECT WORKSPACE'}</Text>
+              <Text style={styles.chatWorkspaceTitle}>{workspace.name}</Text>
+            </View>
+            <Pill label={streaming ? 'streaming' : 'ready'} tone="blue" icon={streaming ? 'chart-timeline-variant-shimmer' : 'waveform'} />
+          </View>
+          <Text style={styles.homeWorkspaceDesc} numberOfLines={2}>{workspace.goal}</Text>
+          <Pressable style={styles.chatWorkspaceSwitchInline} onPress={onOpenWorkspacePanel}>
+            <MaterialCommunityIcons name="swap-horizontal" size={18} color="#2563eb" />
+            <Text style={styles.chatWorkspaceSwitchText}>打开工作区切换面板</Text>
+          </Pressable>
+          <View style={styles.chatAgentOverview}>
+            {visibleChatAgents.slice(0, isCompact ? 3 : 4).map((agent, index) => (
+              <View key={agent.id} style={{ marginLeft: index === 0 ? 0 : -8 }}>
+                <AgentGlyph agentId={agent.id} label={agent.name} provider={agent.modelProvider} color={getProjectAgentColor(agent)} size={mobileScale.chatMiniAvatar} />
+              </View>
+            ))}
+            <Text style={styles.chatAgentOverviewText}>{messageCountText}</Text>
+          </View>
+        </GlassCard>
+
+        {chatError ? (
+          <GlassCard style={styles.emptyStateCard}>
+            <MaterialCommunityIcons name="alert-circle-outline" size={26} color="#dc2626" />
+            <Text style={styles.cardTitle}>{lastFailedMessageRef.current ? '发送失败' : '对话加载失败'}</Text>
+            <Text style={styles.bodyText}>{chatError}</Text>
+            <Pressable style={styles.pinnedExpandButton} onPress={() => {
+              if (lastFailedMessageRef.current) {
+                void sendMessage(lastFailedMessageRef.current)
+              } else {
+                void loadChatState()
+              }
+            }}>
+              <Text style={styles.pinnedExpandText}>重试</Text>
+              <MaterialCommunityIcons name="refresh" size={18} color="#64748b" />
+            </Pressable>
+          </GlassCard>
+        ) : null}
+
+        {chatLoading && chatState.messages.length === 0 ? (
+          <GlassCard style={styles.emptyStateCard}>
+            <MaterialCommunityIcons name="progress-clock" size={26} color="#2563eb" />
+            <Text style={styles.cardTitle}>正在加载对话</Text>
+          </GlassCard>
+        ) : null}
+
+        {chatState.timelineItems.map(item =>
+          item.type === 'message' ? (
+            <ChatMessageBubble key={item.id} message={item.message} mobileScale={mobileScale} agentList={chatState.agents} />
+          ) : (
+            <ChatProcessPanel
+              key={item.id}
+              group={item.group}
+              mobileScale={mobileScale}
+              streaming={streaming && item.group.status === 'running'}
+              expanded={expandedProcessIds.has(item.group.id)}
+              onToggleExpanded={() => {
+                setExpandedProcessIds(previous => {
+                  const next = new Set(previous)
+                  if (next.has(item.group.id)) {
+                    next.delete(item.group.id)
+                  } else {
+                    next.add(item.group.id)
+                  }
+                  return next
+                })
+              }}
+            />
+          ),
+        )}
+
+        {chatState.artifacts.length > 0 ? (
+          <GlassCard style={styles.currentArtifactsPanel}>
+            <Text style={styles.currentArtifactsTitle}>当前产出</Text>
+            <View style={[styles.currentArtifactGrid, isCompact && styles.currentArtifactGridCompact]}>
+              {chatState.artifacts.map(item => (
+                <CurrentArtifactCard key={item.id} artifact={item} mobileScale={mobileScale} onPress={() => undefined} />
+              ))}
+            </View>
+          </GlassCard>
+        ) : null}
+      </ScrollView>
+
+      <View style={[styles.chatComposerDock, { paddingBottom: composerSafePadding }]}>
+        {showMentionMenu ? (
+          <GlassCard style={styles.mentionAgentMenu}>
+            <ScrollView style={styles.mentionAgentList} keyboardShouldPersistTaps="always" nestedScrollEnabled showsVerticalScrollIndicator={mentionCandidates.length > 3}>
+              {mentionCandidates.map(agent => (
+                <Pressable key={agent.id} style={styles.mentionAgentRow} onPress={() => insertMentionAgent(agent)}>
+                  <AgentGlyph agentId={agent.id} label={agent.name} provider={agent.modelProvider} color={getProjectAgentColor(agent)} size={34} />
+                  <View style={styles.mentionAgentCopy}>
+                    <View style={styles.mentionAgentNameRow}>
+                      <Text style={styles.mentionAgentName} numberOfLines={1}>{agent.name ?? agent.id}</Text>
+                      <Text style={styles.mentionAgentHandle} numberOfLines={1}>@{getAgentMentionHandle(agent)}</Text>
+                    </View>
+                    {agent.role || agent.description ? <Text style={styles.mentionAgentRole} numberOfLines={1}>{agent.role ?? agent.description}</Text> : null}
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </GlassCard>
+        ) : null}
+        <GlassCard style={styles.chatComposer}>
+          <TextInput
+            placeholder="给工作区发送任务"
+            placeholderTextColor="#94a3b8"
+            value={draftMessage}
+            onChangeText={handleDraftMessageChange}
+            onSelectionChange={event => setDraftSelection(event.nativeEvent.selection)}
+            style={styles.chatComposerInput}
+            editable={!streaming}
+            multiline
+            scrollEnabled
+          />
+          <Pressable style={[styles.chatSendButton, (!draftMessage.trim() || streaming) && styles.chatSendButtonDisabled]} onPress={() => void sendMessage()} disabled={!draftMessage.trim() || streaming}>
+            <MaterialCommunityIcons name={streaming ? 'progress-clock' : 'arrow-up'} size={25} color="#fff" />
+          </Pressable>
+        </GlassCard>
+      </View>
+    </KeyboardAvoidingView>
+  )
+}
+
+function ChatMessageBubble({ message, mobileScale, agentList }: { message: ChatMessageView; mobileScale: MobileScale; agentList: ProjectAgent[] }) {
+  const isUser = message.sender === 'user'
+  const projectAgent = findProjectAgent(agentList, message.agentId)
+  const fallbackAgent = message.agentId ? agents.find(item => item.id === message.agentId) : undefined
+  const agentName = projectAgent?.name ?? fallbackAgent?.name ?? message.agentId ?? 'Agent'
+
+  if (isUser) {
+    return (
+      <View style={styles.userMessageRow}>
+        <GlassCard style={styles.userPromptBubble}>
+          <Text style={[styles.userPromptText, { fontSize: mobileScale.messageText, lineHeight: mobileScale.messageLineHeight }]}>{message.text}</Text>
+          {message.time ? <Text style={styles.chatBubbleTime}>{message.time}</Text> : null}
+        </GlassCard>
+        <View style={[styles.chatUserGlyph, { width: mobileScale.chatUserAvatar, height: mobileScale.chatUserAvatar, borderRadius: mobileScale.chatUserAvatar / 2 }]}>
+          <MaterialCommunityIcons name="account" size={mobileScale.chatUserAvatar * 0.54} color="#fff" />
+        </View>
+      </View>
+    )
+  }
+
+  return (
+    <View style={styles.agentMessageBlock}>
+      <View style={styles.agentMessageMetaRow}>
+        <AgentGlyph agentId={message.agentId ?? 'orchestrator'} label={projectAgent?.name} provider={projectAgent?.modelProvider} color={getProjectAgentColor(projectAgent)} size={mobileScale.chatAgentAvatar} />
+        <Text style={styles.agentMessageName}>{agentName}</Text>
+        {message.time ? (
+          <View style={styles.agentSmallBadge}>
+            <Text style={styles.agentSmallBadgeText}>{message.time}</Text>
+          </View>
+        ) : null}
+      </View>
+      <GlassCard style={styles.chatBubbleLarge}>
+        <Text style={[styles.chatBubbleText, { fontSize: mobileScale.messageText, lineHeight: mobileScale.messageLineHeight }]}>{message.text || '...'}</Text>
+      </GlassCard>
+    </View>
+  )
+}
+
+function ChatProcessPanel({
+  group,
+  mobileScale,
+  streaming,
+  expanded,
+  onToggleExpanded,
+}: {
+  group: ChatProcessGroup
+  mobileScale: MobileScale
+  streaming: boolean
+  expanded: boolean
+  onToggleExpanded: () => void
+}) {
+  const hiddenStepCount = Math.max(0, group.steps.length - PROCESS_PREVIEW_STEP_COUNT)
+  const visibleSteps = expanded ? group.steps : group.steps.slice(-PROCESS_PREVIEW_STEP_COUNT)
+  const statusText = streaming || group.status === 'running' ? '进行中' : group.status === 'failed' ? '异常' : '已完成'
+
+  return (
+    <GlassCard style={[styles.chatProcessCard, group.status === 'running' && styles.chatProcessCardRunning]}>
+      <View style={styles.chatProcessHead}>
+        <View style={styles.chatProcessTitleLine}>
+          <MaterialCommunityIcons name="robot-outline" size={22} color="#2563eb" />
+          <Text style={[styles.chatProcessTitle, { fontSize: mobileScale.panelTitle }]}>本轮过程</Text>
+          {group.steps.length > PROCESS_PREVIEW_STEP_COUNT ? (
+            <Text style={[styles.chatProcessCount, { fontSize: mobileScale.metaText }]}>最新 {visibleSteps.length}/{group.steps.length}</Text>
+          ) : null}
+        </View>
+        <View style={[styles.processStatePill, group.status === 'failed' && styles.processStatePillFailed]}>
+          <Text style={[styles.processStateText, group.status === 'failed' && styles.processStateTextFailed, { fontSize: mobileScale.labelText }]}>{statusText}</Text>
+        </View>
+      </View>
+      {visibleSteps.map(step => (
+        <View key={step.id} style={styles.chatProcessRow}>
+          <View style={[styles.chatProcessIcon, step.tone === 'done' && styles.chatProcessIconDone, step.tone === 'running' && styles.chatProcessIconRunning, step.tone === 'failed' && styles.chatProcessIconFailed]}>
+            <MaterialCommunityIcons name={step.icon} size={19} color={step.tone === 'done' ? '#10b981' : '#fff'} />
+          </View>
+          <View style={styles.chatProcessStepBody}>
+            <Text style={[styles.chatProcessStepTitle, { fontSize: mobileScale.messageText }]} numberOfLines={1}>{step.title}</Text>
+            <Text style={[styles.chatProcessSummary, { fontSize: mobileScale.messageText }]} numberOfLines={expanded ? 5 : 2}>{step.summary}</Text>
+          </View>
+          {step.time ? <Text style={[styles.chatProcessTime, { fontSize: mobileScale.metaText }]}>{step.time}</Text> : null}
+        </View>
+      ))}
+      {hiddenStepCount > 0 ? (
+        <Pressable style={styles.chatProcessExpandButton} onPress={onToggleExpanded}>
+          <Text style={styles.chatProcessExpandText}>{expanded ? '收起过程' : `展开全部 ${group.steps.length} 步`}</Text>
+          <MaterialCommunityIcons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color="#2563eb" />
+        </Pressable>
+      ) : null}
+    </GlassCard>
+  )
+}
+
+function LegacyChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }: { workspace: Workspace; layoutTier: LayoutTier; mobileScale: MobileScale; onOpenWorkspacePanel: () => void }) {
   const isCompact = layoutTier === 'compact'
   const isStandard = layoutTier === 'standard'
   const isWide = layoutTier === 'wide'
@@ -783,6 +2476,7 @@ function WorkspacePanelModal({
   workspaceList,
   activeWorkspaceId,
   layoutTier,
+  creating,
   onClose,
   onSwitch,
   onCreate,
@@ -792,22 +2486,28 @@ function WorkspacePanelModal({
   workspaceList: Workspace[]
   activeWorkspaceId: string
   layoutTier: LayoutTier
+  creating: boolean
   onClose: () => void
   onSwitch: (workspace: Workspace) => void
-  onCreate: (workspace: Workspace) => void
+  onCreate: (input: CreateWorkspaceInput) => void
 }) {
   const [draftName, setDraftName] = useState('')
+  const [draftGoal, setDraftGoal] = useState('通过多 Agent 协作完成一个可预览产物。')
   const [draftKind, setDraftKind] = useState<Workspace['kind']>('group')
   const [draftType, setDraftType] = useState<Workspace['type']>('dev')
   const [selectedAgents, setSelectedAgents] = useState<string[]>(['orchestrator', 'engineer'])
+  const [typeOpen, setTypeOpen] = useState(false)
+  const [agentOpen, setAgentOpen] = useState(false)
   const isCompact = layoutTier === 'compact'
   const visibleWorkspaces = workspaceList.filter(workspace => !workspace.archived).slice(0, 5)
-  const typeOptions: { value: Workspace['type']; label: string; icon: IconName }[] = [
-    { value: 'dev', label: '开发', icon: 'code-braces' },
-    { value: 'research', label: '研究', icon: 'book-search-outline' },
-    { value: 'writing', label: '写作', icon: 'text-box-edit-outline' },
-    { value: 'chat', label: '聊天', icon: 'message-outline' },
+  const typeOptions: { value: Workspace['type']; label: string; helper: string }[] = [
+    { value: 'dev', label: '开发工作区', helper: '适合多 Agent 协作实现、联调和交付。' },
+    { value: 'research', label: '研究工作区', helper: '适合资料调研、归纳分析和报告草拟。' },
+    { value: 'writing', label: '文档工作区', helper: '适合文档、方案、脚本和内容产出。' },
   ]
+  const activeType = typeOptions.find(option => option.value === draftType) ?? typeOptions[0]
+  const targetAgent = agents.find(agent => agent.id === selectedAgents[0]) ?? agents.find(agent => agent.id === 'engineer') ?? agents[0]
+  const canCreate = draftName.trim().length > 0 && draftGoal.trim().length > 0 && !creating
 
   const toggleAgent = (agentId: string) => {
     setSelectedAgents(current => {
@@ -818,26 +2518,15 @@ function WorkspacePanelModal({
   }
 
   const createWorkspace = () => {
-    const fallbackName = draftKind === 'group' ? '新的群聊工作区' : '新的单聊工作区'
-    const nextWorkspace: Workspace = {
-      id: `ws-mock-${Date.now()}`,
-      name: draftName.trim() || fallbackName,
-      goal: draftKind === 'group' ? '多 Agent 协作处理一个新任务' : '与单个 Agent 快速沟通并沉淀产物',
-      kind: draftKind,
-      type: draftType,
-      status: 'ready',
-      pinned: false,
-      archived: false,
-      agents: draftKind === 'direct' ? selectedAgents.slice(0, 1) : selectedAgents,
-      runningAgents: 0,
-      artifactCount: 0,
-      messageCount: 0,
-      latestEventLabel: '刚刚创建，等待发送第一条任务',
-      updatedAt: '刚刚',
-    }
+    if (!canCreate) return
 
-    setDraftName('')
-    onCreate(nextWorkspace)
+    onCreate({
+      name: draftName.trim(),
+      goal: draftGoal.trim(),
+      workspaceType: draftKind === 'direct' ? 'chat' : draftType,
+      conversationType: draftKind,
+      agentIds: draftKind === 'direct' ? selectedAgents.slice(0, 1) : selectedAgents,
+    })
   }
 
   return (
@@ -882,57 +2571,114 @@ function WorkspacePanelModal({
             ) : null}
 
             {mode === 'create' ? (
-              <View style={styles.workspacePanelSection}>
-              <Text style={styles.workspacePanelSectionTitle}>创建工作区</Text>
-              <TextInput
-                value={draftName}
-                onChangeText={setDraftName}
-                placeholder="输入工作区名称"
-                placeholderTextColor="#94a3b8"
-                style={styles.workspaceNameInput}
-              />
+              <View style={styles.workspaceCreateForm}>
+                <Text style={styles.workspaceCreateTitle}>新建工作区</Text>
+                <View style={styles.workspaceFormField}>
+                  <Text style={styles.workspaceFormLabel}>工作区名称</Text>
+                  <TextInput
+                    value={draftName}
+                    onChangeText={setDraftName}
+                    placeholder="例如：投票小程序联调"
+                    placeholderTextColor="#94a3b8"
+                    style={styles.workspaceNameInput}
+                  />
+                </View>
 
-              <View style={styles.workspaceOptionRow}>
-                {(['group', 'direct'] as Workspace['kind'][]).map(kind => (
-                  <Pressable
-                    key={kind}
-                    style={[styles.workspaceKindCard, draftKind === kind && styles.workspaceKindCardActive]}
-                    onPress={() => {
-                      setDraftKind(kind)
-                      if (kind === 'direct') setSelectedAgents(current => current.slice(0, 1))
-                    }}
-                  >
-                    <MaterialCommunityIcons name={kind === 'group' ? 'account-group-outline' : 'account-outline'} size={22} color={draftKind === kind ? '#2563eb' : '#64748b'} />
-                    <Text style={[styles.workspaceKindText, draftKind === kind && styles.workspaceKindTextActive]}>{kind === 'group' ? '群聊工作区' : '单聊工作区'}</Text>
-                  </Pressable>
-                ))}
-              </View>
+                <View style={styles.workspaceFormField}>
+                  <Text style={styles.workspaceFormLabel}>工作区目标</Text>
+                  <TextInput
+                    value={draftGoal}
+                    onChangeText={setDraftGoal}
+                    placeholder="通过多 Agent 协作完成一个可预览产物。"
+                    placeholderTextColor="#94a3b8"
+                    multiline
+                    textAlignVertical="top"
+                    style={[styles.workspaceNameInput, styles.workspaceGoalInput]}
+                  />
+                </View>
 
-              <View style={styles.workspaceChipWrap}>
-                {typeOptions.map(option => (
-                  <Pressable key={option.value} style={[styles.workspaceTypeChip, draftType === option.value && styles.workspaceTypeChipActive]} onPress={() => setDraftType(option.value)}>
-                    <MaterialCommunityIcons name={option.icon} size={16} color={draftType === option.value ? '#2563eb' : '#64748b'} />
-                    <Text style={[styles.workspaceTypeText, draftType === option.value && styles.workspaceTypeTextActive]}>{option.label}</Text>
-                  </Pressable>
-                ))}
-              </View>
+                <View style={styles.workspaceFormField}>
+                  <Text style={styles.workspaceFormLabel}>会话模式</Text>
+                  <View style={styles.workspaceSegmentControl}>
+                    {(['group', 'direct'] as Workspace['kind'][]).map(kind => (
+                      <Pressable
+                        key={kind}
+                        style={[styles.workspaceSegmentItem, draftKind === kind && styles.workspaceSegmentItemActive]}
+                        onPress={() => {
+                          setDraftKind(kind)
+                          if (kind === 'direct') setSelectedAgents(current => current.slice(0, 1))
+                          setTypeOpen(false)
+                          setAgentOpen(false)
+                        }}
+                      >
+                        <Text style={[styles.workspaceSegmentText, draftKind === kind && styles.workspaceSegmentTextActive]}>{kind === 'group' ? '群聊工作区' : '单聊工作区'}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <Text style={styles.workspaceFormHelp}>{draftKind === 'group' ? '由主脑协调多个 Agent 协作。' : '直接与一个 Agent 沟通，适合轻量任务。'}</Text>
+                </View>
 
-              <View style={styles.workspaceChipWrap}>
-                {agents.map(agent => {
-                  const checked = selectedAgents.includes(agent.id)
-                  return (
-                    <Pressable key={agent.id} style={[styles.agentSelectChip, checked && styles.agentSelectChipActive]} onPress={() => toggleAgent(agent.id)}>
-                      <View style={[styles.agentSelectDot, { backgroundColor: agent.color }]} />
-                      <Text style={[styles.agentSelectText, checked && styles.agentSelectTextActive]} numberOfLines={1}>{agent.name}</Text>
+                {draftKind === 'group' ? (
+                  <View style={styles.workspaceFormField}>
+                    <Text style={styles.workspaceFormLabel}>工作区类型</Text>
+                    <Pressable style={styles.workspaceSelectBox} onPress={() => setTypeOpen(open => !open)}>
+                      <Text style={styles.workspaceSelectText}>{activeType.label}</Text>
+                      <MaterialCommunityIcons name={typeOpen ? 'chevron-up' : 'chevron-down'} size={22} color="#334155" />
                     </Pressable>
-                  )
-                })}
-              </View>
+                    {typeOpen ? (
+                      <View style={styles.workspaceSelectMenu}>
+                        {typeOptions.map(option => (
+                          <Pressable
+                            key={option.value}
+                            style={[styles.workspaceSelectOption, draftType === option.value && styles.workspaceSelectOptionActive]}
+                            onPress={() => {
+                              setDraftType(option.value)
+                              setTypeOpen(false)
+                            }}
+                          >
+                            <Text style={[styles.workspaceSelectOptionText, draftType === option.value && styles.workspaceSelectOptionTextActive]}>{option.label}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    ) : null}
+                    <Text style={styles.workspaceFormHelp}>{activeType.helper}</Text>
+                  </View>
+                ) : (
+                  <View style={styles.workspaceFormField}>
+                    <Text style={styles.workspaceFormLabel}>目标 Agent</Text>
+                    <Pressable style={styles.workspaceSelectBox} onPress={() => setAgentOpen(open => !open)}>
+                      <Text style={styles.workspaceSelectText}>{targetAgent?.name ?? '工程师 Agent'}</Text>
+                      <MaterialCommunityIcons name={agentOpen ? 'chevron-up' : 'chevron-down'} size={22} color="#334155" />
+                    </Pressable>
+                    {agentOpen ? (
+                      <View style={styles.workspaceSelectMenu}>
+                        {agents.map(agent => (
+                          <Pressable
+                            key={agent.id}
+                            style={[styles.workspaceSelectOption, targetAgent?.id === agent.id && styles.workspaceSelectOptionActive]}
+                            onPress={() => {
+                              setSelectedAgents([agent.id])
+                              setAgentOpen(false)
+                            }}
+                          >
+                            <Text style={[styles.workspaceSelectOptionText, targetAgent?.id === agent.id && styles.workspaceSelectOptionTextActive]}>{agent.name}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    ) : null}
+                    <Text style={styles.workspaceFormHelp}>固定把消息发送给一个目标 Agent，适合聚焦式调试。</Text>
+                  </View>
+                )}
 
-              <Pressable style={styles.workspaceCreateButton} onPress={createWorkspace}>
-                <MaterialCommunityIcons name="plus" size={20} color="#fff" />
-                <Text style={styles.workspaceCreateText}>创建并进入</Text>
-              </Pressable>
+                <Text style={styles.workspaceCreateTarget}>当前创建目标： 业务后端 API / {BUSINESS_API_BASE_URL.replace(/^https?:\/\//, '')}</Text>
+                <View style={styles.workspaceCreateActions}>
+                  <Pressable style={styles.workspaceCancelButton} onPress={onClose} disabled={creating}>
+                    <Text style={styles.workspaceCancelText}>取消</Text>
+                  </Pressable>
+                  <Pressable style={[styles.workspaceCreateButton, !canCreate && styles.workspaceCreateButtonDisabled]} onPress={createWorkspace} disabled={!canCreate}>
+                    <Text style={styles.workspaceCreateText}>{creating ? '创建中' : '创建工作区'}</Text>
+                  </Pressable>
+                </View>
               </View>
             ) : null}
           </ScrollView>
@@ -1369,13 +3115,30 @@ function Feature({ icon, label }: { icon: IconName; label: string }) {
   )
 }
 
-function WorkspaceCard({ workspace, layoutTier, mobileScale, onPress, onTogglePin }: { workspace: Workspace; layoutTier: LayoutTier; mobileScale: MobileScale; onPress?: () => void; onTogglePin?: () => void }) {
+function WorkspaceCard({
+  workspace,
+  agentList,
+  layoutTier,
+  mobileScale,
+  onPress,
+  onTogglePin,
+  onToggleArchive,
+}: {
+  workspace: Workspace
+  agentList?: ProjectAgent[]
+  layoutTier: LayoutTier
+  mobileScale: MobileScale
+  onPress?: () => void
+  onTogglePin?: () => void
+  onToggleArchive?: () => void
+}) {
   const isCompact = layoutTier === 'compact'
   const iconName = workspace.kind === 'group' ? 'school-outline' : 'account-group-outline'
   const typeLabel = workspace.type === 'dev' ? 'dev' : workspace.type === 'chat' ? 'chat' : workspace.type === 'research' ? 'research' : 'writing'
   const statusLabel = workspace.status === 'running' ? '运行中' : workspace.status === 'ready' ? 'ready' : 'failed'
   const primaryLabel = workspace.id === 'ws-campus' ? '主工作区' : workspace.type
-  const extraAgents = Math.max(0, workspace.agents.length - 4)
+  const workspaceAgents = getVisibleChatAgents(workspace, agentList ?? [])
+  const extraAgents = Math.max(0, workspaceAgents.length - 4)
 
   return (
     <Pressable onPress={onPress} disabled={!onPress}>
@@ -1408,23 +3171,35 @@ function WorkspaceCard({ workspace, layoutTier, mobileScale, onPress, onTogglePi
           </View>
         </View>
         <View style={styles.workspaceActionColumn}>
-          <Pressable
-            style={styles.workspacePinButton}
-            hitSlop={8}
-            onPress={event => {
-              event.stopPropagation()
-              onTogglePin?.()
-            }}
-          >
-            <MaterialCommunityIcons name="pin" size={22} color={workspace.pinned ? '#d97706' : '#c4c9d4'} />
-          </Pressable>
+          <View style={styles.workspaceActionButtons}>
+            <Pressable
+              style={styles.workspacePinButton}
+              hitSlop={8}
+              onPress={event => {
+                event.stopPropagation()
+                onTogglePin?.()
+              }}
+            >
+              <MaterialCommunityIcons name="pin" size={22} color={workspace.pinned ? '#d97706' : '#c4c9d4'} />
+            </Pressable>
+            <Pressable
+              style={[styles.workspacePinButton, workspace.archived && styles.workspaceArchiveButtonActive]}
+              hitSlop={8}
+              onPress={event => {
+                event.stopPropagation()
+                onToggleArchive?.()
+              }}
+            >
+              <MaterialCommunityIcons name={workspace.archived ? 'archive-arrow-up-outline' : 'archive-outline'} size={21} color={workspace.archived ? '#2563eb' : '#c4c9d4'} />
+            </Pressable>
+          </View>
           <MaterialCommunityIcons name="chevron-right" size={26} color="#64748b" />
         </View>
       </View>
       <View style={styles.workspaceAvatarRow}>
-        {workspace.agents.slice(0, 4).map((agentId, index) => (
-          <View key={agentId} style={{ marginLeft: index === 0 ? 0 : -10 }}>
-            <AgentGlyph agentId={agentId} size={mobileScale.workspaceAgentAvatar} />
+        {workspaceAgents.slice(0, 4).map((agent, index) => (
+          <View key={agent.id} style={{ marginLeft: index === 0 ? 0 : -10 }}>
+            <AgentGlyph agentId={agent.id} label={agent.name} provider={agent.modelProvider} color={getProjectAgentColor(agent)} size={mobileScale.workspaceAgentAvatar} />
           </View>
         ))}
         {extraAgents > 0 ? (
@@ -1813,6 +3588,240 @@ const styles = StyleSheet.create({
   },
   safe: {
     flex: 1,
+  },
+  backendGate: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+    paddingBottom: Platform.select({ ios: 28, android: 18, default: 24 }),
+  },
+  backendGateCompact: {
+    paddingHorizontal: 16,
+  },
+  backendGateCard: {
+    alignItems: 'center',
+    gap: 14,
+    paddingHorizontal: 22,
+    paddingVertical: 28,
+  },
+  backendGateCardCompact: {
+    paddingHorizontal: 16,
+    paddingVertical: 22,
+  },
+  backendGateIconWrap: {
+    width: 76,
+    height: 76,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.72)',
+    borderRadius: 24,
+    backgroundColor: 'rgba(239,246,255,0.78)',
+  },
+  backendGateTitle: {
+    color: '#172033',
+    textAlign: 'center',
+    fontWeight: '900',
+  },
+  backendGateBody: {
+    maxWidth: 320,
+    color: '#526173',
+    textAlign: 'center',
+    fontWeight: '800',
+  },
+  backendEndpointPill: {
+    maxWidth: '100%',
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(191,219,254,0.86)',
+    borderRadius: 18,
+    backgroundColor: 'rgba(239,246,255,0.68)',
+  },
+  backendEndpointText: {
+    flexShrink: 1,
+    color: '#2563eb',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  backendGateError: {
+    maxWidth: 320,
+    color: '#b91c1c',
+    textAlign: 'center',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  backendRetryButton: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 20,
+    borderRadius: 18,
+    backgroundColor: '#2563eb',
+  },
+  backendRetryText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  backendDialogBackdrop: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  backendDialogScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15,23,42,0.36)',
+  },
+  backendDialogCard: {
+    width: '100%',
+    maxWidth: 360,
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 22,
+    borderRadius: 24,
+  },
+  backendDialogIconWrap: {
+    width: 58,
+    height: 58,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(254,202,202,0.9)',
+    borderRadius: 20,
+    backgroundColor: 'rgba(254,242,242,0.86)',
+  },
+  backendDialogTitle: {
+    color: '#172033',
+    textAlign: 'center',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  backendDialogBody: {
+    color: '#526173',
+    textAlign: 'center',
+    fontSize: 14,
+    lineHeight: 21,
+    fontWeight: '800',
+  },
+  backendDialogDetail: {
+    alignSelf: 'stretch',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(248,250,252,0.78)',
+    color: '#b91c1c',
+    textAlign: 'center',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '800',
+  },
+  backendDialogActions: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  backendDialogSecondaryButton: {
+    flex: 1,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.42)',
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.34)',
+  },
+  backendDialogSecondaryText: {
+    color: '#475569',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  backendDialogPrimaryButton: {
+    flex: 1,
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderRadius: 16,
+    backgroundColor: '#2563eb',
+  },
+  backendDialogPrimaryButtonDisabled: {
+    backgroundColor: '#94a3b8',
+  },
+  backendDialogPrimaryText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  filterTestConfirmButton: {
+    alignSelf: 'stretch',
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
+    backgroundColor: '#2563eb',
+  },
+  responseDialogCard: {
+    width: '100%',
+    maxWidth: 380,
+    maxHeight: '76%',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 18,
+    borderRadius: 24,
+  },
+  responseDialogScroll: {
+    alignSelf: 'stretch',
+    maxHeight: 360,
+  },
+  responseDialogContent: {
+    alignSelf: 'stretch',
+    minHeight: 220,
+    maxHeight: 360,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(15,23,42,0.86)',
+  },
+  responseDialogText: {
+    color: '#e2e8f0',
+    fontSize: 12,
+    lineHeight: 18,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+  responseDialogTextInput: {
+    minHeight: 220,
+    maxHeight: 360,
+    color: '#e2e8f0',
+    fontSize: 12,
+    lineHeight: 18,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+  responseCopyButton: {
+    alignSelf: 'stretch',
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderWidth: 1,
+    borderColor: 'rgba(37,99,235,0.28)',
+    borderRadius: 15,
+    backgroundColor: 'rgba(239,246,255,0.8)',
+  },
+  responseCopyText: {
+    color: '#2563eb',
+    fontSize: 14,
+    fontWeight: '900',
   },
   header: {
     flexDirection: 'row',
@@ -2367,6 +4376,96 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 7,
   },
+  workspaceDropdownLine: {
+    zIndex: 10,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  workspaceDropdownWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  workspaceDropdownButton: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+    paddingHorizontal: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(226,232,240,0.78)',
+    borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.5)',
+  },
+  workspaceDropdownButtonOpen: {
+    borderColor: 'rgba(37,99,235,0.42)',
+    backgroundColor: 'rgba(239,246,255,0.76)',
+  },
+  workspaceDropdownText: {
+    flex: 1,
+    minWidth: 0,
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  workspaceDropdownMenu: {
+    position: 'absolute',
+    top: 48,
+    left: 0,
+    right: 0,
+    overflow: 'hidden',
+    borderRadius: 14,
+  },
+  workspaceDropdownOption: {
+    minHeight: 38,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(226,232,240,0.5)',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+  },
+  workspaceDropdownOptionText: {
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  pinnedLimitNotice: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,247,237,0.5)',
+  },
+  pinnedLimitText: {
+    flex: 1,
+    minWidth: 0,
+    color: '#b45309',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '800',
+  },
+  pinnedExpandButton: {
+    minHeight: 42,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(226,232,240,0.72)',
+    borderRadius: 21,
+    backgroundColor: 'rgba(255,255,255,0.42)',
+  },
+  pinnedExpandText: {
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '900',
+  },
   workspaceCard: {
     padding: 16,
     gap: 14,
@@ -2466,12 +4565,20 @@ const styles = StyleSheet.create({
     minHeight: 92,
     paddingTop: 2,
   },
+  workspaceActionButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   workspacePinButton: {
     width: 34,
     height: 34,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 17,
+  },
+  workspaceArchiveButtonActive: {
+    backgroundColor: 'rgba(219,234,254,0.82)',
   },
   workspaceAvatarRow: {
     flexDirection: 'row',
@@ -2765,12 +4872,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
+  chatUserGlyph: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.76)',
+    backgroundColor: '#2563eb',
+  },
   chatProcessCard: {
     marginLeft: 66,
     maxWidth: '86%',
     padding: 14,
     gap: 9,
     borderRadius: 22,
+  },
+  chatProcessCardRunning: {
+    borderColor: 'rgba(37,99,235,0.22)',
   },
   chatProcessHead: {
     flexDirection: 'row',
@@ -2789,6 +4906,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
   },
+  chatProcessCount: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '800',
+  },
   processStatePill: {
     minHeight: 28,
     justifyContent: 'center',
@@ -2796,15 +4918,21 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: 'rgba(239,246,255,0.8)',
   },
+  processStatePillFailed: {
+    backgroundColor: 'rgba(254,226,226,0.85)',
+  },
   processStateText: {
     color: '#2563eb',
     fontSize: 13,
     fontWeight: '900',
   },
+  processStateTextFailed: {
+    color: '#dc2626',
+  },
   chatProcessRow: {
     minHeight: 52,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 10,
     paddingHorizontal: 10,
     paddingVertical: 8,
@@ -2827,13 +4955,20 @@ const styles = StyleSheet.create({
   chatProcessIconRunning: {
     backgroundColor: '#5572ff',
   },
+  chatProcessIconFailed: {
+    backgroundColor: '#dc2626',
+  },
   chatProcessStepTitle: {
     color: '#172033',
     fontSize: 14,
     fontWeight: '900',
   },
-  chatProcessSummary: {
+  chatProcessStepBody: {
     flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  chatProcessSummary: {
     minWidth: 0,
     color: '#64748b',
     fontSize: 12,
@@ -2843,6 +4978,21 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 11,
     fontWeight: '800',
+  },
+  chatProcessExpandButton: {
+    minHeight: 34,
+    alignSelf: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(239,246,255,0.82)',
+  },
+  chatProcessExpandText: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '900',
   },
   currentArtifactsPanel: {
     padding: 14,
@@ -3016,6 +5166,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     backgroundColor: 'rgba(255,255,255,0.38)',
   },
+  loadMoreButtonDisabled: {
+    opacity: 0.72,
+  },
   artifactFileRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -3160,6 +5313,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
   },
+  workspaceCreateForm: {
+    gap: 16,
+    paddingBottom: 4,
+  },
+  workspaceCreateTitle: {
+    color: '#172033',
+    fontSize: 28,
+    fontWeight: '900',
+  },
+  workspaceFormField: {
+    gap: 8,
+  },
+  workspaceFormLabel: {
+    color: '#334155',
+    fontSize: 14,
+    fontWeight: '900',
+  },
   workspaceSwitchRow: {
     minHeight: 66,
     flexDirection: 'row',
@@ -3191,13 +5361,126 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   workspaceNameInput: {
-    minHeight: 46,
+    minHeight: 56,
     paddingHorizontal: 14,
-    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.76)',
+    borderRadius: 18,
     color: '#0f172a',
     fontSize: 15,
     fontWeight: '800',
-    backgroundColor: 'rgba(255,255,255,0.58)',
+    backgroundColor: 'rgba(255,255,255,0.34)',
+  },
+  workspaceGoalInput: {
+    minHeight: 132,
+    paddingTop: 14,
+    paddingBottom: 14,
+  },
+  workspaceSegmentControl: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.72)',
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.26)',
+  },
+  workspaceSegmentItem: {
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    borderRadius: 18,
+  },
+  workspaceSegmentItemActive: {
+    backgroundColor: '#5d96ff',
+  },
+  workspaceSegmentText: {
+    color: '#475569',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  workspaceSegmentTextActive: {
+    color: '#fff',
+  },
+  workspaceFormHelp: {
+    color: '#64748b',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  workspaceSelectBox: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.76)',
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+  },
+  workspaceSelectText: {
+    color: '#172033',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  workspaceSelectMenu: {
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.64)',
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.42)',
+  },
+  workspaceSelectOption: {
+    minHeight: 42,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(226,232,240,0.48)',
+  },
+  workspaceSelectOptionActive: {
+    backgroundColor: 'rgba(219,234,254,0.68)',
+  },
+  workspaceSelectOptionText: {
+    color: '#334155',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  workspaceSelectOptionTextActive: {
+    color: '#2563eb',
+    fontWeight: '900',
+  },
+  workspaceCreateTarget: {
+    color: '#475569',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  workspaceCreateActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 2,
+  },
+  workspaceCancelButton: {
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.74)',
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.38)',
+  },
+  workspaceCancelText: {
+    color: '#334155',
+    fontSize: 15,
+    fontWeight: '900',
   },
   workspaceOptionRow: {
     flexDirection: 'row',
@@ -3278,6 +5561,7 @@ const styles = StyleSheet.create({
     color: '#047857',
   },
   workspaceCreateButton: {
+    flex: 1,
     minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
@@ -3285,6 +5569,9 @@ const styles = StyleSheet.create({
     gap: 8,
     borderRadius: 18,
     backgroundColor: '#2563eb',
+  },
+  workspaceCreateButtonDisabled: {
+    backgroundColor: '#94a3b8',
   },
   workspaceCreateText: {
     color: '#fff',
@@ -3451,22 +5738,76 @@ const styles = StyleSheet.create({
   agentProviderOptionTextActive: {
     color: '#fff',
   },
+  chatComposerDock: {
+    paddingHorizontal: 12,
+    paddingTop: 2,
+  },
+  mentionAgentMenu: {
+    maxHeight: 232,
+    marginBottom: 8,
+    padding: 6,
+    borderRadius: 18,
+  },
+  mentionAgentList: {
+    maxHeight: 220,
+  },
+  mentionAgentRow: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 14,
+  },
+  mentionAgentCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  mentionAgentNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  mentionAgentName: {
+    flex: 1,
+    minWidth: 0,
+    color: '#172033',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  mentionAgentHandle: {
+    maxWidth: 132,
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  mentionAgentRole: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   chatComposer: {
-    minHeight: 68,
+    minHeight: 56,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 24,
-    marginTop: 2,
+    paddingVertical: CHAT_COMPOSER_VERTICAL_PADDING,
+    borderRadius: 22,
   },
   chatComposerInput: {
     flex: 1,
     minWidth: 0,
+    minHeight: 40,
+    maxHeight: 92,
+    paddingVertical: 10,
     color: '#1f2937',
     fontSize: 15,
+    lineHeight: 20,
     fontWeight: '700',
+    textAlignVertical: 'center',
   },
   composerToolButton: {
     width: 44,
@@ -3484,12 +5825,15 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   chatSendButton: {
-    width: 48,
-    height: 48,
+    width: 42,
+    height: 42,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 24,
+    borderRadius: 21,
     backgroundColor: '#9ca3af',
+  },
+  chatSendButtonDisabled: {
+    opacity: 0.56,
   },
   messageRow: {
     flexDirection: 'row',
