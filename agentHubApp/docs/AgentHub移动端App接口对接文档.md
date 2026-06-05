@@ -14,16 +14,23 @@
 
 ```text
 本地：http://127.0.0.1:8790
-服务器`：http://120.79.130.49:8790
+服务器：http://120.79.130.49:8790
 ```
 
 配置：
 
 ```text
-EXPO_PUBLIC_AGENTHUB_BACKEND_URL=http:120.79.130.49//:8790
+EXPO_PUBLIC_AGENTHUB_BACKEND_URL=http://120.79.130.49:8790
 ```
 
 SSE 接口需要 React Native 侧选择 `EventSource` polyfill 或支持 stream 的 fetch 方案。
+
+字段标记约定：
+
+- `必填`：App 请求时必须传，或后端响应中正常情况下稳定返回。
+- `可选`：App 可以不传；后端响应中可能不存在、为 `null`，或为空数组。
+- 路径参数如 `:projectId`、`:agentId`、`:messageId` 均为必填。
+- 后端开启了请求字段白名单校验，请求体里不要传未列出的字段；响应里的 runtime 对象可能携带额外字段，App adapter 只读取本文档列出的字段。
 
 ## 2. 当前可直接接入接口
 
@@ -32,6 +39,17 @@ SSE 接口需要 React Native 侧选择 `EventSource` polyfill 或支持 stream 
 ```text
 GET /api/health
 ```
+
+请求字段：无路径参数、无查询参数、无请求体。
+
+响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `ok` | `boolean` | 必填 | 健康检查是否通过。 |
+| `service` | `string` | 必填 | 服务标识，当前为 `agenthub-backend`。 |
+| `agentHubBaseUrl` | `string` | 可选 | AgentHub runtime 地址，取决于后端环境变量。 |
+| `storageRoot` | `string` | 可选 | 后端存储根目录，取决于后端环境变量。 |
 
 用途：
 
@@ -51,14 +69,51 @@ GET /api/workbench
 
 查询参数：
 
-| 参数 | 类型 | App 用法 |
-| --- | --- | --- |
-| `pageSize` | `number` | 工作区列表分页大小，建议 20。 |
-| `cursor` | `string` | 下一页游标。 |
-| `query` | `string` | 搜索关键词。 |
-| `status` | `active \| archived \| all` | 工作区筛选。 |
-| `sortBy` | `updatedAt \| createdAt \| name` | 排序字段。 |
-| `sortDirection` | `asc \| desc` | 排序方向。 |
+| 参数 | 类型 | 必填 | 默认值 | App 用法 |
+| --- | --- | --- | --- | --- |
+| `pageSize` | `number` | 可选 | `20` | 工作区列表分页大小，建议 20。 |
+| `limit` | `number` | 可选 | `20` | `pageSize` 的兼容别名；App 优先用 `pageSize`。 |
+| `cursor` | `string` | 可选 | 无 | 下一页游标，首次加载不传。 |
+| `query` | `string` | 可选 | 无 | 搜索关键词。 |
+| `q` | `string` | 可选 | 无 | `query` 的兼容别名；App 优先用 `query`。 |
+| `status` | `active \| archived \| all` | 可选 | `active` | 工作区筛选。 |
+| `sortBy` | `updatedAt \| createdAt \| name` | 可选 | `updatedAt` | 排序字段。 |
+| `sortDirection` | `asc \| desc` | 可选 | `desc` | 排序方向。 |
+
+主要响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `agents` | `Agent[]` | 必填 | 全局 Agent 定义列表，可为空数组。 |
+| `rooms` | `WorkbenchRoom[]` | 必填 | 工作区房间摘要列表，可为空数组。 |
+| `page` | `object` | 必填 | 分页信息。 |
+| `page.limit` | `number` | 必填 | 本次返回使用的分页大小。 |
+| `page.total` | `number` | 必填 | 符合条件的总数量。 |
+| `page.hasMore` | `boolean` | 必填 | 是否还有下一页。 |
+| `page.nextCursor` | `string` | 可选 | 下一页游标，没有下一页时不存在。 |
+| `page.status` | `active \| archived \| all` | 可选 | 本次筛选状态。 |
+| `page.sortBy` | `updatedAt \| createdAt \| name` | 可选 | 本次排序字段。 |
+| `page.sortDirection` | `asc \| desc` | 可选 | 本次排序方向。 |
+| `page.query` | `string` | 可选 | 本次搜索关键词。 |
+
+`rooms[]` 主要字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `id` | `string` | 必填 | runtime workspace id，App 可作为工作区卡片 id。 |
+| `kind` | `group \| direct` | 必填 | 群聊或单聊。 |
+| `title` | `string` | 必填 | 工作区标题。 |
+| `subtitle` | `string` | 必填 | 工作区副标题或目标摘要。 |
+| `workspace` | `object` | 必填 | 工作区详情，包含 `projectId`、`pinnedAt`、`archivedAt` 等业务字段。 |
+| `conversation` | `object` | 必填 | 当前房间对应会话。 |
+| `participantAgentIds` | `string[]` | 必填 | 参与该房间的 Agent id 列表。 |
+| `targetAgentId` | `string` | 可选 | 单聊目标 Agent 或业务记录中的目标 Agent。 |
+| `signal` | `object` | 必填 | 工作区轻量状态。 |
+| `signal.runningAgents` | `number` | 必填 | 运行中的 Agent 数。 |
+| `signal.latestEventLabel` | `string` | 必填 | 最新事件展示文案。 |
+| `signal.artifactCount` | `number` | 必填 | 产物数量。 |
+| `signal.messageCount` | `number` | 必填 | 消息数量。 |
+| `lastActivityAt` | `string` | 必填 | 最近活动时间，ISO 字符串。 |
 
 移动端可映射字段：
 
@@ -102,6 +157,36 @@ POST /api/projects
 }
 ```
 
+请求体字段：
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `name` | `string` | 必填 | 无 | 工作区名称，最长 120 字符。 |
+| `goal` | `string` | 必填 | 无 | 工作区目标，最长 4000 字符。 |
+| `workspaceType` | `dev \| research \| writing \| chat` | 可选 | `dev` | 工作区类型；单聊会被后端规范为 `chat`。 |
+| `conversationType` | `group \| direct` | 可选 | `group` | 创建群聊或单聊工作区。 |
+| `agentIds` | `string[]` | 可选 | 无 | 目标 Agent id 列表；单聊时取第一个有效值，未传则默认 `engineer`。当前群聊创建不按该字段筛选参与 Agent。 |
+| `workspaceId` | `string` | 可选 | 无 | 绑定已有 runtime workspace 的高级字段，App 首版不建议传。 |
+| `conversationId` | `string` | 可选 | 无 | 绑定已有 runtime conversation 的高级字段，通常和 `workspaceId` 一起使用。 |
+
+主要响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 必填 | 业务项目 id，后续所有 `/api/projects/:projectId/**` 接口使用。 |
+| `workspaceId` | `string` | 必填 | runtime workspace id。 |
+| `name` | `string` | 必填 | 项目名称。 |
+| `goal` | `string` | 必填 | 项目目标。 |
+| `conversationId` | `string` | 必填 | 默认会话 id；如果后端没有绑定会返回空字符串。 |
+| `conversationType` | `group \| direct` | 可选 | 会话类型。 |
+| `targetAgentId` | `string` | 可选 | 单聊目标 Agent id。 |
+| `agentHubPreviewUrl` | `string` | 必填 | runtime 预览入口。 |
+| `agentHubZipUrl` | `string` | 必填 | runtime 源码 zip 入口。 |
+| `pinnedAt` | `string` | 可选 | 已置顶时存在，ISO 字符串。 |
+| `archivedAt` | `string` | 可选 | 已归档时存在，ISO 字符串。 |
+| `createdAt` | `string` | 必填 | 创建时间，ISO 字符串。 |
+| `updatedAt` | `string` | 必填 | 更新时间，ISO 字符串。 |
+
 移动端使用建议：
 
 - 创建群聊工作区：`conversationType=group`。
@@ -116,6 +201,12 @@ POST /api/projects
 PATCH /api/projects/:projectId/metadata
 ```
 
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 必填 | 业务项目 id。 |
+
 请求示例：
 
 ```json
@@ -125,6 +216,15 @@ PATCH /api/projects/:projectId/metadata
 }
 ```
 
+请求体字段：
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `pinned` | `boolean` | 可选 | 不变更 | `true` 置顶，`false` 取消置顶。 |
+| `archived` | `boolean` | 可选 | 不变更 | `true` 归档，`false` 取消归档。 |
+
+说明：`pinned` 和 `archived` 至少传一个才有实际效果；两者都不传时接口仍会返回项目，但不会改变状态。
+
 也可以使用专用接口：
 
 ```text
@@ -133,6 +233,8 @@ DELETE /api/projects/:projectId/pin
 PUT    /api/projects/:projectId/archive
 DELETE /api/projects/:projectId/archive
 ```
+
+专用接口只有 `projectId` 路径参数，均无请求体；响应字段与 `POST /api/projects` 返回的项目对象一致。
 
 移动端使用建议：
 
@@ -144,6 +246,42 @@ DELETE /api/projects/:projectId/archive
 ```text
 GET /api/projects/:projectId/state?messageLimit=80
 ```
+
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 必填 | 业务项目 id。 |
+
+查询参数：
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `messageLimit` | `number` | 可选 | `40` | 最近消息数量限制，最小 1，最大按 200 截断。 |
+
+主要响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `state` | `object` | 必填 | 当前项目过滤后的 runtime 状态。 |
+| `state.workspaces` | `Workspace[]` | 必填 | 当前工作区列表，通常只有一个元素。 |
+| `state.conversations` | `Conversation[]` | 必填 | 当前工作区会话列表，可为空数组。 |
+| `state.messages` | `Message[]` | 必填 | 最近消息列表，可为空数组。 |
+| `state.agents` | `Agent[]` | 必填 | 当前工作区可见 Agent 列表，可为空数组。 |
+| `state.workspaceAgentMembers` | `object[]` | 必填 | 工作区 Agent 成员覆盖信息，可为空数组。 |
+| `state.agentSessions` | `object[]` | 必填 | Agent 会话列表，可为空数组。 |
+| `state.agentSessionMessages` | `object[]` | 必填 | Agent 会话内部消息，可为空数组。 |
+| `state.taskHandoffs` | `object[]` | 必填 | 任务交接记录，可为空数组。 |
+| `state.agentRuns` | `object[]` | 必填 | Agent 运行记录，可为空数组。 |
+| `state.artifacts` | `object[]` | 必填 | 产物列表，包含 runtime 产物和后端合成的交付产物，可为空数组。 |
+| `state.changeSets` | `object[]` | 必填 | 变更集列表，可为空数组。 |
+| `state.contextSnapshots` | `object[]` | 必填 | 上下文快照，可为空数组。 |
+| `state.workflowEvents` | `object[]` | 必填 | 过程事件列表，可为空数组。 |
+| `state.diagnosticLogs` | `object[]` | 必填 | 诊断日志，可为空数组。 |
+| `messagePage` | `object` | 必填 | 消息分页摘要。 |
+| `messagePage.limit` | `number` | 必填 | 本次使用的消息数量限制。 |
+| `messagePage.total` | `number` | 必填 | 当前项目全部消息数量。 |
+| `messagePage.hasMore` | `boolean` | 必填 | 是否还有更早消息。 |
 
 用途：
 
@@ -178,6 +316,12 @@ GET /api/projects/:projectId/state?messageLimit=80
 POST /api/projects/:projectId/messages/stream
 ```
 
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 必填 | 业务项目 id。 |
+
 请求示例：
 
 ```json
@@ -193,6 +337,39 @@ POST /api/projects/:projectId/messages/stream
   }
 }
 ```
+
+请求体字段：
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `content` | `string` | 必填 | 无 | 用户发送的消息内容，最长 20000 字符。 |
+| `conversationId` | `string` | 可选 | 项目默认会话 | 指定会话 id；普通场景不传。 |
+| `agentId` | `string` | 可选 | 自动路由 | 明确指定目标 Agent。 |
+| `replyTo` | `object` | 可选 | 无 | 引用回复信息。 |
+| `codeSelection` | `object` | 可选 | 无 | 代码选区引用，App 首版可不接。 |
+
+`replyTo` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `messageId` | `string` | 必填 | 被引用消息 id。 |
+| `senderId` | `string` | 必填 | 被引用消息发送者 id。 |
+| `senderName` | `string` | 可选 | 被引用消息发送者展示名。 |
+| `excerpt` | `string` | 必填 | 被引用内容摘要。 |
+
+`codeSelection` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `filePath` | `string` | 必填 | 仓库相对文件路径。 |
+| `selectedText` | `string` | 必填 | 选中的代码文本。 |
+| `startLine` | `number` | 必填 | 起始行，从 1 开始。 |
+| `startColumn` | `number` | 必填 | 起始列，从 1 开始。 |
+| `endLine` | `number` | 必填 | 结束行，从 1 开始。 |
+| `endColumn` | `number` | 必填 | 结束列，从 1 开始。 |
+| `language` | `string` | 可选 | 代码语言。 |
+| `beforeContext` | `string` | 可选 | 选区前上下文。 |
+| `afterContext` | `string` | 可选 | 选区后上下文。 |
 
 移动端使用建议：
 
@@ -221,6 +398,22 @@ App 侧需要处理：
 PUT    /api/projects/:projectId/messages/:messageId/pin
 DELETE /api/projects/:projectId/messages/:messageId/pin
 ```
+
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 必填 | 业务项目 id。 |
+| `messageId` | `string` | 必填 | 要置顶或取消置顶的消息 id。 |
+
+请求体：无。
+
+响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `workspaceId` | `string` | 必填 | runtime workspace id。 |
+| `pinnedMessageIds` | `string[]` | 必填 | 更新后的置顶消息 id 列表。 |
 
 用途：
 
@@ -254,6 +447,72 @@ DELETE /api/projects/:projectId/agents/:agentId
 - 内置 Agent 只允许在工作区内覆盖 `name`、`modelProvider`、`model`。
 - 自建 Agent 可编辑基础字段，App 首版建议限制为 `name`、`role`、`description`、`modelProvider`、`model`、`skills`。
 
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 可选 | 仅项目级接口必填。 |
+| `agentId` | `string` | 可选 | 仅单 Agent 读取、更新、删除接口必填。 |
+
+`POST /api/projects/:projectId/agents` 请求体字段：
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `name` | `string` | 必填 | 无 | Agent 展示名，最长 120 字符。 |
+| `systemPrompt` | `string` | 必填 | 无 | Agent 系统提示词，最长 20000 字符。 |
+| `id` | `string` | 可选 | 后端生成或 runtime 处理 | Agent id，最长 80 字符。 |
+| `role` | `string` | 可选 | 无 | 角色摘要，最长 240 字符。 |
+| `description` | `string` | 可选 | 无 | 描述，最长 1000 字符。 |
+| `whenToUse` | `string` | 可选 | 无 | 使用场景，最长 1000 字符。 |
+| `modelProvider` | `claude \| codex \| mock` | 可选 | runtime 默认 | 模型提供方。 |
+| `model` | `string` | 可选 | runtime 默认 | 模型名，最长 120 字符。 |
+| `contextPolicy` | `object` | 可选 | runtime 默认 | 上下文策略。 |
+| `tools` | `string[]` | 可选 | runtime 默认 | 允许工具列表。 |
+| `permissions` | `object` | 可选 | runtime 默认 | 权限配置。 |
+| `disallowedTools` | `string[]` | 可选 | runtime 默认 | 禁用工具列表。 |
+| `permissionMode` | `readonly \| ask \| acceptEdits \| dangerous` | 可选 | runtime 默认 | 权限模式。 |
+| `runtimePolicy` | `object` | 可选 | runtime 默认 | 运行策略。 |
+| `outputSchema` | `string` | 可选 | 无 | 输出格式约束，最长 4000 字符。 |
+| `isolation` | `shared \| worktree` | 可选 | runtime 默认 | 运行隔离模式。 |
+| `skills` | `string[]` | 可选 | 无 | 技能标签。 |
+| `routingProfile` | `object` | 可选 | runtime 默认 | 路由配置。 |
+
+`PATCH /api/projects/:projectId/agents/:agentId` 请求体字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `name` | `string` | 可选 | Agent 展示名，最长 120 字符。 |
+| `role` | `string` | 可选 | 角色摘要，最长 240 字符。 |
+| `description` | `string` | 可选 | 描述，最长 1000 字符。 |
+| `whenToUse` | `string` | 可选 | 使用场景，最长 1000 字符。 |
+| `systemPrompt` | `string` | 可选 | 系统提示词，最长 20000 字符。 |
+| `modelProvider` | `claude \| codex \| mock` | 可选 | 模型提供方。 |
+| `model` | `string` | 可选 | 模型名，最长 120 字符。 |
+| `contextPolicy` | `object` | 可选 | 上下文策略。 |
+| `tools` | `string[]` | 可选 | 允许工具列表。 |
+| `permissions` | `object` | 可选 | 权限配置。 |
+| `disallowedTools` | `string[]` | 可选 | 禁用工具列表。 |
+| `permissionMode` | `readonly \| ask \| acceptEdits \| dangerous` | 可选 | 权限模式。 |
+| `runtimePolicy` | `object` | 可选 | 运行策略。 |
+| `outputSchema` | `string` | 可选 | 输出格式约束，最长 4000 字符。 |
+| `isolation` | `shared \| worktree` | 可选 | 运行隔离模式。 |
+| `skills` | `string[]` | 可选 | 技能标签。 |
+| `routingProfile` | `object` | 可选 | 路由配置。 |
+
+Agent 主要响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `id` | `string` | 必填 | Agent id。 |
+| `name` | `string` | 可选 | 展示名。 |
+| `modelProvider` | `string` | 可选 | 模型提供方。 |
+| `model` | `string` | 可选 | 模型名。 |
+| `source` | `built-in \| workspace \| custom` | 可选 | Agent 来源。 |
+| `workspaceId` | `string` | 可选 | 工作区自建或覆盖 Agent 所属 workspace。 |
+| `role`、`description`、`skills` 等 | 多类型 | 可选 | runtime 可能返回的扩展字段，App 按需读取。 |
+
+说明：`GET /api/agents` 和 `GET /api/projects/:projectId/agents` 返回 `Agent[]`；单 Agent 接口返回 `Agent`；删除接口返回 runtime 删除结果，App 侧通常只需要本地移除并刷新列表。
+
 ### 2.9 文件摘要和文件内容
 
 ```text
@@ -261,6 +520,63 @@ GET /api/projects/:projectId/files
 GET /api/projects/:projectId/files/content?path=src/App.tsx
 GET /api/projects/:projectId/files/preview?path=docs/report.docx
 ```
+
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 必填 | 业务项目 id。 |
+
+查询参数：
+
+| 接口 | 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- | --- |
+| `GET /files` | 无 | - | - | 拉取文件树不需要查询参数。 |
+| `GET /files/content` | `path` | `string` | 必填 | 仓库相对路径，只用于文本文件内容读取。 |
+| `GET /files/preview` | `path` | `string` | 必填 | 仓库相对路径，只支持 PDF、DOCX、PPTX。 |
+
+`GET /files` 响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `rootLabel` | `string` | 必填 | 文件树根节点展示名。 |
+| `entries` | `ProjectFileNode[]` | 必填 | 文件树节点列表，可为空数组。 |
+
+`ProjectFileNode` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | `string` | 必填 | 仓库相对路径。 |
+| `name` | `string` | 必填 | 文件或目录名。 |
+| `kind` | `directory \| file` | 必填 | 节点类型。 |
+| `isText` | `boolean` | 必填 | 是否可按文本读取。 |
+| `byteLength` | `number` | 可选 | 文件大小，目录通常没有。 |
+| `language` | `string` | 可选 | 文本语言标识。 |
+| `children` | `ProjectFileNode[]` | 可选 | 子节点，目录可能存在。 |
+
+`GET /files/content` 响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | `string` | 必填 | 仓库相对路径。 |
+| `name` | `string` | 必填 | 文件名。 |
+| `content` | `string` | 必填 | UTF-8 文本内容。 |
+| `language` | `string` | 必填 | 语言标识。 |
+| `byteLength` | `number` | 必填 | 文件大小。 |
+| `updatedAt` | `string` | 必填 | 文件更新时间，ISO 字符串。 |
+| `lineCount` | `number` | 必填 | 行数。 |
+
+`GET /files/preview` 响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `kind` | `pdf \| docx \| pptx` | 必填 | 预览文件类型。 |
+| `path` | `string` | 必填 | 仓库相对路径。 |
+| `name` | `string` | 必填 | 文件名。 |
+| `byteLength` | `number` | 必填 | 文件大小。 |
+| `updatedAt` | `string` | 必填 | 文件更新时间，ISO 字符串。 |
+| `sourceUrl` | `string` | 必填 | 可打开或渲染的预览源 URL。 |
+| `summary` | `string` | 必填 | 预览说明。 |
 
 移动端使用建议：
 
@@ -275,11 +591,19 @@ GET /api/projects/:projectId/files/preview?path=docs/report.docx
 GET /api/projects/:projectId/diff
 ```
 
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 必填 | 业务项目 id。 |
+
 返回：
 
-- `baseCommit`
-- `status`
-- `patch`
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `baseCommit` | `string` | 必填 | diff 对比的基础 commit。 |
+| `status` | `string` | 必填 | git status 摘要。 |
+| `patch` | `string` | 必填 | unified diff 文本，可能为空字符串。 |
 
 移动端使用建议：
 
@@ -293,6 +617,54 @@ GET /api/projects/:projectId/preview-capability
 POST /api/projects/:projectId/preview-build?force=true
 ```
 
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 必填 | 业务项目 id。 |
+
+`POST /preview-build` 查询参数：
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `force` | `boolean` | 可选 | `false` | 是否强制重新构建。 |
+
+`GET /preview-capability` 和 `POST /preview-build` 主要响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `mode` | `static \| module-shell \| build \| unsupported` | 必填 | 当前预览模式。 |
+| `framework` | `static-html \| vanilla-module \| vite-react \| vite-vue \| vite-svelte \| vite \| angular \| unsupported` | 必填 | 检测到的前端框架。 |
+| `reason` | `string` | 必填 | 检测原因或不可预览原因。 |
+| `sourceHash` | `string` | 必填 | 当前源码 hash。 |
+| `entryPath` | `string` | 可选 | 入口文件路径。 |
+| `defaultTargetPath` | `string` | 可选 | 默认预览目标路径。 |
+| `targets` | `ProjectPreviewRenderableTarget[]` | 必填 | 可打开的预览目标列表，可为空数组。 |
+| `build` | `ProjectPreviewBuildState` | 可选 | build 模式下的构建状态。 |
+
+`targets[]` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | `string` | 必填 | 预览目标路径。 |
+| `url` | `string` | 必填 | 可打开的预览 URL。 |
+| `source` | `runtime \| module-shell \| build` | 必填 | 预览来源。 |
+
+`build` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `status` | `idle \| running \| success \| failed` | 必填 | 构建状态。 |
+| `sourceHash` | `string` | 必填 | 构建对应源码 hash。 |
+| `summary` | `string` | 必填 | 构建摘要。 |
+| `buildId` | `string` | 可选 | 构建任务 id。 |
+| `installCommand` | `string` | 可选 | 依赖安装命令。 |
+| `buildCommand` | `string` | 可选 | 构建命令。 |
+| `startedAt` | `string` | 可选 | 开始时间，ISO 字符串。 |
+| `finishedAt` | `string` | 可选 | 结束时间，ISO 字符串。 |
+| `logExcerpt` | `string` | 可选 | 构建日志摘要。 |
+| `error` | `string` | 可选 | 失败错误信息。 |
+
 移动端首版建议：
 
 - 只读展示 `mode`、`framework`、`build.status`、`targets[]`。
@@ -304,6 +676,42 @@ POST /api/projects/:projectId/preview-build?force=true
 ```text
 GET /api/projects/:projectId/delivery
 ```
+
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 必填 | 业务项目 id。 |
+
+主要响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 必填 | 业务项目 id。 |
+| `currentVersion` | `object` | 可选 | 当前源码版本摘要，没有保存版本时不存在。 |
+| `sourceArchive` | `ProjectDeliveryAssetSummary` | 必填 | 源码快照状态。 |
+| `build` | `ProjectDeliveryAssetSummary` | 必填 | 交付构建状态。 |
+| `deployment` | `ProjectDeliveryAssetSummary` | 必填 | 本地部署状态。 |
+
+`currentVersion` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `versionId` | `string` | 必填 | 当前版本 id。 |
+| `createdAt` | `string` | 必填 | 创建时间，ISO 字符串。 |
+| `updatedAt` | `string` | 必填 | 更新时间，ISO 字符串。 |
+
+`ProjectDeliveryAssetSummary` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `status` | `idle \| ready \| failed` | 必填 | 资产状态。 |
+| `summary` | `string` | 必填 | 展示摘要。 |
+| `versionId` | `string` | 可选 | 关联版本 id。 |
+| `url` | `string` | 可选 | 源码、构建预览或部署 URL。 |
+| `createdAt` | `string` | 可选 | 创建时间，ISO 字符串。 |
+| `updatedAt` | `string` | 可选 | 更新时间，ISO 字符串。 |
+| `log` | `string` | 可选 | 构建日志或失败信息。 |
 
 移动端可展示：
 
@@ -331,6 +739,14 @@ PATCH  /api/agents/:agentId
 DELETE /api/agents/:agentId
 ```
 
+字段说明：
+
+| 接口 | 路径参数 | 请求体字段 | 说明 |
+| --- | --- | --- | --- |
+| `POST /api/agents` | 无 | 同项目级 `POST /api/projects/:projectId/agents`，其中 `name`、`systemPrompt` 必填 | 不建议 App 使用。 |
+| `PATCH /api/agents/:agentId` | `agentId` 必填 | 同项目级 `PATCH /api/projects/:projectId/agents/:agentId`，所有字段可选 | 不建议 App 使用。 |
+| `DELETE /api/agents/:agentId` | `agentId` 必填 | 无 | 不建议 App 使用。 |
+
 原因：
 
 - 当前这些接口只是兼容保留路由。
@@ -347,6 +763,15 @@ POST /api/projects/:projectId/builds
 POST /api/projects/:projectId/deploy
 POST /api/projects/:projectId/versions/:versionId/restore
 ```
+
+字段说明：
+
+| 接口 | 路径参数 | 查询参数 | 请求体字段 |
+| --- | --- | --- | --- |
+| `POST /api/projects/:projectId/versions` | `projectId` 必填 | 无 | `versionId` 可选，`message` 可选，`requireAgentGate` 可选。 |
+| `POST /api/projects/:projectId/builds` | `projectId` 必填 | 无 | `versionId` 可选，`skipDocker` 可选，`installCommand` 可选，`buildCommand` 可选。 |
+| `POST /api/projects/:projectId/deploy` | `projectId` 必填 | 无 | `versionId` 可选。 |
+| `POST /api/projects/:projectId/versions/:versionId/restore` | `projectId`、`versionId` 必填 | 无 | `createSnapshotBeforeRestore` 可选，`message` 可选。 |
 
 原因：
 
@@ -410,6 +835,8 @@ agentHubApp/src/api/
 GET /api/mobile/workbench
 ```
 
+查询参数：建议首版无必填参数；后续如果需要分页，可复用 `/api/workbench` 的 `pageSize`、`cursor`、`query`、`status`。
+
 建议返回：
 
 ```json
@@ -428,6 +855,21 @@ GET /api/mobile/workbench
 }
 ```
 
+建议响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `summary` | `object` | 必填 | 首页统计摘要。 |
+| `summary.workspaceCount` | `number` | 必填 | 工作区总数。 |
+| `summary.runningAgentCount` | `number` | 必填 | 运行中 Agent 数。 |
+| `summary.artifactCount` | `number` | 必填 | 产物总数。 |
+| `summary.unreadCount` | `number` | 可选 | 未读数；没有未读体系前可不返回。 |
+| `activeWorkspace` | `WorkbenchRoom` | 可选 | 当前活跃工作区，没有时为 `null` 或不返回。 |
+| `pinnedRooms` | `WorkbenchRoom[]` | 必填 | 置顶工作区列表，可为空数组。 |
+| `recentRooms` | `WorkbenchRoom[]` | 必填 | 最近工作区列表，可为空数组。 |
+| `archivedCount` | `number` | 必填 | 已归档工作区数量。 |
+| `latestActivities` | `ActivityItem[]` | 必填 | 最近活动列表，可为空数组。 |
+
 解决问题：
 
 - 首页不用自己汇总所有 workbench rooms。
@@ -440,6 +882,19 @@ GET /api/mobile/workbench
 ```text
 GET /api/mobile/projects/:projectId/chat?limit=40&cursor=xxx
 ```
+
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 必填 | 业务项目 id。 |
+
+查询参数：
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `limit` | `number` | 可选 | `40` | 单页消息数量。 |
+| `cursor` | `string` | 可选 | 无 | 历史消息分页游标。 |
 
 建议返回：
 
@@ -457,6 +912,19 @@ GET /api/mobile/projects/:projectId/chat?limit=40&cursor=xxx
 }
 ```
 
+建议响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `workspace` | `Workspace` | 必填 | 当前工作区。 |
+| `conversation` | `Conversation` | 必填 | 当前会话。 |
+| `messages` | `Message[]` | 必填 | 当前页消息，可为空数组。 |
+| `processCards` | `object[]` | 必填 | 移动端过程卡片，可为空数组。 |
+| `artifactCards` | `object[]` | 必填 | 移动端产物卡片，可为空数组。 |
+| `page` | `object` | 必填 | 分页信息。 |
+| `page.nextCursor` | `string` | 可选 | 下一页游标，没有下一页时不存在。 |
+| `page.hasMore` | `boolean` | 必填 | 是否还有更早消息。 |
+
 解决问题：
 
 - 当前 `state` 只有最近消息数量限制，没有历史游标分页。
@@ -469,6 +937,13 @@ GET /api/mobile/projects/:projectId/chat?limit=40&cursor=xxx
 ```text
 GET /api/mobile/activity?limit=50&cursor=xxx
 ```
+
+查询参数：
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `limit` | `number` | 可选 | `50` | 单页活动数量。 |
+| `cursor` | `string` | 可选 | 无 | 下一页游标。 |
 
 建议返回：
 
@@ -493,6 +968,28 @@ GET /api/mobile/activity?limit=50&cursor=xxx
 }
 ```
 
+建议响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `items` | `ActivityItem[]` | 必填 | 活动列表，可为空数组。 |
+| `page` | `object` | 必填 | 分页信息。 |
+| `page.nextCursor` | `string` | 可选 | 下一页游标，没有下一页时不存在。 |
+| `page.hasMore` | `boolean` | 必填 | 是否还有下一页。 |
+
+`ActivityItem` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `id` | `string` | 必填 | 活动 id。 |
+| `projectId` | `string` | 必填 | 业务项目 id。 |
+| `workspaceId` | `string` | 必填 | runtime workspace id。 |
+| `type` | `string` | 必填 | 活动类型，如 `preview_ready`。 |
+| `title` | `string` | 必填 | 活动标题。 |
+| `summary` | `string` | 可选 | 活动摘要。 |
+| `createdAt` | `string` | 必填 | 创建时间，ISO 字符串。 |
+| `readAt` | `string \| null` | 可选 | 已读时间；没有未读体系前可不返回。 |
+
 解决问题：
 
 - 当前没有通知、未读、提及中心。
@@ -505,6 +1002,12 @@ GET /api/mobile/activity?limit=50&cursor=xxx
 ```text
 GET /api/mobile/agents?projectId=proj-xxx
 ```
+
+查询参数：
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `projectId` | `string` | 可选 | 无 | 指定项目时返回项目级 Agent 及运行态；不传时返回全局 Agent 聚合。 |
 
 建议返回：
 
@@ -526,6 +1029,26 @@ GET /api/mobile/agents?projectId=proj-xxx
 }
 ```
 
+建议响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `agents` | `MobileAgent[]` | 必填 | Agent 聚合列表，可为空数组。 |
+
+`MobileAgent` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `id` | `string` | 必填 | Agent id。 |
+| `name` | `string` | 必填 | 展示名。 |
+| `role` | `string` | 可选 | 角色摘要。 |
+| `modelProvider` | `claude \| codex \| mock` | 可选 | 模型提供方。 |
+| `model` | `string` | 可选 | 模型名。 |
+| `source` | `built-in \| workspace \| custom` | 可选 | Agent 来源。 |
+| `status` | `idle \| running \| reviewing` | 必填 | 移动端聚合运行态。 |
+| `skills` | `string[]` | 必填 | 技能标签，可为空数组。 |
+| `recentWorkspaceIds` | `string[]` | 必填 | 最近参与工作区 id，可为空数组。 |
+
 解决问题：
 
 - `/api/agents` 是定义列表，不包含 App 需要的 `idle/running/reviewing` 聚合状态。
@@ -538,6 +1061,12 @@ GET /api/mobile/agents?projectId=proj-xxx
 ```text
 GET /api/mobile/projects/:projectId/diff-summary
 ```
+
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `projectId` | `string` | 必填 | 业务项目 id。 |
 
 建议返回：
 
@@ -559,6 +1088,26 @@ GET /api/mobile/projects/:projectId/diff-summary
 }
 ```
 
+建议响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `baseCommit` | `string` | 必填 | diff 基础 commit。 |
+| `changedFileCount` | `number` | 必填 | 变更文件数量。 |
+| `additions` | `number` | 必填 | 新增行数。 |
+| `deletions` | `number` | 必填 | 删除行数。 |
+| `files` | `DiffSummaryFile[]` | 必填 | 文件级摘要，可为空数组。 |
+
+`DiffSummaryFile` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | `string` | 必填 | 仓库相对路径。 |
+| `status` | `added \| modified \| deleted \| renamed` | 必填 | 文件变更类型。 |
+| `additions` | `number` | 必填 | 文件新增行数。 |
+| `deletions` | `number` | 必填 | 文件删除行数。 |
+| `language` | `string` | 可选 | 语言标识。 |
+
 解决问题：
 
 - 当前 `/diff` 返回 raw patch，手机端解析成本高。
@@ -572,6 +1121,8 @@ GET /api/mobile/projects/:projectId/diff-summary
 GET /api/mobile/config
 ```
 
+请求字段：无路径参数、无查询参数、无请求体。
+
 建议返回：
 
 ```json
@@ -581,6 +1132,14 @@ GET /api/mobile/config
   "sseSupported": true
 }
 ```
+
+建议响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `backendBaseUrl` | `string` | 必填 | 手机可访问的业务后端地址。 |
+| `previewBaseUrl` | `string` | 必填 | 手机可访问的预览基础地址。 |
+| `sseSupported` | `boolean` | 必填 | 当前后端和 App 配置是否支持 SSE。 |
 
 解决问题：
 
