@@ -55,49 +55,57 @@ function createRecoveryLog(run: AgentRun, recoveredAt: string): DiagnosticLog {
 }
 
 /**
+ * Marks stale running AgentRuns and linked handoffs as failed in one state object.
+ * Input: mutable app state and optional timing. Output: number of recovered runs.
+ */
+export function recoverStaleAgentRunsInState(
+  state: AppState,
+  nowMs = Date.now(),
+  recoveredAt = isoNow(),
+): number {
+  let recoveredCount = 0
+  for (const run of state.agentRuns) {
+    if (run.status !== 'running') {
+      continue
+    }
+    const agent = resolveWorkspaceAgent(state, run.workspaceId, run.agentId)
+    if (!isStaleRun(run, agent, nowMs)) {
+      continue
+    }
+
+    recoveredCount += 1
+    run.status = 'failed'
+    run.finishedAt = recoveredAt
+    run.error = 'Recovered stale running AgentRun after process interruption.'
+    run.logs = [
+      ...run.logs,
+      `recovered_stale_running_at=${recoveredAt}`,
+      'recovered_reason=process interruption or server restart left this run open',
+    ]
+
+    const handoff = run.handoffId
+      ? state.taskHandoffs.find(candidate => candidate.id === run.handoffId)
+      : undefined
+    if (handoff && handoff.status === 'running') {
+      handoff.status = 'failed'
+      handoff.resultRunId = handoff.resultRunId ?? run.id
+      handoff.resultSummary = run.error
+      handoff.updatedAt = recoveredAt
+    }
+
+    state.diagnosticLogs.push(createRecoveryLog(run, recoveredAt))
+  }
+
+  if (state.diagnosticLogs.length > 2000) {
+    state.diagnosticLogs = state.diagnosticLogs.slice(-2000)
+  }
+  return recoveredCount
+}
+
+/**
  * Marks stale running AgentRuns and linked handoffs as failed after startup.
  * Input: state store. Output: number of recovered runs.
  */
 export async function recoverStaleAgentRuns(store: StateStore): Promise<number> {
-  const nowMs = Date.now()
-  const recoveredAt = isoNow()
-  return store.update((state: AppState) => {
-    let recoveredCount = 0
-    for (const run of state.agentRuns) {
-      if (run.status !== 'running') {
-        continue
-      }
-      const agent = resolveWorkspaceAgent(state, run.workspaceId, run.agentId)
-      if (!isStaleRun(run, agent, nowMs)) {
-        continue
-      }
-
-      recoveredCount += 1
-      run.status = 'failed'
-      run.finishedAt = recoveredAt
-      run.error = 'Recovered stale running AgentRun after process interruption.'
-      run.logs = [
-        ...run.logs,
-        `recovered_stale_running_at=${recoveredAt}`,
-        'recovered_reason=process interruption or server restart left this run open',
-      ]
-
-      const handoff = run.handoffId
-        ? state.taskHandoffs.find(candidate => candidate.id === run.handoffId)
-        : undefined
-      if (handoff && handoff.status === 'running') {
-        handoff.status = 'failed'
-        handoff.resultRunId = handoff.resultRunId ?? run.id
-        handoff.resultSummary = run.error
-        handoff.updatedAt = recoveredAt
-      }
-
-      state.diagnosticLogs.push(createRecoveryLog(run, recoveredAt))
-    }
-
-    if (state.diagnosticLogs.length > 2000) {
-      state.diagnosticLogs = state.diagnosticLogs.slice(-2000)
-    }
-    return recoveredCount
-  })
+  return store.update((state: AppState) => recoverStaleAgentRunsInState(state))
 }

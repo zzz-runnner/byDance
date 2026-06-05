@@ -40,9 +40,40 @@ const TABLES = {
 
 const STATE_ROW_ID = 'default'
 const STATE_LOCK_ID = 422_024_001
+const POSTGRES_CONNECTION_TIMEOUT_MS = 10_000
+const POSTGRES_IDLE_TIMEOUT_MS = 30_000
+const POSTGRES_LOCK_TIMEOUT_MS = 10_000
+const POSTGRES_STATEMENT_TIMEOUT_MS = 120_000
 
 type QueryClient = {
   query: Pool['query']
+}
+
+/**
+ * Returns whether two parsed app states are equivalent.
+ * Input: current and next app states. Output: true when no database write is needed.
+ */
+function isSameState(left: AppState, right: AppState): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+/**
+ * Applies local transaction timeouts before taking AgentHub state locks.
+ * Input: transaction client. Output: promise resolved after timeout settings are active.
+ */
+async function configureStateTransaction(client: QueryClient): Promise<void> {
+  await client.query(`set local lock_timeout = '${POSTGRES_LOCK_TIMEOUT_MS}ms'`)
+  await client.query(`set local statement_timeout = '${POSTGRES_STATEMENT_TIMEOUT_MS}ms'`)
+}
+
+/**
+ * Begins one bounded AgentHub state transaction and takes the advisory lock.
+ * Input: transaction client. Output: promise resolved once the lock is held.
+ */
+async function beginStateTransaction(client: QueryClient): Promise<void> {
+  await client.query('begin')
+  await configureStateTransaction(client)
+  await client.query('select pg_advisory_xact_lock($1)', [STATE_LOCK_ID])
 }
 
 /**
@@ -483,8 +514,8 @@ function toDiagnosticLog(row: Record<string, unknown>): DiagnosticLog {
  * Creates the normalized PostgreSQL schema used by the local prototype.
  * Input: none. Output: promise resolved after schema creation.
  */
-async function createSchema(pool: Pool): Promise<void> {
-  await pool.query(`
+async function createSchema(client: QueryClient): Promise<void> {
+  await client.query(`
     create table if not exists ${TABLES.workspaces} (
       id text primary key,
       name text not null,
@@ -681,19 +712,38 @@ async function createSchema(pool: Pool): Promise<void> {
     );
   `)
 
-  await pool.query(`
+  await client.query(`
     alter table ${TABLES.messages}
     add column if not exists reply_to jsonb;
   `)
-  await pool.query(`
+  await client.query(`
     alter table ${TABLES.messages}
     add column if not exists turn_id text;
   `)
 
-  await pool.query(`alter table ${TABLES.agentRuns} add column if not exists session_id text`)
-  await pool.query(`alter table ${TABLES.agentRuns} add column if not exists handoff_id text`)
-  await pool.query(`alter table ${TABLES.agents} add column if not exists routing_profile jsonb`)
-  await pool.query(`alter table ${TABLES.agents} add column if not exists workspace_id text`)
+  await client.query(`alter table ${TABLES.agentRuns} add column if not exists session_id text`)
+  await client.query(`alter table ${TABLES.agentRuns} add column if not exists handoff_id text`)
+  await client.query(`alter table ${TABLES.agents} add column if not exists routing_profile jsonb`)
+  await client.query(`alter table ${TABLES.agents} add column if not exists workspace_id text`)
+}
+
+/**
+ * Creates or migrates the schema inside a bounded transaction.
+ * Input: connection pool. Output: promise resolved after schema setup.
+ */
+async function setupSchema(pool: Pool): Promise<void> {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    await configureStateTransaction(client)
+    await createSchema(client)
+    await client.query('commit')
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 /**
@@ -743,8 +793,7 @@ async function readStateFromDatabase(client: QueryClient): Promise<AppState> {
 async function writeStateToDatabase(pool: Pool, state: AppState): Promise<void> {
   const client = await pool.connect()
   try {
-    await client.query('begin')
-    await client.query('select pg_advisory_xact_lock($1)', [STATE_LOCK_ID])
+    await beginStateTransaction(client)
     await writeStateToClient(client, state)
     await client.query('commit')
   } catch (error) {
@@ -1069,11 +1118,10 @@ export class PostgresStateStore implements StateStore {
    * Input: none. Output: promise resolved after schema and seed setup.
    */
   async init(): Promise<void> {
-    await createSchema(this.pool)
+    await setupSchema(this.pool)
     const client = await this.pool.connect()
     try {
-      await client.query('begin')
-      await client.query('select pg_advisory_xact_lock($1)', [STATE_LOCK_ID])
+      await beginStateTransaction(client)
       const result = await client.query(`select count(*)::int as count from ${TABLES.workspaces}`)
       if ((result.rows[0]?.count ?? 0) === 0) {
         await writeStateToClient(client, AppStateSchema.parse(this.seed))
@@ -1094,8 +1142,7 @@ export class PostgresStateStore implements StateStore {
   async read(): Promise<AppState> {
     const client = await this.pool.connect()
     try {
-      await client.query('begin')
-      await client.query('select pg_advisory_xact_lock($1)', [STATE_LOCK_ID])
+      await beginStateTransaction(client)
       const result = await client.query(`select count(*)::int as count from ${TABLES.workspaces}`)
       if ((result.rows[0]?.count ?? 0) === 0) {
         await client.query('commit')
@@ -1151,13 +1198,14 @@ export class PostgresStateStore implements StateStore {
   private async applyUpdate<T>(mutator: StateMutator<T>): Promise<T> {
     const client = await this.pool.connect()
     try {
-      await client.query('begin')
-      await client.query('select pg_advisory_xact_lock($1)', [STATE_LOCK_ID])
+      await beginStateTransaction(client)
       const current = await readStateFromDatabase(client)
       const draft = cloneState(current)
       const value = mutator(draft)
       const next = AppStateSchema.parse(draft)
-      await writeStateToClient(client, next)
+      if (!isSameState(current, next)) {
+        await writeStateToClient(client, next)
+      }
       await client.query('commit')
       return value
     } catch (error) {
@@ -1171,8 +1219,7 @@ export class PostgresStateStore implements StateStore {
   private async applyCreateAgent(agent: AgentDefinition): Promise<AgentDefinition> {
     const client = await this.pool.connect()
     try {
-      await client.query('begin')
-      await client.query('select pg_advisory_xact_lock($1)', [STATE_LOCK_ID])
+      await beginStateTransaction(client)
       const existing = await client.query(`select id from ${TABLES.agents} where id = $1`, [agent.id])
       if (existing.rowCount && existing.rowCount > 0) {
         throw new Error(`Agent already exists: ${agent.id}`)
@@ -1194,8 +1241,7 @@ export class PostgresStateStore implements StateStore {
   ): Promise<AgentDefinition | undefined> {
     const client = await this.pool.connect()
     try {
-      await client.query('begin')
-      await client.query('select pg_advisory_xact_lock($1)', [STATE_LOCK_ID])
+      await beginStateTransaction(client)
       const existing = await client.query(`select * from ${TABLES.agents} where id = $1`, [agentId])
       const current = existing.rows[0] ? toAgent(existing.rows[0] as Record<string, unknown>) : undefined
       if (!current) {
@@ -1216,8 +1262,7 @@ export class PostgresStateStore implements StateStore {
   private async applyAgentDelete(agentId: string): Promise<boolean> {
     const client = await this.pool.connect()
     try {
-      await client.query('begin')
-      await client.query('select pg_advisory_xact_lock($1)', [STATE_LOCK_ID])
+      await beginStateTransaction(client)
       const result = await client.query(`delete from ${TABLES.agents} where id = $1`, [agentId])
       await client.query('commit')
       return Boolean(result.rowCount && result.rowCount > 0)
@@ -1235,7 +1280,12 @@ export class PostgresStateStore implements StateStore {
  * Input: database URL and initial state. Output: initialized state store.
  */
 export async function createPostgresStateStore(databaseUrl: string, seed: AppState): Promise<PostgresStateStore> {
-  const store = new PostgresStateStore(new Pool({ connectionString: databaseUrl }), seed)
+  const store = new PostgresStateStore(new Pool({
+    connectionString: databaseUrl,
+    connectionTimeoutMillis: POSTGRES_CONNECTION_TIMEOUT_MS,
+    idleTimeoutMillis: POSTGRES_IDLE_TIMEOUT_MS,
+    max: 4,
+  }), seed)
   await store.init()
   return store
 }

@@ -72,8 +72,24 @@ const childEnv = {
   DEEPSEEK_API_KEY: deepSeekKey,
 }
 
-const command = process.platform === 'win32' ? 'npx.cmd' : 'npx'
-const args = ['--yes', 'mimo2codex@0.4.10', '--no-admin', '--no-load-env', '--model', 'ds']
+const bridgeArgs = [
+  '--no-admin',
+  '--no-load-env',
+  '--no-update-check',
+  '--model',
+  'ds',
+  '--auth',
+  'off',
+  '--host',
+  process.env.MIMO2CODEX_HOST || '0.0.0.0',
+  '--port',
+  process.env.MIMO2CODEX_PORT || '8788',
+]
+const explicitBridgeBin = process.env.MIMO2CODEX_BIN
+const command = explicitBridgeBin || (process.platform === 'win32' ? 'npx.cmd' : 'npx')
+const args = explicitBridgeBin
+  ? bridgeArgs
+  : ['--yes', `mimo2codex@${process.env.MIMO2CODEX_VERSION || '0.4.10'}`, ...bridgeArgs]
 
 console.log('Starting AgentHub Codex bridge with mimo2codex DeepSeek mode.')
 console.log('DeepSeek API key loaded from local environment.')

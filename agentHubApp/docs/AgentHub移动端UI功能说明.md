@@ -34,6 +34,7 @@ agentHubApp/
   docs/
     AgentHub移动端UI功能说明.md
     AgentHub移动端App功能取舍说明.md
+    AgentHub移动端App接口对接文档.md
     AgentHub Web端已有功能清单.md
   src/
     components/
@@ -208,7 +209,12 @@ Agent 页首版做列表和基础状态。
 
 - `GET /api/agents`
 - `GET /api/agents/:agentId`
-- `PATCH /api/agents/:agentId`
+- `GET /api/projects/:projectId/agents`
+- `POST /api/projects/:projectId/agents`
+- `PATCH /api/projects/:projectId/agents/:agentId`
+- `DELETE /api/projects/:projectId/agents/:agentId`
+
+说明：全局 Agent 写接口是兼容保留路由，移动端轻管理应使用项目级 Agent 接口。完整接口说明见 `AgentHub移动端App接口对接文档.md`。
 
 ## 9. RN 可实现性
 

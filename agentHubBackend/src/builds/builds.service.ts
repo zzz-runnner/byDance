@@ -148,7 +148,7 @@ export class BuildsService {
     const memoryLimit = this.config.get<string>('BUILD_MEMORY_LIMIT', '2g')
     const installCommand = input.installCommand ?? 'npm install'
     const buildCommand = input.buildCommand ?? 'npm run build'
-    const script = `${installCommand} && ${buildCommand}`
+    const script = `corepack enable >/dev/null 2>&1 || true; ${installCommand} && ${buildCommand}`
 
     return new Promise((resolve, reject) => {
       const child = spawn('docker', [

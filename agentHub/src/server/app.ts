@@ -20,13 +20,17 @@ export async function createApp(env: ServerEnv, options: CreateAppOptions = {}) 
   const runtime = new WorkspaceRuntimeManager(env.AGENTHUB_RUNTIME_ROOT, toolGateway)
   const initialState = await store.read()
   await Promise.all(initialState.workspaces.map(workspace => runtime.prepareWorkspace(workspace)))
+  const defaultCorsOrigins = [`http://localhost:${env.WEB_PORT}`, `http://127.0.0.1:${env.WEB_PORT}`]
+  const corsOrigins = env.AGENTHUB_CORS_ORIGINS.includes('*')
+    ? true
+    : Array.from(new Set([...defaultCorsOrigins, ...env.AGENTHUB_CORS_ORIGINS]))
 
   const app = Fastify({
     logger: options.logger ?? true,
   })
 
   await app.register(cors, {
-    origin: [`http://localhost:${env.WEB_PORT}`, `http://127.0.0.1:${env.WEB_PORT}`],
+    origin: corsOrigins,
   })
 
   await registerRoutes(app, { env, store, runtime, toolGateway })
