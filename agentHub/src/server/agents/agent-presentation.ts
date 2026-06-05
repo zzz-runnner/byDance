@@ -246,6 +246,26 @@ export function findMentionedAgentId(
 }
 
 /**
+ * Resolves every explicit @alias mention inside the provided content.
+ * Input: raw message content, candidate agents, and an orchestrator toggle.
+ * Output: unique matched agent ids in encounter-agnostic order.
+ */
+export function findMentionedAgentIds(
+  content: string,
+  agents: AgentLike[],
+  options: { includeOrchestrator?: boolean } = {},
+): string[] {
+  const includeOrchestrator = options.includeOrchestrator ?? true
+  const normalizedContent = content.toLowerCase()
+  return [...new Set(
+    agents
+      .filter(agent => includeOrchestrator || agent.id !== ORCHESTRATOR_AGENT_ID)
+      .filter(agent => agentMentionAliases(agent).some(alias => matchesMentionAlias(normalizedContent, alias)))
+      .map(agent => agent.id),
+  )]
+}
+
+/**
  * Synchronizes direct conversation and session titles after one agent display-name update.
  * Input: mutable application state, previous agent record, and updated agent record.
  * Output: the same state object with derived titles refreshed in place.

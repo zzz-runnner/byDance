@@ -97,6 +97,11 @@ The backend still keeps the Nest business modules for:
 - Visible speaker identity now resolves from the current agent registry instead of flattening replies to one built-in coordinator label.
 - Editing an agent name now refreshes direct-room titles, agent-session titles, direct-room composer copy, and reply sender labels that can still resolve through the live agent registry.
 - Group-room explicit mentions now match `@main`, stable ids, full current display names, and short display-name aliases.
+- Group-room explicit `@agent` turns are now hard-locked to that one agent:
+  - only the mentioned agent executes
+  - only the mentioned agent can publish the final visible reply
+  - auto reviewer insertion, auto repair, and orchestrator final synthesis are skipped for that turn
+  - mentioning more than one agent in the same group-turn now returns a validation error instead of guessing
 - The frontend agent management dialog now uses `/api/projects/:projectId/agents`, which proxies to workspace-scoped AgentHub routes through `agentHubBackend`.
 - The left workspace rail uses server-backed paging through `/api/workbench`.
 - The left workspace rail also supports backend-backed search, status filtering, sorting, pinning, and archiving.

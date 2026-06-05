@@ -7,6 +7,7 @@ export type RoutingInput = {
   conversation: Conversation
   agents: AgentDefinition[]
   targetAgentId?: string
+  lockedAgentId?: string
   replyTo?: ReplyReference
   codeSelection?: CodeSelectionReference
 }
@@ -54,6 +55,7 @@ function taskBrief(agentId: string, task: string, expectedOutput: string): Routi
  */
 export function decideRouting(input: RoutingInput): MainBrainTurn {
   const mentionedAgentId =
+    input.lockedAgentId ??
     input.targetAgentId ??
     findMentionedAgent(input.content, input.agents) ??
     resolveReplyTargetAgentId(input.replyTo, input.agents)
@@ -64,6 +66,7 @@ export function decideRouting(input: RoutingInput): MainBrainTurn {
       execution: 'serial',
       speakerAgentId: mentionedAgentId,
       finalizationMode: 'speaker_direct',
+      lockedAgentId: input.lockedAgentId ?? mentionedAgentId,
       dispatches: [
         taskBrief(
           mentionedAgentId,

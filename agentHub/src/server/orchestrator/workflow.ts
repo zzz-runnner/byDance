@@ -21,6 +21,7 @@ import { isoNow } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import { createAdapterForAgent, runAgentWithFallback } from '../adapters'
 import {
+  findMentionedAgentIds,
   ORCHESTRATOR_AGENT_ID,
   resolveAgentDisplayName,
   stripLeadingAgentMention,
@@ -100,6 +101,11 @@ type TaskRunSessionScope = {
   handoff: TaskHandoff
 }
 
+type ExplicitAgentLock = {
+  lockedAgentId?: string
+  errorResponse?: string
+}
+
 /**
  * Resolves the current orchestrator display name from the active agent registry.
  * Input: current agent definitions.
@@ -107,6 +113,98 @@ type TaskRunSessionScope = {
  */
 function orchestratorDisplayName(agents: AgentDefinition[]): string {
   return resolveAgentDisplayName(agents, ORCHESTRATOR_AGENT_ID)
+}
+
+/**
+ * Resolves whether the current group-turn content explicitly locks execution to one agent.
+ * Input: raw content, conversation shape, available agents, and optional direct-room target id.
+ * Output: one locked agent id or a user-facing validation error.
+ */
+function resolveExplicitAgentLock(
+  content: string,
+  conversation: Conversation,
+  agents: AgentDefinition[],
+  activeAgentId?: string,
+): ExplicitAgentLock {
+  if (conversation.type === 'direct' && activeAgentId) {
+    return { lockedAgentId: activeAgentId }
+  }
+
+  if (conversation.type !== 'group') {
+    return {}
+  }
+
+  const mentionedAgentIds = findMentionedAgentIds(content, agents, { includeOrchestrator: false })
+  if (mentionedAgentIds.length > 1) {
+    return {
+      errorResponse: `一次只能 @ 一个 Agent。当前检测到：${mentionedAgentIds.join('、')}。请保留一个后再发送。`,
+    }
+  }
+
+  return {
+    lockedAgentId: mentionedAgentIds[0],
+  }
+}
+
+/**
+ * Forces one routing decision into a single locked-agent turn.
+ * Input: any existing routing decision and one agent id. Output: single-agent speaker-direct routing.
+ */
+function lockRoutingDecisionToAgent(decision: PlannedRoutingDecision, agentId: string): PlannedRoutingDecision {
+  if (decision.decision.kind !== 'dispatch_agents') {
+    return {
+      ...decision,
+      decision: {
+        kind: 'dispatch_agents',
+        finalResponse: decision.decision.finalResponse,
+        execution: 'serial',
+        dispatches: [],
+        targetAgents: [agentId],
+        speakerAgentId: agentId,
+        finalizationMode: 'speaker_direct',
+        lockedAgentId: agentId,
+        internalNote: [decision.decision.internalNote, `Locked turn to explicit agent ${agentId}.`]
+          .filter(Boolean)
+          .join(' '),
+      },
+    }
+  }
+
+  const lockedDispatches = decision.decision.dispatches.filter(brief => brief.agentId === agentId)
+  const lockedDispatch = lockedDispatches[0]
+  if (!lockedDispatch) {
+    return {
+      ...decision,
+      decision: {
+        ...decision.decision,
+        execution: 'serial',
+        dispatches: [],
+        targetAgents: [agentId],
+        speakerAgentId: agentId,
+        finalizationMode: 'speaker_direct',
+        lockedAgentId: agentId,
+        internalNote: [decision.decision.internalNote, `Locked turn to explicit agent ${agentId}.`]
+          .filter(Boolean)
+          .join(' '),
+      },
+    }
+  }
+
+  return {
+    ...decision,
+    decision: {
+      ...decision.decision,
+      execution: 'serial',
+      dispatches: [lockedDispatch],
+      targetAgents: [agentId],
+      speakerAgentId: agentId,
+      finalizationMode: 'speaker_direct',
+      lockedAgentId: agentId,
+      internalNote: [decision.decision.internalNote, `Locked turn to explicit agent ${agentId}.`]
+        .filter(Boolean)
+        .join(' '),
+    },
+  }
 }
 
 /**
@@ -1607,9 +1705,62 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
   const workspace = requiredById(state.workspaces, input.workspaceId, 'Workspace')
   const conversation = requiredById(state.conversations, input.conversationId, 'Conversation')
   const workspaceAgents = resolveWorkspaceAgents(state, workspace.id)
+  const explicitAgentLock = resolveExplicitAgentLock(input.content, conversation, workspaceAgents, input.agentId)
   const normalizedMainContent = conversation.type === 'group'
     ? stripLeadingOrchestratorMention(input.content, workspaceAgents) || input.content.trim()
     : input.content
+
+  if (explicitAgentLock.errorResponse) {
+    emitWorkflowEvent(workflowServices, {
+      type: 'workflow_received',
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      content: normalizedMainContent,
+    })
+    emitWorkflowEvent(workflowServices, {
+      type: 'routing_finished',
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      source: 'explicit_rule',
+      speakerAgentId: 'orchestrator',
+      finalizationMode: 'speaker_direct',
+      taskStage: 'chat',
+      executionReadiness: 'not_a_task',
+      needsUserConfirmation: false,
+      mode: 'answer_directly',
+      brainKind: 'direct_answer',
+      execution: 'serial',
+      targetAgents: [],
+    })
+    const conflictRouting: PlannedRoutingDecision = {
+      source: 'explicit_rule',
+      decision: {
+        kind: 'direct_answer',
+        finalResponse: explicitAgentLock.errorResponse,
+        execution: 'serial',
+        dispatches: [],
+        targetAgents: [],
+        speakerAgentId: 'orchestrator',
+        finalizationMode: 'speaker_direct',
+        internalNote: 'Blocked group turn because multiple explicit agent mentions were provided.',
+      },
+    }
+    await appendFinalSummary(workflowServices, workspace, conversation, conflictRouting, [])
+    emitWorkflowEvent(workflowServices, {
+      type: 'workflow_finished',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      summary: explicitAgentLock.errorResponse,
+    })
+    try {
+      await persistWorkflowEvents(workflowServices)
+    } catch (error) {
+      console.error(error)
+    }
+    return await workflowServices.store.read()
+  }
+
+  const lockedAgentId = explicitAgentLock.lockedAgentId
   emitWorkflowEvent(workflowServices, {
     type: 'turn_started',
     workspaceId: workspace.id,
@@ -1845,7 +1996,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       ? resolveReplyContinuationAgentId(input.replyTo, conversation, workspaceAgents)
       : undefined
   const directedGroupAgentId = conversation.type === 'group'
-    ? input.agentId ?? replyContinuationAgentId
+    ? lockedAgentId ?? input.agentId ?? replyContinuationAgentId
     : undefined
 
   if (replyContinuationAgentId) {
@@ -1902,6 +2053,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       provider: mainRoute.provider,
       model: mainRoute.model,
       error: mainRoute.error,
+      lockedAgentId,
       taskStage: mainRoute.route.taskStage,
       executionReadiness: mainRoute.route.executionReadiness,
       needsUserConfirmation: mainRoute.route.needsUserConfirmation,
@@ -2099,6 +2251,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
         conversation,
         agents: workspaceAgents,
         targetAgentId: directedGroupAgentId,
+        lockedAgentId,
         replyTo: input.replyTo,
         codeSelection: input.codeSelection,
         env: workflowServices.env,
@@ -2171,8 +2324,16 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     mainRoute.route,
     normalizedMainContent,
   )
-  const reviewGuardedRouting = applyReviewSafety(workflowServices, state, workspace, conversation, stageGuardedRouting)
-  const routing = applyExecutionSafety(workflowServices, state, workspace, conversation, reviewGuardedRouting)
+  // A group-room explicit @agent is a hard lock: one executor, one visible speaker, no orchestration fan-out.
+  const explicitLockedRouting = lockedAgentId
+    ? lockRoutingDecisionToAgent(stageGuardedRouting, lockedAgentId)
+    : stageGuardedRouting
+  const reviewGuardedRouting = lockedAgentId
+    ? explicitLockedRouting
+    : applyReviewSafety(workflowServices, state, workspace, conversation, explicitLockedRouting)
+  const routing = lockedAgentId
+    ? explicitLockedRouting
+    : applyExecutionSafety(workflowServices, state, workspace, conversation, reviewGuardedRouting)
   const decision = routing.decision
   const visibleTurn = resolveVisibleTurn(decision)
 
@@ -2184,6 +2345,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     provider: routing.provider,
     model: routing.model,
     error: routing.error,
+    lockedAgentId,
     taskStage: mainRoute.route.taskStage,
     executionReadiness: mainRoute.route.executionReadiness,
     needsUserConfirmation: mainRoute.route.needsUserConfirmation,
@@ -2267,23 +2429,25 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
     }
   }
 
-  const repairedResults = await runAutomaticRepairIfNeeded(
-    workflowServices,
-    workspace,
-    conversation,
-    results,
-    decision.dispatches,
-    (brief, runState, sessionScope) => runTaskBrief(
+  if (!decision.lockedAgentId) {
+    const repairedResults = await runAutomaticRepairIfNeeded(
       workflowServices,
-      runState,
       workspace,
       conversation,
-      brief,
-      sessionScope,
-      mainRoute.route,
-    ),
-  )
-  results.splice(0, results.length, ...repairedResults)
+      results,
+      decision.dispatches,
+      (brief, runState, sessionScope) => runTaskBrief(
+        workflowServices,
+        runState,
+        workspace,
+        conversation,
+        brief,
+        sessionScope,
+        mainRoute.route,
+      ),
+    )
+    results.splice(0, results.length, ...repairedResults)
+  }
 
   if (visibleTurn.finalizationMode === 'speaker_direct' && visibleTurn.speakerAgentId !== 'orchestrator' && results.length === 1) {
     emitWorkflowEvent(workflowServices, {
@@ -2291,6 +2455,21 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
       workspaceId: workspace.id,
       conversationId: conversation.id,
       summary: results[0]?.summary ?? results[0]?.output ?? '本轮子 Agent 已完成。',
+    })
+    try {
+      await persistWorkflowEvents(workflowServices)
+    } catch (error) {
+      console.error(error)
+    }
+    return await workflowServices.store.read()
+  }
+
+  if (decision.lockedAgentId) {
+    emitWorkflowEvent(workflowServices, {
+      type: 'workflow_finished',
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      summary: results.at(-1)?.summary ?? results.at(-1)?.output ?? `${decision.lockedAgentId} finished.`,
     })
     try {
       await persistWorkflowEvents(workflowServices)
