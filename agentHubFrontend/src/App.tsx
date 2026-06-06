@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Braces, LayoutDashboard, LoaderCircle, PlugZap, RefreshCcw, ServerCrash, Wifi } from 'lucide-react'
+import { Braces, LayoutDashboard, LoaderCircle, RefreshCcw, ServerCrash, Wifi } from 'lucide-react'
 import {
   createBusinessProjectAgent,
   createBusinessWorkspace,
@@ -1275,10 +1275,6 @@ export function App() {
             <GlassPanel compact className="metric-chip">
               <LayoutDashboard size={15} />
               {overview.page.total} 工作区
-            </GlassPanel>
-            <GlassPanel compact className="metric-chip">
-              <PlugZap size={15} />
-              {state.agents.length || overview.agents.length} Agents
             </GlassPanel>
             <button
               className="secondary-button topbar-code-button"

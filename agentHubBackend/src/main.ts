@@ -29,7 +29,10 @@ async function bootstrap(): Promise<void> {
   }))
 
   const port = config.get<number>('PORT', 8790)
-  await app.listen(port, '0.0.0.0')
+  const server = await app.listen(port, '0.0.0.0')
+  server.requestTimeout = 0
+  server.headersTimeout = 0
+  server.keepAliveTimeout = 75_000
 }
 
 void bootstrap()

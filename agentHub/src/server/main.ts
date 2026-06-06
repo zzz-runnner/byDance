@@ -12,6 +12,9 @@ async function main(): Promise<void> {
     port: env.PORT,
     host: '0.0.0.0',
   })
+  app.server.requestTimeout = 0
+  app.server.headersTimeout = 0
+  app.server.keepAliveTimeout = 75_000
 }
 
 void main().catch(error => {

@@ -507,6 +507,7 @@ DELETE /api/projects/:projectId/agents/:agentId
 - 仅当前项目 `conversationType=group` 时可用。
 - 当前项目 `conversationType=direct` 时调用会返回 `400 Bad Request`。
 - Runtime 直连接口也会拒绝 `workspaceType=chat` 的工作区创建自建 Agent。
+- 同一个 workspace 内所有 Agent 名称必须唯一；名称按 `trim()` 后、忽略大小写判重，默认 Agent 和自定义 Agent 之间也不能重名。
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -530,6 +531,8 @@ DELETE /api/projects/:projectId/agents/:agentId
 | `routingProfile` | `object` | 可选 | runtime 默认 | 路由配置。 |
 
 `PATCH /api/projects/:projectId/agents/:agentId` 请求体字段：
+
+- 如果把当前 Agent 改名为同 workspace 内已存在的名称（`trim()` 后、忽略大小写判重），会返回 `400 Bad Request`。
 
 内置 Agent 只会接受并保存 `name`、`modelProvider`、`model` 的工作区级覆盖；其他字段对内置 Agent 不开放。自建 Agent 可编辑下表字段，App 首版建议只开放基础字段。
 
