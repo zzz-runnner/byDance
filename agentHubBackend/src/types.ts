@@ -272,6 +272,7 @@ export interface RuntimeAgent extends Record<string, unknown> {
   model?: string
   source?: 'built-in' | 'workspace' | 'custom'
   workspaceId?: string
+  conversationId?: string
 }
 
 export interface RuntimeWorkspaceAgentMember extends Record<string, unknown> {

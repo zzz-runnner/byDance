@@ -7,7 +7,7 @@ import { Response as ExpressResponse } from 'express'
 import fs from 'fs-extra'
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { AgentHubClientService } from '../agent-hub/agent-hub.service'
-import { AgentHubState, AgentHubWorkspace } from '../agent-hub/agent-hub.types'
+import { AgentHubAgent, AgentHubState, AgentHubWorkspace } from '../agent-hub/agent-hub.types'
 import { CreateAgentDto, UpdateAgentDto } from '../agents/agents.dto'
 import { agentDisplayName, findMentionedAgentId, stripLeadingOrchestratorMention } from '../common/agent-presentation'
 import { isoNow } from '../common/time'
@@ -56,6 +56,9 @@ type ProjectPageCursor = {
   offset: number
 }
 
+const DIRECT_CHAT_AGENT_IDS = new Set(['claude-code-direct', 'codex-direct'])
+const DEFAULT_GROUP_AGENT_IDS = new Set(['orchestrator', 'product-manager', 'engineer', 'reviewer'])
+
 @Injectable()
 export class ProjectsService {
   private readonly previewService = new PreviewService(readConfig())
@@ -72,6 +75,7 @@ export class ProjectsService {
    * Output: persisted project metadata.
    */
   async createProject(input: CreateProjectDto): Promise<ProjectMetadata> {
+    assertProjectRoomShape(input)
     const projectId = `proj-${randomUUID()}`
     const now = isoNow()
     const conversationType = resolveConversationType(input)
@@ -84,6 +88,9 @@ export class ProjectsService {
           targetAgentId: directAgentId,
         }
       : await this.createAgentHubBinding(input, conversationType, directAgentId)
+    if (input.workspaceId && conversationType === 'direct' && directAgentId) {
+      await this.assertExistingDirectAgentAllowed(directAgentId)
+    }
 
     const project: ProjectMetadata = {
       projectId,
@@ -103,6 +110,15 @@ export class ProjectsService {
 
     await this.saveProject(project)
     return project
+  }
+
+  /**
+   * Checks an existing runtime direct-agent binding before saving project metadata.
+   * Input: requested agent id.
+   * Output: throws when the target is not a built-in direct-chat agent.
+   */
+  private async assertExistingDirectAgentAllowed(agentId: string): Promise<void> {
+    assertDirectConversationAgentId(agentId)
   }
 
   /**
@@ -160,8 +176,7 @@ export class ProjectsService {
       sortBy: query.sortBy,
       sortDirection: query.sortDirection,
     })
-    const [agents, roomBatch] = await Promise.all([
-      this.agentHub.fetchAgents(),
+    const [roomBatch] = await Promise.all([
       projectPage.items.length > 0
         ? this.agentHub.fetchWorkspaceOverviewBatch({
             items: projectPage.items.map(project => ({
@@ -174,7 +189,7 @@ export class ProjectsService {
     ])
 
     return buildWorkbenchOverviewPage(
-      agents,
+      [],
       projectPage.items.map(project => this.toStoredProject(project)),
       roomBatch.rooms,
       {
@@ -196,7 +211,7 @@ export class ProjectsService {
    * Output: agent definition array from AgentHub.
    */
   async listAgents() {
-    return this.agentHub.fetchAgents()
+    throw new BadRequestException('Global agents are not supported. Use /api/projects/:projectId/agents.')
   }
 
   async listProjectAgents(projectId: string) {
@@ -206,22 +221,40 @@ export class ProjectsService {
 
   async getProjectAgent(projectId: string, agentId: string) {
     const project = await this.getProject(projectId)
+    await this.assertProjectAgentVisible(project, agentId)
     return this.agentHub.fetchWorkspaceAgent(project.workspaceId, agentId)
   }
 
   async createProjectAgent(projectId: string, input: CreateAgentDto) {
     const project = await this.getProject(projectId)
+    if ((project.conversationType ?? 'group') !== 'group') {
+      throw new BadRequestException('Custom agents can only be added to group workspaces.')
+    }
     return this.agentHub.createWorkspaceAgent(project.workspaceId, input)
   }
 
   async updateProjectAgent(projectId: string, agentId: string, input: UpdateAgentDto) {
     const project = await this.getProject(projectId)
+    await this.assertProjectAgentVisible(project, agentId)
     return this.agentHub.updateWorkspaceAgent(project.workspaceId, agentId, input)
   }
 
   async deleteProjectAgent(projectId: string, agentId: string) {
     const project = await this.getProject(projectId)
+    await this.assertProjectAgentVisible(project, agentId)
     return this.agentHub.deleteWorkspaceAgent(project.workspaceId, agentId)
+  }
+
+  /**
+   * Ensures one agent belongs to the current project room before mutation.
+   * Input: project metadata and agent id.
+   * Output: throws when the agent belongs to a different room in the same workspace.
+   */
+  private async assertProjectAgentVisible(project: ProjectMetadata, agentId: string): Promise<void> {
+    const agents = await this.agentHub.fetchWorkspaceAgents(project.workspaceId)
+    if (!agents.some(agent => agent.id === agentId)) {
+      throw new NotFoundException(`Agent not found in project workspace room: ${agentId}`)
+    }
   }
 
   /**
@@ -737,9 +770,9 @@ export class ProjectsService {
 
     let nextState = state
     if (conversationType === 'direct' && directAgentId) {
-      const directAgent = requireAgent(state, directAgentId)
+      assertDirectConversationAgentId(directAgentId)
       nextState = await this.agentHub.createConversation(
-        buildDirectConversationInput(workspace.id, directAgent),
+        buildDirectConversationInput(workspace.id, directAgentId),
       )
     }
 
@@ -1141,6 +1174,32 @@ function directConversationAgentId(
     : undefined
 }
 
+/**
+ * Filters workspace agents down to the project-bound room.
+ * Input: workspace-level agents and project room metadata.
+ * Output: agents that should be visible in that project's Agent management dialog.
+ */
+function filterProjectAgents(agents: AgentHubAgent[], project: Pick<ProjectMetadata, 'conversationId' | 'conversationType' | 'targetAgentId'>): AgentHubAgent[] {
+  if ((project.conversationType ?? 'group') === 'direct') {
+    const targetAgentId = project.targetAgentId
+    return agents.filter(agent =>
+      targetAgentId
+        ? agent.id === targetAgentId && (!project.conversationId || !agent.conversationId || agent.conversationId === project.conversationId)
+        : DIRECT_CHAT_AGENT_IDS.has(agent.id) && (!project.conversationId || agent.conversationId === project.conversationId),
+    )
+  }
+
+  return agents.filter(agent => {
+    if (DIRECT_CHAT_AGENT_IDS.has(agent.id)) {
+      return false
+    }
+    if (agent.source === 'built-in') {
+      return DEFAULT_GROUP_AGENT_IDS.has(agent.id)
+    }
+    return !project.conversationId || !agent.conversationId || agent.conversationId === project.conversationId
+  })
+}
+
 function nonEmptyString(value: string | undefined, fallback: string): string {
   return value?.trim() ? value : fallback
 }
@@ -1374,6 +1433,27 @@ function resolveConversationType(input: CreateProjectDto): ConversationType {
 }
 
 /**
+ * Ensures project creation uses one supported workspace/chat shape.
+ * Input: raw create-project payload. Output: throws when room mode and workspace type disagree.
+ */
+function assertProjectRoomShape(input: CreateProjectDto): void {
+  const conversationType = resolveConversationType(input)
+  const workspaceType = input.workspaceType ?? (conversationType === 'direct' ? 'chat' : 'dev')
+
+  if (conversationType === 'direct') {
+    assertDirectConversationAgentId(resolveDirectAgentId(input) ?? 'codex-direct')
+    if (workspaceType !== 'chat') {
+      throw new BadRequestException('Direct workspaces must use workspaceType=chat.')
+    }
+    return
+  }
+
+  if (workspaceType === 'chat') {
+    throw new BadRequestException('Group workspaces must use dev, research, or writing workspace types.')
+  }
+}
+
+/**
  * Resolves the direct target agent requested by the user.
  * Input: raw create-project payload.
  * Output: direct agent id or undefined for group rooms.
@@ -1383,7 +1463,7 @@ function resolveDirectAgentId(input: CreateProjectDto): string | undefined {
     return undefined
   }
 
-  return input.agentIds?.find(Boolean) ?? 'engineer'
+  return input.agentIds?.find(Boolean) ?? 'codex-direct'
 }
 
 /**
@@ -1399,30 +1479,32 @@ function normalizeWorkspaceType(
 }
 
 /**
- * Ensures one requested direct agent exists in the runtime state snapshot.
- * Input: runtime state and requested agent id.
- * Output: matching runtime agent definition.
+ * Ensures direct chat is bound only to the dedicated direct-chat agent ids.
+ * Input: requested direct agent id.
+ * Output: throws when the requested direct agent is not allowed.
  */
-function requireAgent(state: AgentHubState, agentId: string) {
-  const agent = state.agents.find(candidate => candidate.id === agentId)
-  if (!agent) {
-    throw new BadRequestException(`Unknown direct agent: ${agentId}`)
+function assertDirectConversationAgentId(agentId: string) {
+  if (!DIRECT_CHAT_AGENT_IDS.has(agentId)) {
+    throw new BadRequestException('Direct workspaces can only talk to built-in Claude Code or Codex direct agents.')
   }
-  return agent
 }
 
 /**
  * Builds the runtime direct-room payload for one selected agent.
- * Input: workspace id and target agent.
+ * Input: workspace id and target direct agent id.
  * Output: AgentHub conversation creation payload.
  */
-function buildDirectConversationInput(workspaceId: string, agent: AgentHubState['agents'][number]) {
+function buildDirectConversationInput(workspaceId: string, agentId: string) {
   return {
     workspaceId,
     type: 'direct' as const,
-    title: `${agentDisplayName(agent)} 私聊`,
-    participants: ['user', agent.id],
+    title: `${agentDisplayName({ id: agentId, name: directAgentDisplayName(agentId) })} 私聊`,
+    participants: ['user', agentId],
   }
+}
+
+function directAgentDisplayName(agentId: string): string {
+  return agentId === 'claude-code-direct' ? 'Claude Code Agent' : 'Codex Agent'
 }
 
 /**

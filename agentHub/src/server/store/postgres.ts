@@ -194,6 +194,7 @@ function toAgent(row: Record<string, unknown>): AgentDefinition {
       : asObject<NonNullable<AgentDefinition['routingProfile']>>(row.routing_profile),
     source: row.source as AgentDefinition['source'],
     workspaceId: row.workspace_id === null || row.workspace_id === undefined ? undefined : String(row.workspace_id),
+    conversationId: row.conversation_id === null || row.conversation_id === undefined ? undefined : String(row.conversation_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
@@ -221,6 +222,7 @@ function agentParams(agent: AgentDefinition): unknown[] {
     toJsonParam(agent.routingProfile),
     agent.source,
     agent.workspaceId ?? null,
+    agent.conversationId ?? null,
     agent.createdAt,
     agent.updatedAt,
   ]
@@ -256,10 +258,10 @@ async function insertAgentToClient(client: QueryClient, agent: AgentDefinition):
         insert into ${TABLES.agents} (
           id, name, role, description, when_to_use, system_prompt, model_provider, model,
           context_policy, tools, permissions, disallowed_tools, permission_mode, runtime_policy,
-          output_schema, isolation, skills, routing_profile, source, workspace_id, created_at, updated_at
+          output_schema, isolation, skills, routing_profile, source, workspace_id, conversation_id, created_at, updated_at
         ) values (
           $1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14::jsonb,
-          $15,$16,$17::jsonb,$18::jsonb,$19,$20,$21,$22
+          $15,$16,$17::jsonb,$18::jsonb,$19,$20,$21,$22,$23
         )
         returning *
       `,
@@ -294,9 +296,13 @@ async function updateAgentInClient(client: QueryClient, agent: AgentDefinition):
           routing_profile = $18::jsonb,
           source = $19,
           workspace_id = $20,
-          created_at = $21,
-          updated_at = $22
-        where id = $1
+          conversation_id = $21,
+          created_at = $22,
+          updated_at = $23
+        where
+          id = $1 and
+          workspace_id is not distinct from $20 and
+          conversation_id is not distinct from $21
         returning *
       `,
       params,
@@ -314,6 +320,15 @@ async function insertWorkspaceAgentMemberToClient(
           workspace_id, agent_id, display_name, model_provider_override, model_override, sort_order,
           locked, enabled, created_at, updated_at
         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        on conflict (workspace_id, agent_id) do update
+        set
+          display_name = excluded.display_name,
+          model_provider_override = excluded.model_provider_override,
+          model_override = excluded.model_override,
+          sort_order = excluded.sort_order,
+          locked = excluded.locked,
+          enabled = excluded.enabled,
+          updated_at = excluded.updated_at
         returning *
       `,
       [
@@ -554,7 +569,8 @@ async function createSchema(client: QueryClient): Promise<void> {
     );
 
     create table if not exists ${TABLES.agents} (
-      id text primary key,
+      row_id bigserial primary key,
+      id text not null,
       name text not null,
       role text not null,
       description text not null,
@@ -574,6 +590,7 @@ async function createSchema(client: QueryClient): Promise<void> {
       routing_profile jsonb,
       source text not null,
       workspace_id text,
+      conversation_id text,
       created_at text not null,
       updated_at text not null
     );
@@ -725,6 +742,10 @@ async function createSchema(client: QueryClient): Promise<void> {
   await client.query(`alter table ${TABLES.agentRuns} add column if not exists handoff_id text`)
   await client.query(`alter table ${TABLES.agents} add column if not exists routing_profile jsonb`)
   await client.query(`alter table ${TABLES.agents} add column if not exists workspace_id text`)
+  await client.query(`alter table ${TABLES.agents} add column if not exists conversation_id text`)
+  await client.query(`alter table ${TABLES.agents} add column if not exists row_id bigserial`)
+  await client.query(`alter table ${TABLES.agents} drop constraint if exists ${TABLES.agents}_pkey`)
+  await client.query(`alter table ${TABLES.agents} add primary key (row_id)`)
 }
 
 /**
@@ -1220,7 +1241,16 @@ export class PostgresStateStore implements StateStore {
     const client = await this.pool.connect()
     try {
       await beginStateTransaction(client)
-      const existing = await client.query(`select id from ${TABLES.agents} where id = $1`, [agent.id])
+      const existing = await client.query(
+        `
+          select id from ${TABLES.agents}
+          where
+            id = $1 and
+            workspace_id is not distinct from $2 and
+            conversation_id is not distinct from $3
+        `,
+        [agent.id, agent.workspaceId ?? null, agent.conversationId ?? null],
+      )
       if (existing.rowCount && existing.rowCount > 0) {
         throw new Error(`Agent already exists: ${agent.id}`)
       }
@@ -1243,6 +1273,9 @@ export class PostgresStateStore implements StateStore {
     try {
       await beginStateTransaction(client)
       const existing = await client.query(`select * from ${TABLES.agents} where id = $1`, [agentId])
+      if (existing.rowCount && existing.rowCount > 1) {
+        throw new Error(`Agent update is ambiguous without workspace/conversation scope: ${agentId}`)
+      }
       const current = existing.rows[0] ? toAgent(existing.rows[0] as Record<string, unknown>) : undefined
       if (!current) {
         await client.query('commit')
@@ -1263,7 +1296,10 @@ export class PostgresStateStore implements StateStore {
     const client = await this.pool.connect()
     try {
       await beginStateTransaction(client)
-      const result = await client.query(`delete from ${TABLES.agents} where id = $1`, [agentId])
+      const result = await client.query(
+        `delete from ${TABLES.agents} where id = $1 and workspace_id is null and conversation_id is null`,
+        [agentId],
+      )
       await client.query('commit')
       return Boolean(result.rowCount && result.rowCount > 0)
     } catch (error) {

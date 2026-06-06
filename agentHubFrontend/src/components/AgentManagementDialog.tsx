@@ -19,6 +19,7 @@ type AgentDraft = {
 type AgentManagementDialogProps = {
   open: boolean
   agents: AgentDefinition[]
+  roomKind?: 'group' | 'direct'
   saving: boolean
   deletingAgentId?: string
   errorMessage: string
@@ -80,6 +81,10 @@ function agentSearchText(agent: AgentDefinition): string {
   ].filter(Boolean).join(' ').toLowerCase()
 }
 
+function agentScopeKey(agent: AgentDefinition): string {
+  return `workspace:${agent.workspaceId ?? ''}|conversation:${agent.conversationId ?? ''}|agent:${agent.id}`
+}
+
 function formatRunSeconds(seconds: number): string {
   if (seconds >= 60 && seconds % 60 === 0) {
     return `${seconds / 60} 分钟`
@@ -114,14 +119,6 @@ function toCreateInput(draft: AgentDraft): CreateBusinessAgentInput {
 }
 
 function toUpdateInput(agent: AgentDefinition, draft: AgentDraft): UpdateBusinessAgentInput {
-  if (agent.source === 'built-in') {
-    return {
-      name: draft.name.trim(),
-      modelProvider: draft.modelProvider,
-      ...(draft.model.trim() ? { model: draft.model.trim() } : {}),
-    }
-  }
-
   return {
     name: draft.name.trim(),
     role: draft.role.trim(),
@@ -142,6 +139,7 @@ function toUpdateInput(agent: AgentDefinition, draft: AgentDraft): UpdateBusines
 export function AgentManagementDialog({
   open,
   agents,
+  roomKind = 'group',
   saving,
   deletingAgentId,
   errorMessage,
@@ -155,20 +153,23 @@ export function AgentManagementDialog({
     [agents],
   )
   const customAgents = useMemo(
-    () => [...agents.filter(agent => agent.source !== 'built-in')].sort((left, right) => left.id.localeCompare(right.id)),
-    [agents],
+    () => roomKind === 'group'
+      ? [...agents.filter(agent => agent.source !== 'built-in')].sort((left, right) => left.id.localeCompare(right.id))
+      : [],
+    [agents, roomKind],
   )
   const sortedAgents = useMemo(
     () => [...builtInAgents, ...customAgents],
     [builtInAgents, customAgents],
   )
-  const [selectedAgentId, setSelectedAgentId] = useState('')
+  const [selectedAgentKey, setSelectedAgentKey] = useState('')
   const [creating, setCreating] = useState(false)
   const [searchText, setSearchText] = useState('')
   const [draft, setDraft] = useState<AgentDraft>(() => createEmptyDraft())
 
-  const selectedAgent = creating ? undefined : sortedAgents.find(agent => agent.id === selectedAgentId)
+  const selectedAgent = creating ? undefined : sortedAgents.find(agent => agentScopeKey(agent) === selectedAgentKey)
   const isBuiltIn = selectedAgent?.source === 'built-in'
+  const canCreateCustomAgent = roomKind === 'group'
   const deleteDisabled = saving || !selectedAgent || isBuiltIn || deletingAgentId === selectedAgent?.id
   const normalizedSearch = searchText.trim().toLowerCase()
   const visibleBuiltInAgents = useMemo(
@@ -188,26 +189,36 @@ export function AgentManagementDialog({
     if (!open) {
       return
     }
+    if (!canCreateCustomAgent && creating) {
+      const firstAgent = sortedAgents[0]
+      setCreating(false)
+      if (firstAgent) {
+        setSelectedAgentKey(agentScopeKey(firstAgent))
+        setDraft(draftFromAgent(firstAgent))
+      }
+      return
+    }
     if (creating) {
       return
     }
     const firstAgent = sortedAgents[0]
-    if (!selectedAgentId && firstAgent) {
-      setSelectedAgentId(firstAgent.id)
+    const selectedAgentStillVisible = sortedAgents.some(agent => agentScopeKey(agent) === selectedAgentKey)
+    if ((!selectedAgentKey || !selectedAgentStillVisible) && firstAgent) {
+      setSelectedAgentKey(agentScopeKey(firstAgent))
       setDraft(draftFromAgent(firstAgent))
       setCreating(false)
     }
-  }, [creating, open, selectedAgentId, sortedAgents])
+  }, [canCreateCustomAgent, creating, open, selectedAgentKey, sortedAgents])
 
   useEffect(() => {
-    if (!open || creating || !selectedAgentId) {
+    if (!open || creating || !selectedAgentKey) {
       return
     }
-    const nextAgent = sortedAgents.find(agent => agent.id === selectedAgentId)
+    const nextAgent = sortedAgents.find(agent => agentScopeKey(agent) === selectedAgentKey)
     if (nextAgent) {
       setDraft(draftFromAgent(nextAgent))
     }
-  }, [creating, open, selectedAgentId, sortedAgents])
+  }, [creating, open, selectedAgentKey, sortedAgents])
 
   useEffect(() => {
     if (!open) {
@@ -244,14 +255,17 @@ export function AgentManagementDialog({
   }
 
   function startCreate() {
+    if (!canCreateCustomAgent) {
+      return
+    }
     setCreating(true)
-    setSelectedAgentId('')
+    setSelectedAgentKey('')
     setDraft(createEmptyDraft())
   }
 
   function selectAgent(agent: AgentDefinition) {
     setCreating(false)
-    setSelectedAgentId(agent.id)
+    setSelectedAgentKey(agentScopeKey(agent))
     setDraft(draftFromAgent(agent))
   }
 
@@ -265,7 +279,7 @@ export function AgentManagementDialog({
       const created = await onCreate(toCreateInput(draft))
       if (created?.id) {
         setCreating(false)
-        setSelectedAgentId(created.id)
+        setSelectedAgentKey(agentScopeKey(created))
         setDraft(draftFromAgent(created))
       }
       return
@@ -274,6 +288,7 @@ export function AgentManagementDialog({
     if (selectedAgent) {
       const updated = await onUpdate(selectedAgent.id, toUpdateInput(selectedAgent, draft))
       if (updated?.id) {
+        setSelectedAgentKey(agentScopeKey(updated))
         setDraft(draftFromAgent(updated))
       }
     }
@@ -284,9 +299,10 @@ export function AgentManagementDialog({
       return
     }
     await onDelete(selectedAgent.id)
-    const nextAgent = sortedAgents.find(agent => agent.id !== selectedAgent.id)
+    const deletedAgentKey = agentScopeKey(selectedAgent)
+    const nextAgent = sortedAgents.find(agent => agentScopeKey(agent) !== deletedAgentKey)
     if (nextAgent) {
-      setSelectedAgentId(nextAgent.id)
+      setSelectedAgentKey(agentScopeKey(nextAgent))
       setDraft(draftFromAgent(nextAgent))
     } else {
       startCreate()
@@ -308,6 +324,13 @@ export function AgentManagementDialog({
             </button>
           </div>
 
+          {canCreateCustomAgent ? null : (
+            <div className="dialog-note agent-dialog__locked-note">
+              <ShieldCheck size={15} />
+              <span>单聊工作区只能和已选择的 Claude 或 Codex Agent 对话；自定义子 Agent 只能在群聊工作区添加。</span>
+            </div>
+          )}
+
           <div className="agent-dialog__body">
             <aside className="agent-dialog__list">
               <div className="agent-dialog__list-tools">
@@ -320,7 +343,13 @@ export function AgentManagementDialog({
                     placeholder="搜索 Agent"
                   />
                 </label>
-                <button className={`agent-list-item agent-list-item--new ${creating ? 'is-active' : ''}`} type="button" onClick={startCreate} disabled={saving}>
+                <button
+                  className={`agent-list-item agent-list-item--new ${creating ? 'is-active' : ''}`}
+                  type="button"
+                  onClick={startCreate}
+                  disabled={saving || !canCreateCustomAgent}
+                  title={canCreateCustomAgent ? '新建自定义 Agent' : '只有群聊工作区可以新建自定义 Agent'}
+                >
                   <Plus size={15} />
                   <span>新建 Agent</span>
                 </button>
@@ -333,8 +362,8 @@ export function AgentManagementDialog({
               {visibleBuiltInAgents.length ? <p className="agent-dialog__section-label">默认 Agent</p> : null}
               {visibleBuiltInAgents.map(agent => (
                 <button
-                  className={`agent-list-item ${!creating && agent.id === selectedAgentId ? 'is-active' : ''}`}
-                  key={agent.id}
+                  className={`agent-list-item ${!creating && agentScopeKey(agent) === selectedAgentKey ? 'is-active' : ''}`}
+                  key={agentScopeKey(agent)}
                   type="button"
                   onClick={() => selectAgent(agent)}
                   disabled={saving}
@@ -350,8 +379,8 @@ export function AgentManagementDialog({
               {visibleCustomAgents.length ? <p className="agent-dialog__section-label">自定义 Agent</p> : null}
               {visibleCustomAgents.map(agent => (
                 <button
-                  className={`agent-list-item ${!creating && agent.id === selectedAgentId ? 'is-active' : ''}`}
-                  key={agent.id}
+                  className={`agent-list-item ${!creating && agentScopeKey(agent) === selectedAgentKey ? 'is-active' : ''}`}
+                  key={agentScopeKey(agent)}
                   type="button"
                   onClick={() => selectAgent(agent)}
                   disabled={saving}
@@ -368,6 +397,12 @@ export function AgentManagementDialog({
                 <div className="agent-dialog__empty">
                   <Bot size={16} />
                   <span>没有匹配的 Agent</span>
+                </div>
+              ) : null}
+              {!searchText && visibleAgentCount === 0 ? (
+                <div className="agent-dialog__empty">
+                  <Bot size={16} />
+                  <span>当前工作区没有加载到 Agent</span>
                 </div>
               ) : null}
             </aside>
@@ -420,7 +455,7 @@ export function AgentManagementDialog({
                       id="agent-role"
                       value={draft.role}
                       onChange={event => updateDraft('role', event.currentTarget.value)}
-                      disabled={saving || isBuiltIn}
+                      disabled={saving}
                     />
                   </div>
                   <div className="dialog-field">
@@ -459,50 +494,44 @@ export function AgentManagementDialog({
                   </div>
                 </div>
 
-                {!isBuiltIn ? (
-                  <div className="dialog-field">
-                    <label htmlFor="agent-description">简介</label>
-                    <textarea
-                      id="agent-description"
-                      rows={2}
-                      value={draft.description}
-                      onChange={event => updateDraft('description', event.currentTarget.value)}
-                      disabled={saving}
-                    />
-                  </div>
-                ) : null}
+                <div className="dialog-field">
+                  <label htmlFor="agent-description">简介</label>
+                  <textarea
+                    id="agent-description"
+                    rows={2}
+                    value={draft.description}
+                    onChange={event => updateDraft('description', event.currentTarget.value)}
+                    disabled={saving}
+                  />
+                </div>
 
-                {!isBuiltIn ? (
-                  <div className="dialog-field">
-                    <label htmlFor="agent-when">适用场景</label>
-                    <textarea
-                      id="agent-when"
-                      rows={2}
-                      value={draft.whenToUse}
-                      onChange={event => updateDraft('whenToUse', event.currentTarget.value)}
-                      disabled={saving}
-                    />
-                  </div>
-                ) : null}
+                <div className="dialog-field">
+                  <label htmlFor="agent-when">适用场景</label>
+                  <textarea
+                    id="agent-when"
+                    rows={2}
+                    value={draft.whenToUse}
+                    onChange={event => updateDraft('whenToUse', event.currentTarget.value)}
+                    disabled={saving}
+                  />
+                </div>
 
-                {!isBuiltIn ? (
-                  <div className="dialog-field">
-                    <label htmlFor="agent-system-prompt">系统提示词</label>
-                    <textarea
-                      id="agent-system-prompt"
-                      rows={6}
-                      value={draft.systemPrompt}
-                      onChange={event => updateDraft('systemPrompt', event.currentTarget.value)}
-                      disabled={saving}
-                      required
-                    />
-                  </div>
-                ) : null}
+                <div className="dialog-field">
+                  <label htmlFor="agent-system-prompt">系统提示词</label>
+                  <textarea
+                    id="agent-system-prompt"
+                    rows={6}
+                    value={draft.systemPrompt}
+                    onChange={event => updateDraft('systemPrompt', event.currentTarget.value)}
+                    disabled={saving}
+                    required
+                  />
+                </div>
 
                 {isBuiltIn ? (
                   <div className="dialog-note agent-dialog__locked-note">
                     <ShieldCheck size={15} />
-                    <span>默认 Agent 已锁定，仅支持调整名称、模型提供方和模型。</span>
+                    <span>默认 Agent 可以修改配置，但不能删除。</span>
                   </div>
                 ) : null}
                 {errorMessage ? <div className="field-error">{errorMessage}</div> : null}
@@ -518,7 +547,7 @@ export function AgentManagementDialog({
                   <Trash2 size={15} />
                   {deletingAgentId === selectedAgent?.id ? '删除中' : '删除'}
                 </button>
-                <button className="primary-button" type="submit" disabled={saving || !draft.name.trim() || !draft.systemPrompt.trim()}>
+                <button className="primary-button" type="submit" disabled={saving || (creating && !canCreateCustomAgent) || !draft.name.trim() || !draft.systemPrompt.trim()}>
                   <Save size={15} />
                   {saving ? '保存中' : creating ? '创建 Agent' : '保存 Agent'}
                 </button>

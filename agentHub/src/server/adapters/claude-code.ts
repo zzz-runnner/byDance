@@ -315,6 +315,7 @@ export function createClaudeCodeAdapter(env: ServerEnv, toolGateway: LocalToolGa
       const prompt = buildAgentPrompt(input.task, input.contextPackage, input.agent.outputSchema)
       const args = [
         '-p',
+        '--bare',
         '--output-format',
         'stream-json',
         '--include-partial-messages',
