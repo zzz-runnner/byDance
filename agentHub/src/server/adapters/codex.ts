@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { mkdir, readFile, unlink } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, unlink } from 'node:fs/promises'
 import { isoNow } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import type { LocalToolGateway } from '../tool-gateway'
@@ -28,12 +28,8 @@ type CodexStreamItem = {
   status?: string
 }
 
-/**
- * Resolves an AgentHub-local CODEX_HOME path for child Codex runs.
- * Input: configured CODEX_HOME value. Output: absolute path used only by the child process.
- */
-function resolveCodexHome(codexHome: string): string {
-  return path.isAbsolute(codexHome) ? codexHome : path.resolve(process.cwd(), codexHome)
+async function createEphemeralCodexHome(): Promise<string> {
+  return mkdtemp(path.join(tmpdir(), 'agenthub-codex-'))
 }
 
 /**
@@ -67,8 +63,7 @@ function buildCodexBridgeArgs(env: ServerEnv, model: string): string[] {
  * Input: server environment. Output: process env visible only to the Codex child process.
  */
 async function buildCodexProcessEnv(env: ServerEnv): Promise<NodeJS.ProcessEnv> {
-  const codexHome = resolveCodexHome(env.AGENTHUB_CODEX_HOME)
-  await mkdir(codexHome, { recursive: true })
+  const codexHome = await createEphemeralCodexHome()
 
   return {
     ...process.env,
@@ -322,6 +317,7 @@ export function createCodexAdapter(env: ServerEnv, toolGateway: LocalToolGateway
       const outputPath = path.join(tmpdir(), `agenthub-codex-${randomUUID()}.txt`)
       const prompt = buildAgentPrompt(input.task, input.contextPackage, input.agent.outputSchema)
       const processEnv = await buildCodexProcessEnv(env)
+      const codexHome = processEnv.CODEX_HOME
       const model = resolveCodexModel(env, input.agent)
       const args = [
         'exec',
@@ -353,6 +349,9 @@ export function createCodexAdapter(env: ServerEnv, toolGateway: LocalToolGateway
         onStderr: output.stderr,
       })
       output.finish(result.code, result.timedOut)
+      if (codexHome) {
+        await rm(codexHome, { recursive: true, force: true }).catch(() => undefined)
+      }
       const lastMessage = await readAndRemoveLastMessage(outputPath)
       const parsedFinalMessage = parseCodexFinalMessage(result.stdout)
       const content = lastMessage || parsedFinalMessage || result.stdout.trim()

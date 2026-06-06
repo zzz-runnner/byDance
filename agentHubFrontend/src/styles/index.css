@@ -350,7 +350,6 @@ a {
   font-weight: 700;
 }
 
-.topbar-agent-button,
 .topbar-code-button {
   display: inline-flex;
   align-items: center;
@@ -843,6 +842,14 @@ a {
   flex-wrap: wrap;
   gap: 6px;
   justify-content: end;
+}
+
+.chat-agent-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding-inline: 10px;
 }
 
 .chat-subtitle {
@@ -3894,6 +3901,7 @@ a {
 
 .agent-dialog-shell {
   width: min(100%, 1040px);
+  max-height: calc(100vh - 40px);
 }
 
 .dialog-card {
@@ -3901,7 +3909,10 @@ a {
 }
 
 .agent-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   max-height: min(88vh, 820px);
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -3946,6 +3957,7 @@ a {
   display: grid;
   grid-template-columns: 292px minmax(0, 1fr);
   gap: 14px;
+  height: min(72vh, 690px);
   min-height: 0;
 }
 
@@ -3954,7 +3966,6 @@ a {
   align-content: start;
   gap: 8px;
   min-height: 0;
-  max-height: 660px;
   overflow-y: auto;
   padding: 2px 2px 2px 0;
 }
@@ -4110,7 +4121,6 @@ a {
 .agent-dialog__form {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
-  max-height: 660px;
   min-height: 0;
   overflow: hidden;
 }
@@ -4240,6 +4250,8 @@ a {
 
 .agent-dialog__actions {
   padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .field-hint,
@@ -4389,19 +4401,24 @@ a {
   .topbar-code-button {
     justify-content: center;
   }
-  .topbar-agent-button {
-    justify-content: center;
-  }
   .agent-dialog__body,
   .agent-form-grid {
     grid-template-columns: 1fr;
   }
+  .agent-dialog {
+    max-height: calc(100vh - 24px);
+  }
+  .agent-dialog__body {
+    height: auto;
+    max-height: calc(100vh - 116px);
+    grid-template-rows: minmax(120px, 220px) minmax(0, 1fr);
+    overflow: hidden;
+  }
   .agent-dialog__list {
-    max-height: 220px;
     padding-right: 0;
   }
   .agent-dialog__form {
-    max-height: min(58vh, 520px);
+    min-height: 0;
   }
   .agent-editor-summary {
     grid-template-columns: auto minmax(0, 1fr);

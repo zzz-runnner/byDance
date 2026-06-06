@@ -153,6 +153,7 @@ export type AgentDefinition = {
   routingProfile?: AgentRoutingProfile
   source: 'built-in' | 'workspace' | 'custom'
   workspaceId?: string
+  conversationId?: string
   createdAt: string
   updatedAt: string
 }

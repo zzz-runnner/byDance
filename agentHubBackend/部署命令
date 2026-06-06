@@ -1,4 +1,8 @@
+cd /opt/agenthub/byDance/agentHubBackend
+
 docker build -t agenthub-backend:latest .
+
+docker rm -f agenthub-backend
 
 docker run -d \
    --name agenthub-backend \

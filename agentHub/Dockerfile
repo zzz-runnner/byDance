@@ -42,6 +42,7 @@ USER node
 ENV NODE_ENV=production
 ENV PORT=8787
 ENV MIMO2CODEX_BIN=mimo2codex
+ENV CLAUDE_CODE_SIMPLE=1
 EXPOSE 8787
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \

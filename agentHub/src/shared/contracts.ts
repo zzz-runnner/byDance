@@ -307,6 +307,7 @@ export const AgentDefinitionSchema = z.object({
   routingProfile: AgentRoutingProfileSchema.optional(),
   source: z.enum(['built-in', 'workspace', 'custom']),
   workspaceId: z.string().optional(),
+  conversationId: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 })

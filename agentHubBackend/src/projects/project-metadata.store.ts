@@ -17,6 +17,9 @@ type ProjectCursor = {
   offset: number
 }
 
+const DEFAULT_DIRECT_CHAT_AGENT_ID = 'codex-direct'
+const DIRECT_CHAT_AGENT_IDS = new Set(['claude-code-direct', 'codex-direct'])
+
 type LegacyProjectRecord = {
   projectId: string
   workspaceId: string
@@ -51,6 +54,7 @@ export class ProjectMetadataStore implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
     if (this.mode === 'local') {
       await fs.ensureDir(this.storage.projectsRoot)
+      await this.applyLegacyDirectProjectTargets()
       return
     }
 
@@ -61,6 +65,7 @@ export class ProjectMetadataStore implements OnModuleInit, OnModuleDestroy {
 
     this.pool = new Pool({ connectionString: databaseUrl })
     await this.ensureSchema()
+    await this.applyLegacyDirectProjectTargets()
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -290,6 +295,28 @@ export class ProjectMetadataStore implements OnModuleInit, OnModuleDestroy {
       create index if not exists business_projects_workspace_id_idx
         on business_projects (workspace_id)
     `)
+  }
+
+  /**
+   * Moves legacy direct-project metadata to the dedicated Codex direct agent.
+   * Input: current metadata store. Output: persisted records updated when needed.
+   */
+  private async applyLegacyDirectProjectTargets(): Promise<void> {
+    const projects = await this.listProjects()
+    const legacyDirectProjects = projects.filter(project =>
+      project.conversationType === 'direct' &&
+      !DIRECT_CHAT_AGENT_IDS.has(project.targetAgentId ?? ''),
+    )
+    if (legacyDirectProjects.length === 0) {
+      return
+    }
+
+    for (const project of legacyDirectProjects) {
+      await this.saveProject({
+        ...project,
+        targetAgentId: DEFAULT_DIRECT_CHAT_AGENT_ID,
+      })
+    }
   }
 }
 

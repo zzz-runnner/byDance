@@ -53,7 +53,7 @@ type ProjectStateEnvelopeResponse = ProjectStateEnvelope | {
   messagePage?: ProjectStateEnvelope['messagePage']
 }
 
-const DEFAULT_GROUP_AGENT_IDS = ['product-manager', 'engineer', 'reviewer']
+const DEFAULT_GROUP_AGENT_IDS = ['orchestrator', 'product-manager', 'engineer', 'reviewer']
 
 type FetchWorkbenchOverviewInput = {
   limit?: number

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { readFile, unlink } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, unlink } from 'node:fs/promises'
 import type { AgentDefinition, Conversation, Workspace } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import type { ModelGatewayRequest, ModelGatewayResponse, ModelGatewayStreamHandlers } from '../model-gateway'
@@ -122,6 +122,10 @@ function buildCodexBridgeArgs(env: ServerEnv, model: string): string[] {
   ]
 }
 
+async function createEphemeralCodexHome(): Promise<string> {
+  return mkdtemp(path.join(tmpdir(), 'agenthub-codex-'))
+}
+
 /**
  * Runs one real Claude lightweight prompt without enabling file or shell tools.
  * Input: agent-provider request bundle.
@@ -132,6 +136,7 @@ async function runClaudeAgentModel(input: AgentModelInput): Promise<ModelGateway
   const model = resolveAgentConfiguredModel(input.agent, input.request.model) ?? 'default'
   const args = [
     '-p',
+    '--bare',
     '--output-format',
     'text',
     '--no-session-persistence',
@@ -181,6 +186,7 @@ async function runCodexAgentModel(input: AgentModelInput): Promise<ModelGatewayR
   const runtime = await input.runtime.prepareWorkspace(input.workspace)
   const model = resolveAgentConfiguredModel(input.agent, input.request.model) ?? input.env.AGENTHUB_CODEX_MODEL
   const outputPath = path.join(tmpdir(), `agenthub-light-${randomUUID()}.txt`)
+  const codexHome = await createEphemeralCodexHome()
   const result = await input.toolGateway.runCommand({
     workspaceRepoPath: runtime.repoPath,
     cwd: runtime.repoPath,
@@ -203,11 +209,13 @@ async function runCodexAgentModel(input: AgentModelInput): Promise<ModelGatewayR
     ],
     env: {
       ...process.env,
+      CODEX_HOME: codexHome,
       AGENTHUB_CODEX_BRIDGE_API_KEY: input.env.AGENTHUB_CODEX_BRIDGE_API_KEY,
     },
     stdin: buildStdinPrompt(input.request.systemPrompt, input.request.userPrompt),
     timeoutMs: input.request.timeoutMs,
   })
+  await rm(codexHome, { recursive: true, force: true }).catch(() => undefined)
 
   const content = (await readAndRemoveLastMessage(outputPath)) || parseCodexFinalMessage(result.stdout) || result.stdout.trim()
   if (!content) {

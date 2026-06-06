@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common'
+import { BadRequestException, Injectable } from '@nestjs/common'
 import { AgentHubClientService } from '../agent-hub/agent-hub.service'
 import { CreateAgentDto, UpdateAgentDto } from './agents.dto'
 
@@ -7,22 +7,24 @@ export class AgentsService {
   constructor(private readonly agentHub: AgentHubClientService) {}
 
   listAgents() {
-    return this.agentHub.fetchAgents()
+    throw new BadRequestException('Global agents are not supported. Use /api/projects/:projectId/agents.')
   }
 
   getAgent(agentId: string) {
-    return this.agentHub.fetchAgent(agentId)
+    throw new BadRequestException(`Global agent lookup is not supported: ${agentId}`)
   }
 
   createAgent(input: CreateAgentDto) {
-    return this.agentHub.createAgent(input)
+    void input
+    throw new BadRequestException('Use /api/projects/:projectId/agents to create group-workspace custom agents.')
   }
 
   updateAgent(agentId: string, input: UpdateAgentDto) {
-    return this.agentHub.updateAgent(agentId, input)
+    void input
+    throw new BadRequestException(`Use /api/projects/:projectId/agents/${encodeURIComponent(agentId)} to update a project-scoped agent.`)
   }
 
   deleteAgent(agentId: string) {
-    return this.agentHub.deleteAgent(agentId)
+    throw new BadRequestException(`Use /api/projects/:projectId/agents/${encodeURIComponent(agentId)} to delete a project-scoped custom agent.`)
   }
 }

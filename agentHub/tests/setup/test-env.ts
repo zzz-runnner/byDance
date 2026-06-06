@@ -56,6 +56,7 @@ export function createMockServerEnv(runtimeRoot: string, overrides: Partial<Serv
   return {
     PORT: 8787,
     WEB_PORT: 5173,
+    AGENTHUB_CORS_ORIGINS: [],
     AGENTHUB_STORAGE: 'memory',
     DATABASE_URL: undefined,
     CLAUDE_CODE_BIN: 'claude',

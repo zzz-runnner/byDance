@@ -27,7 +27,7 @@ import {
   type TurnRoute,
 } from './turn-router'
 import { buildReplyContextPayload } from './reply-context'
-import { resolveWorkspaceAgents } from '../agents/workspace-agents'
+import { resolveConversationAgents } from '../agents/workspace-agents'
 import { generateAgentModelResponse, resolveAgentConfiguredModel } from './agent-model'
 import type { WorkspaceRuntimeManager } from '../runtime/workspace'
 import type { LocalToolGateway } from '../tool-gateway'
@@ -303,7 +303,10 @@ export function buildAgentSessionContextPackage(input: AgentSessionContextInput)
   return JSON.stringify(
     {
       userMessage: input.userMessage,
-      replyContext: buildReplyContextPayload(input.replyTo, resolveWorkspaceAgents(input.state, input.workspace.id)),
+      replyContext: buildReplyContextPayload(
+        input.replyTo,
+        resolveConversationAgents(input.state, input.workspace.id, input.conversation.id),
+      ),
       codeSelection: input.codeSelection
         ? {
             filePath: input.codeSelection.filePath,

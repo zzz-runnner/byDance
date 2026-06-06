@@ -18,24 +18,21 @@ import type {
 const DEFAULT_MESSAGE_LIMIT = 40
 const MAX_MESSAGE_LIMIT = 200
 const DEFAULT_WORKSPACE_AGENT_ORDER = ['orchestrator', 'product-manager', 'engineer', 'reviewer']
+const DIRECT_CHAT_AGENT_ORDER = ['claude-code-direct', 'codex-direct']
+const DEFAULT_WORKSPACE_AGENT_IDS = new Set(DEFAULT_WORKSPACE_AGENT_ORDER)
+const DIRECT_CHAT_AGENT_IDS = new Set(DIRECT_CHAT_AGENT_ORDER)
 
 type MessagePageCursor = {
   offset: number
 }
 
 function compareWorkspaceAgentOrder(leftId: string, rightId: string): number {
-  const leftOrder = DEFAULT_WORKSPACE_AGENT_ORDER.indexOf(leftId)
-  const rightOrder = DEFAULT_WORKSPACE_AGENT_ORDER.indexOf(rightId)
+  const combinedOrder = [...DEFAULT_WORKSPACE_AGENT_ORDER, ...DIRECT_CHAT_AGENT_ORDER]
+  const leftOrder = combinedOrder.indexOf(leftId)
+  const rightOrder = combinedOrder.indexOf(rightId)
   const normalizedLeft = leftOrder === -1 ? Number.MAX_SAFE_INTEGER : leftOrder
   const normalizedRight = rightOrder === -1 ? Number.MAX_SAFE_INTEGER : rightOrder
   return normalizedLeft - normalizedRight || leftId.localeCompare(rightId)
-}
-
-function listBuiltInAgents(state: RuntimeAppState): RuntimeAgent[] {
-  return state.agents
-    .filter(agent => agent.source === 'built-in')
-    .slice()
-    .sort((left, right) => compareWorkspaceAgentOrder(left.id, right.id))
 }
 
 function listWorkspaceCustomAgents(state: RuntimeAppState, workspaceId: string): RuntimeAgent[] {
@@ -45,22 +42,60 @@ function listWorkspaceCustomAgents(state: RuntimeAppState, workspaceId: string):
     .sort((left, right) => left.id.localeCompare(right.id))
 }
 
+function isDirectChatWorkspace(state: RuntimeAppState, workspaceId: string): boolean {
+  return state.workspaces.find(workspace => workspace.id === workspaceId)?.workspaceType === 'chat'
+}
+
+function isAllowedWorkspaceBuiltInAgent(state: RuntimeAppState, workspaceId: string, agentId: string): boolean {
+  return isDirectChatWorkspace(state, workspaceId)
+    ? DIRECT_CHAT_AGENT_IDS.has(agentId)
+    : DEFAULT_WORKSPACE_AGENT_IDS.has(agentId)
+}
+
+function filterWorkspaceAgentMembers(state: RuntimeAppState, workspaceId: string) {
+  const builtInAgentIds = new Set(
+    state.agents
+      .filter(agent => agent.source === 'built-in' && agent.workspaceId === workspaceId)
+      .map(agent => agent.id),
+  )
+  const seen = new Set<string>()
+
+  return state.workspaceAgentMembers.filter(member => {
+    if (member.workspaceId !== workspaceId) {
+      return false
+    }
+    if (seen.has(member.agentId)) {
+      return false
+    }
+    if (builtInAgentIds.has(member.agentId) && !isAllowedWorkspaceBuiltInAgent(state, workspaceId, member.agentId)) {
+      return false
+    }
+    seen.add(member.agentId)
+    return true
+  })
+}
+
 function resolveWorkspaceAgents(state: RuntimeAppState, workspaceId: string): RuntimeAgent[] {
-  const builtInAgents = new Map(listBuiltInAgents(state).map(agent => [agent.id, agent]))
-  const persistedMembers = state.workspaceAgentMembers.filter(member => member.workspaceId === workspaceId)
-  const missingMembers = listBuiltInAgents(state)
+  const builtInAgents = new Map(
+    state.agents
+      .filter(agent => agent.source === 'built-in' && agent.workspaceId === workspaceId)
+      .filter(agent => isAllowedWorkspaceBuiltInAgent(state, workspaceId, agent.id))
+      .map(agent => [agent.id, agent]),
+  )
+  const persistedMembers = filterWorkspaceAgentMembers(state, workspaceId)
+  const missingMembers = [...builtInAgents.values()]
     .filter(agent => !persistedMembers.some(member => member.agentId === agent.id))
-    .map((agent, index) => ({
-      workspaceId,
-      agentId: agent.id,
-      displayName: agent.name ?? agent.id,
-      modelProviderOverride: undefined,
-      modelOverride: undefined,
-      sortOrder: DEFAULT_WORKSPACE_AGENT_ORDER.indexOf(agent.id) >= 0
-        ? DEFAULT_WORKSPACE_AGENT_ORDER.indexOf(agent.id)
-        : DEFAULT_WORKSPACE_AGENT_ORDER.length + index,
-      enabled: true,
-    }))
+    .map(agent => ({
+        workspaceId,
+        agentId: agent.id,
+        displayName: agent.name ?? agent.id,
+        modelProviderOverride: undefined,
+        modelOverride: undefined,
+        sortOrder: DEFAULT_WORKSPACE_AGENT_ORDER.indexOf(agent.id) >= 0
+          ? DEFAULT_WORKSPACE_AGENT_ORDER.indexOf(agent.id)
+          : DEFAULT_WORKSPACE_AGENT_ORDER.length + Math.max(0, DIRECT_CHAT_AGENT_ORDER.indexOf(agent.id)),
+        enabled: true,
+      }))
   const members = [...persistedMembers, ...missingMembers]
     .slice()
     .sort((left, right) =>
@@ -83,6 +118,51 @@ function resolveWorkspaceAgents(state: RuntimeAppState, workspaceId: string): Ru
     })
 
   return [...resolvedBuiltIns, ...listWorkspaceCustomAgents(state, workspaceId)]
+}
+
+function resolveConversationAgents(
+  state: RuntimeAppState,
+  workspaceId: string,
+  conversationId: string | undefined,
+): RuntimeAgent[] {
+  if (!conversationId) {
+    return resolveWorkspaceAgents(state, workspaceId)
+  }
+
+  const conversation = state.conversations.find(candidate =>
+    candidate.workspaceId === workspaceId && candidate.id === conversationId,
+  )
+  if (!conversation) {
+    return resolveWorkspaceAgents(state, workspaceId)
+  }
+
+  const participantIds = new Set(conversation.participants.filter(participant => participant !== 'user'))
+  const memberByAgentId = new Map(
+    state.workspaceAgentMembers
+      .filter(member => member.workspaceId === workspaceId && member.enabled !== false)
+      .map(member => [member.agentId, member]),
+  )
+
+  return state.agents
+    .filter(agent => agent.workspaceId === workspaceId)
+    .filter(agent => agent.conversationId === conversation.id)
+    .filter(agent => participantIds.has(agent.id))
+    .map(agent => {
+      if (agent.source !== 'built-in') {
+        return agent
+      }
+      const member = memberByAgentId.get(agent.id)
+      if (!member) {
+        return agent
+      }
+      return {
+        ...agent,
+        name: member.displayName || agent.name,
+        modelProvider: member.modelProviderOverride ?? agent.modelProvider,
+        model: member.modelOverride ?? agent.model,
+      }
+    })
+    .sort((left, right) => compareWorkspaceAgentOrder(left.id, right.id))
 }
 
 /**
@@ -148,7 +228,6 @@ export function selectProjectState(
   },
 ): ProjectStateResponse {
   const workspaceId = project.workspaceId
-  const workspaceAgents = resolveWorkspaceAgents(state, workspaceId)
   const conversations = state.conversations.filter(conversation => conversation.workspaceId === workspaceId)
   const conversationIds = new Set(conversations.map(conversation => conversation.id))
   const agentSessions = state.agentSessions.filter(session => session.workspaceId === workspaceId)
@@ -160,6 +239,7 @@ export function selectProjectState(
   const conversationId = project.conversationId && conversationIds.has(project.conversationId)
     ? project.conversationId
     : conversations[0]?.id
+  const workspaceAgents = resolveConversationAgents(state, workspaceId, conversationId)
   const allMessages = state.messages
     .filter(message => message.workspaceId === workspaceId || conversationIds.has(message.conversationId))
     .slice()
@@ -204,7 +284,6 @@ export function selectProjectState(
       conversations,
       messages: messagePage.messages,
       agents: workspaceAgents,
-      workspaceAgentMembers: state.workspaceAgentMembers.filter(member => member.workspaceId === workspaceId),
       agentSessions,
       agentSessionMessages: state.agentSessionMessages.filter(
         message => message.workspaceId === workspaceId || sessionIds.has(message.sessionId),
@@ -233,6 +312,7 @@ export function selectProjectState(
       diagnosticLogs: state.diagnosticLogs.filter(log =>
         belongsToWorkspace(log, workspaceId, conversationIds, sessionIds, handoffIds, runIds),
       ),
+      workspaceAgentMembers: filterWorkspaceAgentMembers(state, workspaceId),
     },
     messagePage: {
       limit: messagePage.limit,
@@ -306,7 +386,7 @@ export function buildWorkbenchOverview(
     .sort((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt))
 
   return {
-    agents: listBuiltInAgents(state),
+    agents: [],
     rooms,
     page: {
       limit: rooms.length,

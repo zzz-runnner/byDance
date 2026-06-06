@@ -28,6 +28,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-agenthub}:${POSTGRES_PASSWORD:-agenthub_change_me}@host.docker.internal:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-agenthub_runtime}
       AGENTHUB_RUNTIME_ROOT: /app/data/workspaces
       AGENTHUB_CODEX_HOME: /app/.codex-agenthub
+      CLAUDE_CODE_SIMPLE: "1"
       AGENTHUB_CODEX_BRIDGE_URL: ${AGENTHUB_CODEX_BRIDGE_URL:-http://codex-bridge:8788/v1}
       AGENTHUB_REAL_AGENTS: ${AGENTHUB_REAL_AGENTS:-false}
       AGENTHUB_ORCHESTRATOR_PROVIDER: ${AGENTHUB_ORCHESTRATOR_PROVIDER:-mock}

@@ -23,13 +23,14 @@ import {
 } from './orchestrator/artifacts'
 import { syncAgentDerivedTitles } from './agents/agent-presentation'
 import {
+  createDirectAgentInstance,
   createDefaultWorkspaceAgentMembers,
+  createGroupAgentInstances,
+  DIRECT_CHAT_AGENT_ORDER,
   ensureWorkspaceAgentMembers,
-  listBuiltInAgents,
   resolveWorkspaceAgent,
   resolveWorkspaceAgents,
   syncWorkspaceGroupParticipants,
-  upsertWorkspaceAgentMember,
 } from './agents/workspace-agents'
 import { handleUserMessage, type WorkflowServices } from './orchestrator/workflow'
 
@@ -184,14 +185,10 @@ const UpdateAgentInputSchema = z.object({
 
 type UpdateAgentInput = z.infer<typeof UpdateAgentInputSchema>
 
-const BUILT_IN_AGENT_UPDATE_FIELDS = [
+const AGENT_UPDATE_FIELDS = [
   'name',
   'modelProvider',
   'model',
-] satisfies Array<keyof UpdateAgentInput>
-
-const CUSTOM_AGENT_UPDATE_FIELDS = [
-  ...BUILT_IN_AGENT_UPDATE_FIELDS,
   'role',
   'description',
   'whenToUse',
@@ -208,21 +205,30 @@ const CUSTOM_AGENT_UPDATE_FIELDS = [
   'routingProfile',
 ] satisfies Array<keyof UpdateAgentInput>
 
+const BUILT_IN_AGENT_UPDATE_FIELDS = AGENT_UPDATE_FIELDS
+const CUSTOM_AGENT_UPDATE_FIELDS = AGENT_UPDATE_FIELDS
+
+const DIRECT_CHAT_AGENT_IDS = new Set<string>(DIRECT_CHAT_AGENT_ORDER)
+
 /**
  * Creates a workspace record plus its default group conversation.
  * Input: workspace creation payload. Output: workspace and conversation records.
  */
 function createWorkspaceRecords(
   input: z.infer<typeof CreateWorkspaceInputSchema>,
-  builtInAgents: AgentDefinition[],
 ): {
   workspace: Workspace
-  conversation: Conversation
+  conversation?: Conversation
+  agents: AgentDefinition[]
   workspaceAgentMembers: AppState['workspaceAgentMembers']
 } {
   const now = isoNow()
   const workspaceId = `ws-${randomUUID()}`
-  const workspaceAgentMembers = createDefaultWorkspaceAgentMembers(builtInAgents, workspaceId, now)
+  const conversationId = `conv-${randomUUID()}`
+  const agents = input.workspaceType === 'chat' ? [] : createGroupAgentInstances(workspaceId, conversationId, now)
+  const workspaceAgentMembers = input.workspaceType === 'chat'
+    ? []
+    : createDefaultWorkspaceAgentMembers(agents, workspaceId, now)
   const workspace: Workspace = {
     id: workspaceId,
     name: input.name,
@@ -237,17 +243,19 @@ function createWorkspaceRecords(
     updatedAt: now,
   }
 
-  const conversation: Conversation = {
-    id: `conv-${randomUUID()}`,
-    workspaceId,
-    type: 'group',
-    title: '项目主群聊',
-    participants: ['user', ...workspaceAgentMembers.filter(member => member.enabled).map(member => member.agentId)],
-    createdAt: now,
-    updatedAt: now,
-  }
+  const conversation: Conversation | undefined = input.workspaceType === 'chat'
+    ? undefined
+    : {
+        id: conversationId,
+        workspaceId,
+        type: 'group',
+        title: '项目主群聊',
+        participants: ['user', ...workspaceAgentMembers.filter(member => member.enabled).map(member => member.agentId)],
+        createdAt: now,
+        updatedAt: now,
+      }
 
-  return { workspace, conversation, workspaceAgentMembers }
+  return { workspace, conversation, agents, workspaceAgentMembers }
 }
 
 /**
@@ -257,6 +265,7 @@ function createWorkspaceRecords(
 function createCustomAgent(
   input: z.infer<typeof CreateAgentInputSchema>,
   workspaceId: string,
+  conversationId: string,
 ): AgentDefinition {
   const now = isoNow()
   return {
@@ -264,9 +273,35 @@ function createCustomAgent(
     id: input.id ?? `agent-${randomUUID()}`,
     source: 'workspace',
     workspaceId,
+    conversationId,
     createdAt: now,
     updatedAt: now,
   }
+}
+
+/**
+ * Returns whether one participant list represents one allowed direct-chat target.
+ * Input: current state and participants. Output: true when exactly one dedicated built-in direct agent is selected.
+ */
+function isAllowedDirectConversationTarget(state: AppState, participants: string[]): boolean {
+  if (!participants.includes('user')) {
+    return false
+  }
+
+  const targetAgentIds = participants.filter(participant => participant !== 'user')
+  if (targetAgentIds.length !== 1) {
+    return false
+  }
+
+  return DIRECT_CHAT_AGENT_IDS.has(targetAgentIds[0])
+}
+
+/**
+ * Returns whether a workspace uses the direct-chat shape.
+ * Input: one workspace record. Output: true for single-agent chat workspaces.
+ */
+function isDirectChatWorkspace(workspace: Workspace): boolean {
+  return workspace.workspaceType === 'chat'
 }
 
 /**
@@ -310,36 +345,28 @@ function updateWorkspaceAgentDefinition(
   }
 
   if (currentAgent.source === 'built-in') {
-    const template = state.agents.find(agent => agent.id === agentId && agent.source === 'built-in')
-    const member = state.workspaceAgentMembers.find(
-      candidate => candidate.workspaceId === workspaceId && candidate.agentId === agentId,
+    const agent = state.agents.find(candidate =>
+      candidate.id === agentId &&
+      candidate.workspaceId === workspaceId &&
+      candidate.source === 'built-in',
     )
-    if (!template || !member) {
+    if (!agent) {
       return undefined
     }
 
-    const nextName = input.name?.trim() || currentAgent.name
-    const nextProvider = input.modelProvider ?? currentAgent.modelProvider
-    const nextModel = input.model ?? currentAgent.model
-    const updatedAt = isoNow()
-    upsertWorkspaceAgentMember(state, {
-      workspaceId,
-      agentId,
-      displayName: nextName,
-      modelProviderOverride: nextProvider === template.modelProvider ? undefined : nextProvider,
-      modelOverride: nextModel === template.model ? undefined : nextModel,
-      sortOrder: member.sortOrder,
-      locked: true,
-      enabled: member.enabled,
-      createdAt: member.createdAt,
-      updatedAt,
-    })
-    const updatedAgent = resolveWorkspaceAgent(state, workspaceId, agentId)
-    if (!updatedAgent) {
-      return undefined
+    const updatedAgent = updateAgentDefinition(agent, input)
+    const member = state.workspaceAgentMembers.find(item =>
+      item.workspaceId === workspaceId && item.agentId === agentId,
+    )
+    if (member) {
+      member.displayName = updatedAgent.name
+      member.modelProviderOverride = updatedAgent.modelProvider
+      member.modelOverride = updatedAgent.model
+      member.updatedAt = updatedAgent.updatedAt
     }
-    syncAgentDerivedTitles(state, previousAgent, updatedAgent, updatedAgent.updatedAt, workspaceId)
-    return updatedAgent
+    const resolvedAgent = resolveWorkspaceAgent(state, workspaceId, agentId) ?? updatedAgent
+    syncAgentDerivedTitles(state, previousAgent, resolvedAgent, resolvedAgent.updatedAt, workspaceId)
+    return resolvedAgent
   }
 
   const agent = state.agents.find(candidate => candidate.id === agentId && candidate.workspaceId === workspaceId)
@@ -546,20 +573,15 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
 
   app.get('/api/state', async () => services.store.read())
 
-  app.get('/api/agents', async () => {
-    const state = await services.store.read()
-    return listBuiltInAgents(state)
+  app.get('/api/agents', async (_request, reply) => {
+    reply.status(400)
+    return reply.send({ error: 'Global agents are not supported. Use /api/workspaces/:workspaceId/agents.' })
   })
 
   app.get('/api/agents/:agentId', async (request, reply) => {
     const params = AgentParamsSchema.parse(request.params)
-    const state = await services.store.read()
-    const agent = listBuiltInAgents(state).find(item => item.id === params.agentId)
-    if (!agent) {
-      reply.status(404)
-      return reply.send({ error: `Agent not found: ${params.agentId}` })
-    }
-    return agent
+    reply.status(400)
+    return reply.send({ error: `Global agent lookup is not supported: ${params.agentId}` })
   })
 
   app.post('/api/workspaces/overview-batch', async request => {
@@ -637,12 +659,14 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
 
   app.post('/api/workspaces', async request => {
     const input = CreateWorkspaceInputSchema.parse(request.body)
-    const state = await services.store.read()
-    const created = createWorkspaceRecords(input, listBuiltInAgents(state))
+    const created = createWorkspaceRecords(input)
     await services.runtime.prepareWorkspace(created.workspace)
     await services.store.update(state => {
       state.workspaces.push(created.workspace)
-      state.conversations.push(created.conversation)
+      if (created.conversation) {
+        state.conversations.push(created.conversation)
+      }
+      state.agents.push(...created.agents)
       state.workspaceAgentMembers.push(...created.workspaceAgentMembers)
     })
     return services.store.read()
@@ -727,7 +751,7 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
     })
   })
 
-  app.post('/api/conversations', async request => {
+  app.post('/api/conversations', async (request, reply) => {
     const input = CreateConversationInputSchema.parse(request.body)
     const now = isoNow()
     const conversation: Conversation = {
@@ -739,11 +763,42 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
       createdAt: now,
       updatedAt: now,
     }
+    const currentState = await services.store.read()
+    if (!currentState.workspaces.some(workspace => workspace.id === input.workspaceId)) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${input.workspaceId}` })
+    }
+    const workspace = currentState.workspaces.find(item => item.id === input.workspaceId)
+    if (!workspace) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${input.workspaceId}` })
+    }
+    if (input.type === 'direct' && !isDirectChatWorkspace(workspace)) {
+      reply.status(400)
+      return reply.send({ error: 'Direct conversations can only be created inside single-chat workspaces.' })
+    }
+    if (input.type === 'group' && isDirectChatWorkspace(workspace)) {
+      reply.status(400)
+      return reply.send({ error: 'Single-chat workspaces do not support group conversations.' })
+    }
+    if (input.type === 'direct' && !isAllowedDirectConversationTarget(currentState, input.participants)) {
+      reply.status(400)
+      return reply.send({ error: 'Direct conversations can only target built-in Claude Code or Codex direct agents.' })
+    }
     await services.store.update(state => {
-      if (!state.workspaces.some(workspace => workspace.id === input.workspaceId)) {
-        throw new Error(`Workspace not found: ${input.workspaceId}`)
-      }
       state.conversations.push(conversation)
+      if (conversation.type === 'direct') {
+        const directAgentId = conversation.participants.find(participant => participant !== 'user')
+        if (directAgentId) {
+          state.agents.push(createDirectAgentInstance(
+            directAgentId as typeof DIRECT_CHAT_AGENT_ORDER[number],
+            conversation.workspaceId,
+            conversation.id,
+            conversation.createdAt,
+          ))
+        }
+        ensureWorkspaceAgentMembers(state, conversation.workspaceId, conversation.createdAt)
+      }
     })
     return services.store.read()
   })
@@ -752,18 +807,41 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
     const params = WorkspaceParamsSchema.parse(request.params)
     const input = CreateAgentInputSchema.parse(request.body)
     const currentState = await services.store.read()
-    if (!currentState.workspaces.some(workspace => workspace.id === params.workspaceId)) {
+    const workspace = currentState.workspaces.find(item => item.id === params.workspaceId)
+    if (!workspace) {
       reply.status(404)
       return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
     }
+    if (workspace.workspaceType === 'chat') {
+      reply.status(400)
+      return reply.send({ error: 'Custom child agents can only be added to group workspaces.' })
+    }
+    const groupConversation = currentState.conversations.find(
+      conversation => conversation.workspaceId === params.workspaceId && conversation.type === 'group',
+    )
+    if (!groupConversation) {
+      reply.status(400)
+      return reply.send({ error: 'Custom child agents require a group conversation.' })
+    }
     const requestedId = input.id?.trim()
-    if (requestedId && currentState.agents.some(agent => agent.id === requestedId)) {
+    if (
+      requestedId &&
+      currentState.agents.some(agent =>
+        agent.id === requestedId &&
+        agent.workspaceId === params.workspaceId &&
+        agent.conversationId === groupConversation.id,
+      )
+    ) {
       reply.status(400)
       return reply.send({ error: `Agent already exists: ${requestedId}` })
     }
     const created = await services.store.update(state => {
-      const agent = createCustomAgent(input, params.workspaceId)
-      if (state.agents.some(item => item.id === agent.id)) {
+      const agent = createCustomAgent(input, params.workspaceId, groupConversation.id)
+      if (state.agents.some(item =>
+        item.id === agent.id &&
+        item.workspaceId === params.workspaceId &&
+        item.conversationId === groupConversation.id,
+      )) {
         throw new Error(`Agent already exists: ${agent.id}`)
       }
       state.agents.push(agent)

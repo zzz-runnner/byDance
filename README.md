@@ -87,13 +87,14 @@ The backend still keeps the Nest business modules for:
   - quoted child-agent reply follow-up
   - code selection, which defaults to `engineer` when no explicit target is given
 - Direct rooms stay fixed to one agent and do not show the mention picker.
+- Direct-room creation is limited to the dedicated built-in targets `claude-code-direct` and `codex-direct`; custom child agents can only be added from group workspaces.
 - The built-in orchestrator keeps the stable id `orchestrator`, while its default display name is now `项目经理 Agent`.
 - Agent `name` is now the editable display identity, while `id` stays the stable key for routing, storage, session binding, and conversation participants.
 - Built-in workspace members are locked and non-deletable. They only allow per-workspace edits to:
   - display name
   - model provider
   - model
-- Workspace custom agents are isolated per workspace. Create, edit, and delete actions affect only the current workspace.
+- Workspace custom agents are isolated per group workspace. Create, edit, and delete actions affect only the current workspace.
 - Visible speaker identity now resolves from the current agent registry instead of flattening replies to one built-in coordinator label.
 - Editing an agent name now refreshes direct-room titles, agent-session titles, direct-room composer copy, and reply sender labels that can still resolve through the live agent registry.
 - Group-room explicit mentions now match `@main`, stable ids, full current display names, and short display-name aliases.

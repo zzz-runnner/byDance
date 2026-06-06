@@ -84,7 +84,7 @@ GET /api/workbench
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `agents` | `Agent[]` | 必填 | 全局 Agent 定义列表，可为空数组。 |
+| `agents` | `Agent[]` | 必填 | 兼容字段，当前通常为空数组；不存在全局 Agent，App 不应依赖该字段渲染 Agent 首页。 |
 | `rooms` | `WorkbenchRoom[]` | 必填 | 工作区房间摘要列表，可为空数组。 |
 | `page` | `object` | 必填 | 分页信息。 |
 | `page.limit` | `number` | 必填 | 本次返回使用的分页大小。 |
@@ -152,8 +152,19 @@ POST /api/projects
   "name": "投票小程序",
   "goal": "做一个候选人投票系统",
   "workspaceType": "dev",
-  "conversationType": "group",
-  "agentIds": ["product-manager", "engineer", "reviewer"]
+  "conversationType": "group"
+}
+```
+
+单聊请求示例：
+
+```json
+{
+  "name": "和 Codex 对话",
+  "goal": "聚焦实现一个 React 组件",
+  "workspaceType": "chat",
+  "conversationType": "direct",
+  "agentIds": ["codex-direct"]
 }
 ```
 
@@ -165,9 +176,17 @@ POST /api/projects
 | `goal` | `string` | 必填 | 无 | 工作区目标，最长 4000 字符。 |
 | `workspaceType` | `dev \| research \| writing \| chat` | 可选 | `dev` | 工作区类型；单聊会被后端规范为 `chat`。 |
 | `conversationType` | `group \| direct` | 可选 | `group` | 创建群聊或单聊工作区。 |
-| `agentIds` | `string[]` | 可选 | 无 | 目标 Agent id 列表；单聊时取第一个有效值，未传则默认 `engineer`。当前群聊创建不按该字段筛选参与 Agent。 |
+| `agentIds` | `string[]` | 可选 | 无 | 单聊目标 Agent id 列表，只取第一个有效值，未传则默认 `codex-direct`。当前群聊创建不按该字段筛选参与 Agent。 |
 | `workspaceId` | `string` | 可选 | 无 | 绑定已有 runtime workspace 的高级字段，App 首版不建议传。 |
 | `conversationId` | `string` | 可选 | 无 | 绑定已有 runtime conversation 的高级字段，通常和 `workspaceId` 一起使用。 |
+
+模式规则：
+
+- 群聊工作区：`conversationType=group`，`workspaceType` 使用 `dev`、`research`、`writing`；后端自动初始化默认内置 Agent 成员。
+- 单聊工作区：`conversationType=direct`，`workspaceType=chat`，`agentIds` 只传一个目标 Agent；Runtime 会在该 direct conversation 下创建对应 Agent 实例。
+- 单聊目标只能是内置直聊 Agent：`claude-code-direct` 或 `codex-direct`。
+- App 新建单聊时只展示“Claude Code Agent”和“Codex Agent”两个入口，分别传 `claude-code-direct`、`codex-direct`。
+- 如果传入自建 Agent、未知 Agent，或其他内置群聊 Agent，后端返回 `400 Bad Request`。
 
 主要响应字段：
 
@@ -190,8 +209,18 @@ POST /api/projects
 移动端使用建议：
 
 - 创建群聊工作区：`conversationType=group`。
-- 创建单聊工作区：`conversationType=direct`，`agentIds` 只传目标 Agent。
+- 创建单聊工作区：`conversationType=direct`，`workspaceType=chat`，`agentIds` 只传目标 Agent。
 - 创建成功后刷新 `/api/workbench`，并进入新项目对应的对话页。
+
+单聊目标非法错误示例：
+
+```json
+{
+  "message": "Direct workspaces can only talk to built-in Claude Code or Codex direct agents.",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+```
 
 ### 2.4 置顶和归档
 
@@ -382,7 +411,8 @@ POST /api/projects/:projectId/messages/stream
 移动端使用建议：
 
 - 普通群聊消息只传 `content`。
-- 单聊或明确指定 Agent 时传 `agentId`。
+- 单聊消息传当前房间的 `targetAgentId` 作为 `agentId`。
+- 群聊明确指定 Agent 时优先通过正文 `@agent` 触发；如果 App 后续提供快捷指派，也可以传 `agentId`。
 - 引用回复时传 `replyTo`。
 - 代码选区引用不是首版 App 必需能力，可暂不接。
 
@@ -430,12 +460,14 @@ DELETE /api/projects/:projectId/messages/:messageId/pin
 
 ### 2.8 Agent 读取和轻管理
 
-全局读取：
+全局读取兼容路由：
 
 ```text
 GET /api/agents
 GET /api/agents/:agentId
 ```
+
+当前没有全局 Agent。以上两个接口调用会返回 `400 Bad Request`，App 不应使用它们作为 Agent 首页或默认 Agent 列表来源。
 
 项目级读取和管理：
 
@@ -449,11 +481,14 @@ DELETE /api/projects/:projectId/agents/:agentId
 
 移动端使用建议：
 
-- Agent 首页如果没有选中项目，可以先用 `GET /api/agents` 展示内置 Agent。
-- 进入具体工作区后，用 `GET /api/projects/:projectId/agents` 展示该 workspace 可见 Agent。
+- Agent 首页如果没有选中项目，不再读取全局 Agent；可以展示空态，或等移动端专用聚合接口上线后读取聚合结果。
+- 进入具体工作区后，用 `GET /api/projects/:projectId/agents` 展示该 workspace 的 Agent 列表；业务后端会直接透传 Agent 服务返回结果。
 - 移动端编辑 Agent 时必须走项目级接口。
 - 内置 Agent 只允许在工作区内覆盖 `name`、`modelProvider`、`model`。
+- 内置 Agent 不可删除。
+- 自建 Agent 只能在群聊工作区创建；单聊工作区不展示“新建 Agent”入口。
 - 自建 Agent 可编辑基础字段，App 首版建议限制为 `name`、`role`、`description`、`modelProvider`、`model`、`skills`。
+- 自建 Agent 只属于当前群聊 workspace/conversation，创建、编辑、删除都不会影响其他 workspace 或 conversation。
 
 路径参数：
 
@@ -463,6 +498,12 @@ DELETE /api/projects/:projectId/agents/:agentId
 | `agentId` | `string` | 可选 | 仅单 Agent 读取、更新、删除接口必填。 |
 
 `POST /api/projects/:projectId/agents` 请求体字段：
+
+限制：
+
+- 仅当前项目 `conversationType=group` 时可用。
+- 当前项目 `conversationType=direct` 时调用会返回 `400 Bad Request`。
+- Runtime 直连接口也会拒绝 `workspaceType=chat` 的工作区创建自建 Agent。
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -486,6 +527,8 @@ DELETE /api/projects/:projectId/agents/:agentId
 | `routingProfile` | `object` | 可选 | runtime 默认 | 路由配置。 |
 
 `PATCH /api/projects/:projectId/agents/:agentId` 请求体字段：
+
+内置 Agent 只会接受并保存 `name`、`modelProvider`、`model` 的工作区级覆盖；其他字段对内置 Agent 不开放。自建 Agent 可编辑下表字段，App 首版建议只开放基础字段。
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
@@ -516,10 +559,29 @@ Agent 主要响应字段：
 | `modelProvider` | `string` | 可选 | 模型提供方。 |
 | `model` | `string` | 可选 | 模型名。 |
 | `source` | `built-in \| workspace \| custom` | 可选 | Agent 来源。 |
-| `workspaceId` | `string` | 可选 | 工作区自建或覆盖 Agent 所属 workspace。 |
+| `workspaceId` | `string` | 可选 | Agent 所属 runtime workspace；当前语义上必有。 |
+| `conversationId` | `string` | 可选 | Agent 所属 runtime conversation；当前语义上必有。 |
 | `role`、`description`、`skills` 等 | 多类型 | 可选 | runtime 可能返回的扩展字段，App 按需读取。 |
 
-说明：`GET /api/agents` 和 `GET /api/projects/:projectId/agents` 返回 `Agent[]`；单 Agent 接口返回 `Agent`；删除接口返回 runtime 删除结果，App 侧通常只需要本地移除并刷新列表。
+说明：`GET /api/projects/:projectId/agents` 返回 `Agent[]`，当前等价于读取该项目绑定 `workspaceId` 下 Agent 服务返回的工作区 Agent 列表，不再由业务后端按 conversation 二次过滤；单 Agent 接口返回 `Agent`；删除接口返回 runtime 删除结果，App 侧通常只需要本地移除并刷新列表。`GET /api/agents` 当前返回 `400`。
+
+单聊工作区创建自建 Agent 错误示例：
+
+```json
+{
+  "message": "Custom agents can only be added to group workspaces.",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+```
+
+删除内置 Agent 错误示例：
+
+```json
+{
+  "error": "Built-in agent cannot be deleted: engineer"
+}
+```
 
 ### 2.9 文件摘要和文件内容
 
@@ -737,11 +799,13 @@ GET /api/projects/:projectId/delivery
 
 ## 3. 当前不建议 App 使用的接口
 
-### 3.1 全局 Agent 写接口
+### 3.1 全局 Agent 兼容接口
 
 不要在 App 中使用：
 
 ```text
+GET    /api/agents
+GET    /api/agents/:agentId
 POST   /api/agents
 PATCH  /api/agents/:agentId
 DELETE /api/agents/:agentId
@@ -751,15 +815,18 @@ DELETE /api/agents/:agentId
 
 | 接口 | 路径参数 | 请求体字段 | 说明 |
 | --- | --- | --- | --- |
-| `POST /api/agents` | 无 | 同项目级 `POST /api/projects/:projectId/agents`，其中 `name`、`systemPrompt` 必填 | 不建议 App 使用。 |
-| `PATCH /api/agents/:agentId` | `agentId` 必填 | 同项目级 `PATCH /api/projects/:projectId/agents/:agentId`，所有字段可选 | 不建议 App 使用。 |
+| `GET /api/agents` | 无 | 无 | 返回 `400`。不存在全局 Agent，App 不使用。 |
+| `GET /api/agents/:agentId` | `agentId` 必填 | 无 | 返回 `400`。不存在全局 Agent，App 不使用。 |
+| `POST /api/agents` | 无 | 兼容保留路由；当前返回 `400`，应改用 `POST /api/projects/:projectId/agents` | App 不应使用。 |
+| `PATCH /api/agents/:agentId` | `agentId` 必填 | 兼容保留路由；当前返回 `400`，应改用 `PATCH /api/projects/:projectId/agents/:agentId` | App 不应使用。 |
 | `DELETE /api/agents/:agentId` | `agentId` 必填 | 无 | 不建议 App 使用。 |
 
 原因：
 
 - 当前这些接口只是兼容保留路由。
-- Runtime 不允许通过全局接口创建、编辑、删除 Agent。
+- Runtime 不允许通过全局接口读取、创建、编辑、删除 Agent。
 - App 应使用项目级 Agent 接口。
+- 项目级 Agent 写接口也受群聊/单聊规则限制：群聊才允许创建自建 Agent，单聊只允许与 `claude-code-direct` 或 `codex-direct` 对话。
 
 ### 3.2 版本、构建、部署写接口
 
@@ -815,7 +882,7 @@ GET /api/projects/:projectId/deployments
 | Mock 类型 | 后端来源 | 备注 |
 | --- | --- | --- |
 | `Workspace` | `/api/workbench` 的 `rooms[]` | App adapter 负责字段转换。 |
-| `Agent` | `/api/agents` 或 `/api/projects/:projectId/agents` | `status` 需要从运行态推导。 |
+| `Agent` | `/api/projects/:projectId/agents` | `status` 需要从运行态推导；不存在全局 Agent 定义列表。 |
 | `ChatMessage` | `/api/projects/:projectId/state` 的 `state.messages[]` | 需要兼容 system/user/agent 消息。 |
 | `ProcessStep` | `state.workflowEvents[]` | App adapter 按 event type 归纳。 |
 | `Artifact` | `state.artifacts[]` | 类型映射为 preview/diff/review/text。 |
@@ -1015,7 +1082,7 @@ GET /api/mobile/agents?projectId=proj-xxx
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| `projectId` | `string` | 可选 | 无 | 指定项目时返回项目级 Agent 及运行态；不传时返回全局 Agent 聚合。 |
+| `projectId` | `string` | 必填 | 无 | 指定项目时返回项目级 Agent 及运行态；不支持不传项目后返回全局 Agent 聚合。 |
 
 建议返回：
 
@@ -1059,7 +1126,7 @@ GET /api/mobile/agents?projectId=proj-xxx
 
 解决问题：
 
-- `/api/agents` 是定义列表，不包含 App 需要的 `idle/running/reviewing` 聚合状态。
+- `/api/agents` 当前是兼容错误路由，不提供定义列表，也不包含 App 需要的 `idle/running/reviewing` 聚合状态。
 - App Agent 页不用自己遍历多个 project state。
 
 优先级：P1。

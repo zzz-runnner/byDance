@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, Braces, LayoutDashboard, LoaderCircle, PlugZap, RefreshCcw, ServerCrash, Wifi } from 'lucide-react'
+import { Braces, LayoutDashboard, LoaderCircle, PlugZap, RefreshCcw, ServerCrash, Wifi } from 'lucide-react'
 import {
   createBusinessProjectAgent,
   createBusinessWorkspace,
   createEmptyWorkbenchState,
   deleteBusinessProjectAgent,
+  fetchBusinessProjectAgents,
   fetchBusinessProjectState,
   fetchBusinessWorkbenchOverview,
   pinBusinessProjectMessage,
@@ -31,6 +32,7 @@ import { StatusPill } from './components/StatusPill'
 import { WorkspaceRail } from './components/WorkspaceRail'
 import type {
   AppState,
+  AgentDefinition,
   CodeWorkspaceDialogRequest,
   CodeSelectionReference,
   ConnectionStatus,
@@ -53,6 +55,7 @@ const WORKSPACE_PAGE_STEP = 20
 const WORKSPACE_QUERY_DEBOUNCE_MS = 250
 const INITIAL_MESSAGE_PAGE_LIMIT = 40
 const MESSAGE_PAGE_STEP = 40
+const DIRECT_CHAT_AGENT_IDS = new Set(['claude-code-direct', 'codex-direct'])
 
 /**
  * Detects whether one temporary draft has already been persisted in the backend state.
@@ -316,6 +319,9 @@ export function App() {
   const [createWorkspaceError, setCreateWorkspaceError] = useState('')
   const [agentMutationSaving, setAgentMutationSaving] = useState(false)
   const [agentMutationError, setAgentMutationError] = useState('')
+  const [dialogAgents, setDialogAgents] = useState<AgentDefinition[]>([])
+  const [dialogAgentsProjectId, setDialogAgentsProjectId] = useState('')
+  const [loadingDialogAgents, setLoadingDialogAgents] = useState(false)
   const [deletingAgentId, setDeletingAgentId] = useState<string>()
   const [metadataUpdatingWorkspaceId, setMetadataUpdatingWorkspaceId] = useState<string>()
   const overviewRequestRef = useRef(0)
@@ -334,6 +340,46 @@ export function App() {
   const activeRoom = rooms.find(room => room.id === activeWorkspaceId) ?? rooms[0]
   const activeProjectId = activeRoom?.workspace.projectId ?? activeRoom?.workspace.id
   const activeConversationId = activeRoom?.conversation.id ?? ''
+  const manageableAgents = useMemo(
+    () => {
+      const hasProjectScopedAgents = dialogAgentsProjectId === activeProjectId && dialogAgents.length > 0
+      const sourceAgents = hasProjectScopedAgents ? dialogAgents : state.agents
+
+      return sourceAgents.filter(agent => {
+        if (!activeRoom) {
+          return false
+        }
+
+        if (hasProjectScopedAgents) {
+          return true
+        }
+
+        if (agent.workspaceId && agent.workspaceId !== activeRoom.workspace.id) {
+          return false
+        }
+
+        if (activeRoom.kind === 'direct') {
+          return DIRECT_CHAT_AGENT_IDS.has(agent.id) &&
+            (agent.conversationId === activeRoom.conversation.id ||
+              activeRoom.participantAgentIds.includes(agent.id))
+        }
+
+        if (DIRECT_CHAT_AGENT_IDS.has(agent.id)) {
+          return false
+        }
+
+        if (agent.source === 'built-in') {
+          return !agent.conversationId || agent.conversationId === activeRoom.conversation.id
+        }
+
+        if (agent.conversationId && agent.conversationId !== activeRoom.conversation.id) {
+          return false
+        }
+        return true
+      })
+    },
+    [activeProjectId, activeRoom, dialogAgents, dialogAgentsProjectId, state.agents],
+  )
   const committedConversationMessages = messagesForConversation(state, activeConversationId)
   const currentMessages = [
     ...committedConversationMessages,
@@ -598,6 +644,8 @@ export function App() {
   useEffect(() => {
     setPendingReplyTo(undefined)
     setPendingCodeSelection(undefined)
+    setDialogAgents([])
+    setDialogAgentsProjectId('')
   }, [activeConversationId])
 
   useEffect(() => {
@@ -948,14 +996,50 @@ export function App() {
     }
   }
 
+  async function loadProjectAgentsForDialog(projectId = activeProjectId): Promise<AgentDefinition[]> {
+    if (!projectId) {
+      setDialogAgents([])
+      setDialogAgentsProjectId('')
+      return []
+    }
+
+    setLoadingDialogAgents(true)
+    try {
+      const agents = await fetchBusinessProjectAgents(projectId)
+      setDialogAgents(agents)
+      setDialogAgentsProjectId(projectId)
+      setAgentMutationError('')
+      return agents
+    } catch (error) {
+      setAgentMutationError(errorMessageOf(error))
+      return []
+    } finally {
+      setLoadingDialogAgents(false)
+    }
+  }
+
+  function handleOpenAgentManagement() {
+    if (!activeProjectId) {
+      return
+    }
+    setAgentMutationError('')
+    setAgentDialogOpen(true)
+    void loadProjectAgentsForDialog(activeProjectId)
+  }
+
   async function handleCreateAgent(input: CreateBusinessAgentInput) {
     if (!activeProjectId) {
+      return undefined
+    }
+    if (activeRoom?.kind !== 'group') {
+      setAgentMutationError('只有群聊工作区可以添加自定义子 Agent。')
       return undefined
     }
     setAgentMutationError('')
     setAgentMutationSaving(true)
     try {
       const agent = await createBusinessProjectAgent(activeProjectId, input)
+      await loadProjectAgentsForDialog(activeProjectId)
       await reloadWorkbench(activeWorkspaceId, 'refresh')
       return agent
     } catch (error) {
@@ -974,6 +1058,7 @@ export function App() {
     setAgentMutationSaving(true)
     try {
       const agent = await updateBusinessProjectAgent(activeProjectId, agentId, input)
+      await loadProjectAgentsForDialog(activeProjectId)
       await reloadWorkbench(activeWorkspaceId, 'refresh')
       return agent
     } catch (error) {
@@ -992,6 +1077,7 @@ export function App() {
     setDeletingAgentId(agentId)
     try {
       await deleteBusinessProjectAgent(activeProjectId, agentId)
+      await loadProjectAgentsForDialog(activeProjectId)
       await reloadWorkbench(activeWorkspaceId, 'refresh')
     } catch (error) {
       setAgentMutationError(errorMessageOf(error))
@@ -1158,18 +1244,6 @@ export function App() {
               {state.agents.length || overview.agents.length} Agents
             </GlassPanel>
             <button
-              className="secondary-button topbar-agent-button"
-              type="button"
-              onClick={() => {
-                setAgentMutationError('')
-                setAgentDialogOpen(true)
-              }}
-              disabled={loadingState || creatingWorkspace}
-            >
-              <Bot size={15} />
-              Agents
-            </button>
-            <button
               className="secondary-button topbar-code-button"
               type="button"
               onClick={() => handleOpenCodeDialog()}
@@ -1253,6 +1327,7 @@ export function App() {
               onCancelCodeSelection={() => setPendingCodeSelection(undefined)}
               onCopyMessage={content => void handleCopyMessage(content)}
               onToggleMessagePin={(messageId, pinned) => void handleToggleMessagePin(messageId, pinned)}
+              onOpenAgentManagement={handleOpenAgentManagement}
               onOpenCodeDialog={request => handleOpenCodeDialog(request)}
               onSend={handleSend}
             />
@@ -1262,7 +1337,6 @@ export function App() {
 
       <CreateWorkspaceDialog
         open={createDialogOpen}
-        agents={(overview.agents.length > 0 ? overview.agents : state.agents).filter(agent => agent.source === 'built-in')}
         submitting={creatingWorkspace}
         errorMessage={createWorkspaceError}
         sourceTargetLabel={connectionTargetLabel}
@@ -1275,8 +1349,9 @@ export function App() {
       />
       <AgentManagementDialog
         open={agentDialogOpen}
-        agents={state.agents}
-        saving={agentMutationSaving}
+        agents={manageableAgents}
+        roomKind={activeRoom?.kind}
+        saving={agentMutationSaving || loadingDialogAgents}
         deletingAgentId={deletingAgentId}
         errorMessage={agentMutationError}
         onClose={() => {

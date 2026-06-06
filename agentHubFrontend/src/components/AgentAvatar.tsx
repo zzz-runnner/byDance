@@ -17,12 +17,16 @@ const agentAvatarCache = new Map<string, string>()
 const BUILTIN_AGENT_AVATAR_SRC: Record<string, string> = {
   orchestrator: projectManagerAvatarSrc,
   engineer: engineerAvatarSrc,
+  'claude-code-direct': projectManagerAvatarSrc,
+  'codex-direct': engineerAvatarSrc,
   'product-manager': productManagerAvatarSrc,
   reviewer: reviewerAvatarSrc,
 }
 
 const AGENT_AVATAR_BACKGROUNDS: Record<string, string[]> = {
   engineer: ['dbeafe', 'bfdbfe'],
+  'claude-code-direct': ['dbeafe', 'ddd6fe'],
+  'codex-direct': ['dbeafe', 'bfdbfe'],
   reviewer: ['dcfce7', 'bbf7d0'],
   'product-manager': ['fef3c7', 'fed7aa'],
 }

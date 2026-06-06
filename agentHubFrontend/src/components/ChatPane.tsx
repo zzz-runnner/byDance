@@ -17,6 +17,7 @@ import {
   Pin,
   RefreshCcw,
   ShieldCheck,
+  SlidersHorizontal,
   TerminalSquare,
   X,
 } from 'lucide-react'
@@ -81,6 +82,7 @@ type ChatPaneProps = {
   onCancelCodeSelection: () => void
   onCopyMessage: (content: string) => void
   onToggleMessagePin: (messageId: string, pinned: boolean) => void
+  onOpenAgentManagement?: () => void
   onOpenCodeDialog?: (request?: CodeWorkspaceDialogRequest) => void
   onSend: (content: string, replyTo?: ReplyReference, codeSelection?: CodeSelectionReference) => void
 }
@@ -460,6 +462,7 @@ export function ChatPane({
   onCancelCodeSelection,
   onCopyMessage,
   onToggleMessagePin,
+  onOpenAgentManagement,
   onOpenCodeDialog,
   onSend,
 }: ChatPaneProps) {
@@ -752,6 +755,17 @@ export function ChatPane({
             status={headerStatus}
             label={headerStatusLabel}
           />
+          {room?.kind === 'group' ? (
+            <button
+              className="secondary-button chat-agent-button"
+              type="button"
+              onClick={onOpenAgentManagement}
+              disabled={sending || !room || composerDisabled || !onOpenAgentManagement}
+            >
+              <SlidersHorizontal size={15} />
+              Agents
+            </button>
+          ) : null}
           <button
             className="icon-button"
             type="button"
