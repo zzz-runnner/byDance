@@ -280,6 +280,35 @@ function createCustomAgent(
 }
 
 /**
+ * Normalizes one agent display name for workspace-local uniqueness checks.
+ * Input: raw agent name text. Output: trimmed lowercase key.
+ */
+function normalizeWorkspaceAgentName(name: string): string {
+  return name.trim().toLocaleLowerCase()
+}
+
+/**
+ * Returns whether a workspace already has one visible agent with the same display name.
+ * Input: current state, workspace id, target name, and optional excluded agent id.
+ * Output: true when another workspace agent already uses that normalized name.
+ */
+function hasWorkspaceAgentNameConflict(
+  state: AppState,
+  workspaceId: string,
+  name: string,
+  excludedAgentId?: string,
+): boolean {
+  const normalizedTarget = normalizeWorkspaceAgentName(name)
+  if (!normalizedTarget) {
+    return false
+  }
+
+  return resolveWorkspaceAgents(state, workspaceId).some(agent =>
+    agent.id !== excludedAgentId && normalizeWorkspaceAgentName(agent.name) === normalizedTarget,
+  )
+}
+
+/**
  * Returns whether one participant list represents one allowed direct-chat target.
  * Input: current state and participants. Output: true when exactly one dedicated built-in direct agent is selected.
  */
@@ -343,6 +372,10 @@ function updateWorkspaceAgentDefinition(
     id: currentAgent.id,
     name: currentAgent.name,
   }
+  const nextName = input.name?.trim()
+  if (nextName && hasWorkspaceAgentNameConflict(state, workspaceId, nextName, agentId)) {
+    throw new Error(`Agent name already exists in workspace: ${nextName}`)
+  }
 
   if (currentAgent.source === 'built-in') {
     const agent = state.agents.find(candidate =>
@@ -396,6 +429,14 @@ function writeSseError(response: NodeJS.WritableStream, error: unknown): void {
   const safeError = error instanceof Error ? error.message : String(error)
   response.write('event: error\n')
   response.write(`data: ${JSON.stringify({ error: safeError })}\n\n`)
+}
+
+/**
+ * Writes one SSE heartbeat comment frame to keep long-lived connections active.
+ * Input: raw HTTP response. Output: bytes written to the response.
+ */
+function writeSseHeartbeat(response: NodeJS.WritableStream): void {
+  response.write(': keepalive\n\n')
 }
 
 /**
@@ -867,6 +908,11 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
       reply.status(400)
       return reply.send({ error: `Agent already exists: ${requestedId}` })
     }
+    const requestedName = input.name.trim()
+    if (hasWorkspaceAgentNameConflict(currentState, params.workspaceId, requestedName)) {
+      reply.status(400)
+      return reply.send({ error: `Agent name already exists in workspace: ${requestedName}` })
+    }
     const created = await services.store.update(state => {
       const agent = createCustomAgent(input, params.workspaceId, groupConversation.id)
       if (state.agents.some(item =>
@@ -875,6 +921,9 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
         item.conversationId === groupConversation.id,
       )) {
         throw new Error(`Agent already exists: ${agent.id}`)
+      }
+      if (hasWorkspaceAgentNameConflict(state, params.workspaceId, agent.name)) {
+        throw new Error(`Agent name already exists in workspace: ${agent.name}`)
       }
       state.agents.push(agent)
       syncWorkspaceGroupParticipants(state, params.workspaceId, agent.updatedAt)
@@ -965,6 +1014,7 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     })
+    const heartbeat = setInterval(() => writeSseHeartbeat(reply.raw), 15_000)
 
     try {
       await handleUserMessage(input, {
@@ -974,6 +1024,7 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
     } catch (error) {
       writeSseError(reply.raw, error)
     } finally {
+      clearInterval(heartbeat)
       reply.raw.end()
     }
   })

@@ -703,6 +703,9 @@ export class ProjectsService {
     const decoder = new TextDecoder()
     let buffer = ''
     const workflowEvents: Record<string, unknown>[] = []
+    const heartbeat = setInterval(() => {
+      response.write(': keepalive\n\n')
+    }, 15_000)
 
     try {
       while (true) {
@@ -718,6 +721,7 @@ export class ProjectsService {
         workflowEvents.push(...parsed.events)
       }
     } finally {
+      clearInterval(heartbeat)
       response.end()
     }
 
