@@ -214,6 +214,15 @@ export class ProjectMetadataStore implements OnModuleInit, OnModuleDestroy {
     await fs.writeJson(this.storage.projectMetadataPath(project.projectId), project, { spaces: 2 })
   }
 
+  async deleteProject(projectId: string): Promise<void> {
+    if (this.mode === 'postgres') {
+      await this.getPool().query('delete from business_projects where project_id = $1', [projectId])
+      return
+    }
+
+    await fs.remove(this.storage.projectDir(projectId))
+  }
+
   private getPool(): Pool {
     if (!this.pool) {
       throw new Error('PostgreSQL pool has not been initialized')

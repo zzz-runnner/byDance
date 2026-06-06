@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, LoaderCircle, MessagesSquare, Pin, PinOff, Plus, RadioTower, Search, UserRound } from 'lucide-react'
+import { Archive, ArchiveRestore, LoaderCircle, MessagesSquare, Pin, PinOff, Plus, RadioTower, Search, Trash2, UserRound } from 'lucide-react'
 import { workspaceRoomKindLabel } from '../appModel'
 import type { SortDirection, WorkspaceListStatus, WorkspaceRoom, WorkspaceSortField } from '../types'
 import { AgentAvatar } from './AgentAvatar'
@@ -26,6 +26,7 @@ type WorkspaceRailProps = {
   onSortDirectionChange: (value: SortDirection) => void
   onTogglePin: (room: WorkspaceRoom) => void
   onToggleArchive: (room: WorkspaceRoom) => void
+  onDeleteWorkspace: (room: WorkspaceRoom) => void
   onLoadMore: () => void
   onCreateWorkspace: () => void
 }
@@ -56,6 +57,7 @@ export function WorkspaceRail({
   onSortDirectionChange,
   onTogglePin,
   onToggleArchive,
+  onDeleteWorkspace,
   onLoadMore,
   onCreateWorkspace,
 }: WorkspaceRailProps) {
@@ -129,6 +131,7 @@ export function WorkspaceRail({
               onSelectWorkspace={onSelectWorkspace}
               onTogglePin={onTogglePin}
               onToggleArchive={onToggleArchive}
+              onDeleteWorkspace={onDeleteWorkspace}
             />
           ))
         ) : (
@@ -178,6 +181,7 @@ type WorkspaceButtonProps = {
   onSelectWorkspace: (workspaceId: string) => void
   onTogglePin: (room: WorkspaceRoom) => void
   onToggleArchive: (room: WorkspaceRoom) => void
+  onDeleteWorkspace: (room: WorkspaceRoom) => void
 }
 
 /**
@@ -192,6 +196,7 @@ function WorkspaceButton({
   onSelectWorkspace,
   onTogglePin,
   onToggleArchive,
+  onDeleteWorkspace,
 }: WorkspaceButtonProps) {
   const signal = room.signal
   const status = signal.runningAgents > 0 ? 'running' : room.workspace.runtimeStatus === 'ready' ? 'ready' : 'failed'
@@ -252,6 +257,15 @@ function WorkspaceButton({
           title={archived ? 'Unarchive workspace' : 'Archive workspace'}
         >
           {archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+        </button>
+        <button
+          className="icon-button"
+          type="button"
+          onClick={() => onDeleteWorkspace(room)}
+          disabled={updating}
+          title="Delete workspace"
+        >
+          <Trash2 size={14} />
         </button>
       </div>
     </div>

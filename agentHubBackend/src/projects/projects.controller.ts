@@ -32,6 +32,11 @@ export class ProjectsController {
     return toProjectResponse(await this.projects.getProject(projectId))
   }
 
+  @Delete(':projectId')
+  deleteProject(@Param('projectId') projectId: string) {
+    return this.projects.deleteProject(projectId)
+  }
+
   @Get(':projectId/agents')
   getProjectAgents(@Param('projectId') projectId: string) {
     return this.projects.listProjectAgents(projectId)

@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs'
-import { mkdir, readFile, readdir, stat } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { Workspace } from '@shared/contracts'
 import { LocalToolGateway } from '../tool-gateway'
@@ -604,6 +604,22 @@ export class WorkspaceRuntimeManager {
    */
   repoPathFor(workspaceId: string): string {
     return path.join(this.rootPath, workspaceId, 'repo')
+  }
+
+  /**
+   * Returns the absolute runtime folder path for a workspace id.
+   * Input: workspace id. Output: absolute local runtime path.
+   */
+  workspacePathFor(workspaceId: string): string {
+    return path.join(this.rootPath, workspaceId)
+  }
+
+  /**
+   * Removes one workspace runtime directory tree from disk.
+   * Input: workspace id. Output: promise resolved after local files are gone.
+   */
+  async deleteWorkspace(workspaceId: string): Promise<void> {
+    await rm(this.workspacePathFor(workspaceId), { recursive: true, force: true })
   }
 
   /**

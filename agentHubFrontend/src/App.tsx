@@ -4,6 +4,7 @@ import {
   createBusinessProjectAgent,
   createBusinessWorkspace,
   createEmptyWorkbenchState,
+  deleteBusinessWorkspace,
   deleteBusinessProjectAgent,
   fetchBusinessProjectAgents,
   fetchBusinessProjectState,
@@ -25,6 +26,7 @@ import backgroundImage from './asset/background/newBG.png'
 import { ChatPane } from './components/ChatPane'
 import { AgentManagementDialog } from './components/AgentManagementDialog'
 import { CodeWorkspaceDialog } from './components/CodeWorkspaceDialog'
+import { ConfirmDialog } from './components/ConfirmDialog'
 import { CreateWorkspaceDialog, type CreateWorkspaceInput } from './components/CreateWorkspaceDialog'
 import { GlassPanel } from './components/GlassPanel'
 import { OrbMark } from './components/OrbMark'
@@ -324,6 +326,7 @@ export function App() {
   const [loadingDialogAgents, setLoadingDialogAgents] = useState(false)
   const [deletingAgentId, setDeletingAgentId] = useState<string>()
   const [metadataUpdatingWorkspaceId, setMetadataUpdatingWorkspaceId] = useState<string>()
+  const [workspacePendingDeletion, setWorkspacePendingDeletion] = useState<WorkspaceRoom>()
   const overviewRequestRef = useRef(0)
   const detailRequestRef = useRef(0)
   const codeDialogRequestRef = useRef(0)
@@ -996,6 +999,40 @@ export function App() {
     }
   }
 
+  function handleRequestDeleteWorkspace(room: WorkspaceRoom) {
+    setWorkspacePendingDeletion(room)
+  }
+
+  async function handleDeleteWorkspace() {
+    const room = workspacePendingDeletion
+    if (!room) {
+      return
+    }
+    const projectId = room.workspace.projectId ?? room.workspace.id
+
+    const remainingRoomId = overview.rooms.find(candidate => candidate.id !== room.id)?.id ?? ''
+    setMetadataUpdatingWorkspaceId(room.id)
+    try {
+      await deleteBusinessWorkspace(projectId)
+      if (room.id === activeWorkspaceId) {
+        setLiveWorkflowEvents([])
+        setOptimisticMessages([])
+        setStreamingMessages({})
+        setPendingReplyTo(undefined)
+        setPendingCodeSelection(undefined)
+        setDialogAgents([])
+        setDialogAgentsProjectId('')
+      }
+      setWorkspacePendingDeletion(undefined)
+      await reloadWorkbench(room.id === activeWorkspaceId ? remainingRoomId : activeWorkspaceId, 'refresh')
+    } catch (error) {
+      setConnectionStatus('error')
+      setConnectionErrorMessage(errorMessageOf(error))
+    } finally {
+      setMetadataUpdatingWorkspaceId(undefined)
+    }
+  }
+
   async function loadProjectAgentsForDialog(projectId = activeProjectId): Promise<AgentDefinition[]> {
     if (!projectId) {
       setDialogAgents([])
@@ -1302,6 +1339,7 @@ export function App() {
               onSortDirectionChange={setWorkspaceSortDirection}
               onTogglePin={room => void handleToggleWorkspacePin(room)}
               onToggleArchive={room => void handleToggleWorkspaceArchive(room)}
+              onDeleteWorkspace={room => handleRequestDeleteWorkspace(room)}
               onLoadMore={() => void handleLoadMoreWorkspaces()}
               onCreateWorkspace={() => setCreateDialogOpen(true)}
             />
@@ -1362,6 +1400,21 @@ export function App() {
         onCreate={handleCreateAgent}
         onUpdate={handleUpdateAgent}
         onDelete={handleDeleteAgent}
+      />
+      <ConfirmDialog
+        open={Boolean(workspacePendingDeletion)}
+        busy={Boolean(workspacePendingDeletion && metadataUpdatingWorkspaceId === workspacePendingDeletion.id)}
+        title={workspacePendingDeletion ? `删除 ${workspacePendingDeletion.title}` : '删除工作区'}
+        description="这会删除当前项目记录、本地产物，并在该 workspace 没有其他业务绑定时彻底删除对应的 AgentHub Runtime 工作区。"
+        confirmLabel="删除工作区"
+        cancelLabel="取消"
+        tone="danger"
+        onCancel={() => {
+          if (!metadataUpdatingWorkspaceId) {
+            setWorkspacePendingDeletion(undefined)
+          }
+        }}
+        onConfirm={() => void handleDeleteWorkspace()}
       />
       <CodeWorkspaceDialog
         open={codeDialogOpen}

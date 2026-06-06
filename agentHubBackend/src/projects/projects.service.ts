@@ -156,6 +156,30 @@ export class ProjectsService {
     return runtimeProject
   }
 
+  async deleteProject(projectId: string): Promise<{ deleted: boolean; projectId: string; workspaceId: string }> {
+    const project = await this.getProject(projectId)
+    const allProjects = await this.projectStore.listProjects()
+    const workspaceStillReferenced = allProjects.some(candidate =>
+      candidate.projectId !== project.projectId && candidate.workspaceId === project.workspaceId,
+    )
+
+    await this.projectStore.deleteProject(project.projectId)
+    await Promise.all([
+      fs.remove(this.storage.sourceArtifactsRootForProject(project.projectId)).catch(() => undefined),
+      fs.remove(this.storage.buildArtifactsRootForProject(project.projectId)).catch(() => undefined),
+      fs.remove(this.storage.deployProjectRoot(project.projectId)).catch(() => undefined),
+      !workspaceStillReferenced
+        ? this.agentHub.deleteWorkspace(project.workspaceId).catch(() => undefined)
+        : Promise.resolve(),
+    ])
+
+    return {
+      deleted: true,
+      projectId: project.projectId,
+      workspaceId: project.workspaceId,
+    }
+  }
+
   /**
    * Loads the lightweight workbench page used by the left workspace list.
    * Input: page size, optional cursor, and optional query string.
