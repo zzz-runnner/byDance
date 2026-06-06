@@ -6,6 +6,8 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Modal,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Platform,
   Pressable,
   ScrollView,
@@ -137,7 +139,11 @@ type FailedChatSend = {
 const PROCESS_PREVIEW_STEP_COUNT = 3
 const STREAM_WORKFLOW_EVENT_NAME_SET = new Set<string>(PROJECT_WORKFLOW_STREAM_EVENT_NAMES)
 const IOS_KEYBOARD_COMPOSER_GAP = 8
+const ANDROID_KEYBOARD_COMPOSER_GAP = 10
 const CHAT_COMPOSER_VERTICAL_PADDING = 6
+const CHAT_COMPOSER_INPUT_MIN_HEIGHT = 40
+const CHAT_COMPOSER_INPUT_MAX_HEIGHT = 92
+const CHAT_SCROLL_TO_BOTTOM_THRESHOLD = 140
 
 const tabs: { key: TabKey; label: string; icon: IconName }[] = [
   { key: 'workbench', label: '工作台', icon: 'view-dashboard-outline' },
@@ -175,6 +181,13 @@ function formatMessageTime(value?: string): string {
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
+function formatChatMessageTime(value?: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
 function compactText(value?: string, fallback = '暂无内容'): string {
   const text = value?.replace(/\s+/g, ' ').trim()
   if (!text) return fallback
@@ -196,6 +209,8 @@ function mapWorkbenchRoomToWorkspace(room: WorkbenchRoom): Workspace {
   return {
     id: projectId || room.workspace.id || room.id,
     projectId,
+    runtimeWorkspaceId: room.workspace.id,
+    conversationId: room.conversationId ?? room.id,
     name: room.workspace.name || room.title || '未命名工作区',
     goal: room.workspace.goal || room.subtitle || '暂无目标描述',
     kind: room.kind,
@@ -218,7 +233,7 @@ function mapProjectMessageToChatMessage(message: ProjectMessage): ChatMessageVie
     sender: message.senderType === 'user' ? 'user' : 'agent',
     agentId: message.senderType === 'user' ? undefined : message.senderId ?? 'orchestrator',
     text: message.content ?? '',
-    time: formatMessageTime(message.createdAt),
+    time: formatChatMessageTime(message.createdAt),
     createdAt: message.createdAt,
     turnId: message.turnId,
   }
@@ -250,15 +265,51 @@ function findProjectAgent(agentList: ProjectAgent[], agentId?: string): ProjectA
   return agentList.find(agent => agent.id === agentId)
 }
 
-function getVisibleChatAgents(workspace: Workspace, agentList: ProjectAgent[]): ProjectAgent[] {
+function isNonEmptyString(value?: string): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function getProjectAgentInstanceKey(agent: ProjectAgent, index?: number): string {
+  const scopedKey = [agent.workspaceId, agent.conversationId, agent.id].filter(isNonEmptyString).join(':')
+  const stableKey = (agent.rowId ?? agent.row_id ?? scopedKey) || agent.id
+  return index === undefined ? stableKey : `${stableKey}-${index}`
+}
+
+function getUniqueProjectAgents(agentList: ProjectAgent[]): ProjectAgent[] {
+  const seen = new Set<string>()
+
+  return agentList.filter(agent => {
+    const key = getProjectAgentInstanceKey(agent)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function projectAgentMatchesWorkspace(agent: ProjectAgent, workspace: Workspace, conversationId?: string): boolean {
+  const workspaceIds = new Set([workspace.runtimeWorkspaceId, workspace.id, workspace.projectId].filter(isNonEmptyString))
+  const conversationIds = new Set([conversationId, workspace.conversationId].filter(isNonEmptyString))
+
+  if (agent.workspaceId && workspaceIds.has(agent.workspaceId)) return true
+  if (agent.conversationId && conversationIds.has(agent.conversationId)) return true
+
+  return false
+}
+
+function getVisibleChatAgents(workspace: Workspace, agentList: ProjectAgent[], conversationId?: string): ProjectAgent[] {
   if (agentList.length === 0) {
-    return workspace.agents.map(id => ({ id }))
+    return getUniqueProjectAgents(workspace.agents.map(id => ({ id })))
+  }
+
+  const scopedAgents = agentList.filter(agent => projectAgentMatchesWorkspace(agent, workspace, conversationId))
+  if (scopedAgents.length > 0) {
+    return getUniqueProjectAgents(scopedAgents)
   }
 
   const participantIds = new Set(workspace.agents)
   const matchingAgents = agentList.filter(agent => participantIds.size === 0 || participantIds.has(agent.id))
 
-  return matchingAgents.length > 0 ? matchingAgents : agentList
+  return getUniqueProjectAgents(matchingAgents.length > 0 ? matchingAgents : agentList)
 }
 
 function getAgentMentionHandle(agent: ProjectAgent): string {
@@ -575,7 +626,7 @@ function upsertStreamingAssistantMessage(messages: ChatMessageView[], input: { m
     sender: 'agent',
     agentId: input.agentId ?? previous?.agentId ?? 'orchestrator',
     text: `${previous?.text ?? ''}${input.delta ?? ''}`,
-    time: previous?.time ?? formatMessageTime(input.createdAt),
+    time: previous?.time ?? formatChatMessageTime(input.createdAt),
     createdAt: previous?.createdAt ?? input.createdAt,
     turnId: input.turnId ?? previous?.turnId,
   }
@@ -587,19 +638,22 @@ function upsertStreamingAssistantMessage(messages: ChatMessageView[], input: { m
   return [...messages, nextMessage]
 }
 
-function useIosKeyboardBottomSpacing(bottomInset: number): number {
+function useKeyboardBottomSpacing(bottomInset: number): number {
   const [keyboardSpacing, setKeyboardSpacing] = useState(0)
 
   useEffect(() => {
-    if (Platform.OS !== 'ios') {
+    if (Platform.OS !== 'ios' && Platform.OS !== 'android') {
       setKeyboardSpacing(0)
       return
     }
 
-    const keyboardFrameSubscription = Keyboard.addListener('keyboardWillChangeFrame', event => {
-      setKeyboardSpacing(Math.max(0, event.endCoordinates.height - bottomInset + IOS_KEYBOARD_COMPOSER_GAP))
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow'
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide'
+    const composerGap = Platform.OS === 'ios' ? IOS_KEYBOARD_COMPOSER_GAP : ANDROID_KEYBOARD_COMPOSER_GAP
+    const keyboardFrameSubscription = Keyboard.addListener(showEvent, event => {
+      setKeyboardSpacing(Math.max(0, event.endCoordinates.height - bottomInset + composerGap))
     })
-    const keyboardHideSubscription = Keyboard.addListener('keyboardWillHide', () => {
+    const keyboardHideSubscription = Keyboard.addListener(hideEvent, () => {
       setKeyboardSpacing(0)
     })
 
@@ -757,7 +811,6 @@ export default function App() {
     return Array.from(byId.values())
   }, [pinnedWorkspaceList, workspaceList])
   const activeWorkspace = knownWorkspaceList.find(workspace => workspace.id === activeWorkspaceId) ?? knownWorkspaceList[0] ?? workspaces[0]
-  const runningAgents = workspaceList.reduce((sum, item) => sum + item.runningAgents, 0)
   const title = useMemo(() => {
     if (activeTab === 'workbench') return '工作台'
     if (activeTab === 'chat') return '对话'
@@ -1147,7 +1200,6 @@ export default function App() {
                   page={workbenchPage}
                   loading={workbenchLoading}
                   loadingMore={loadingMoreWorkspaces}
-                  runningAgents={runningAgents}
                   agentList={workbenchAgentList}
                   workspace={activeWorkspace}
                   query={workspaceQuery}
@@ -1453,7 +1505,6 @@ function WorkbenchScreen({
   page,
   loading,
   loadingMore,
-  runningAgents,
   agentList,
   workspace,
   query,
@@ -1476,7 +1527,6 @@ function WorkbenchScreen({
   page: WorkbenchPageState
   loading: boolean
   loadingMore: boolean
-  runningAgents: number
   agentList: ProjectAgent[]
   workspace: Workspace
   query: string
@@ -1503,12 +1553,8 @@ function WorkbenchScreen({
   const pinnedOverflowCount = Math.max(0, pinnedWorkspaceList.length - 5)
   const visiblePinnedWorkspaces = pinnedExpanded ? pinnedWorkspaces : pinnedWorkspaces.slice(0, 2)
   const nonPinnedWorkspaces = workspaceList.filter(item => !item.pinned)
-  const focusedWorkspaces =
-    focus === 'running'
-      ? nonPinnedWorkspaces.filter(item => item.status === 'running')
-      : focus === 'artifacts'
-        ? nonPinnedWorkspaces.filter(item => item.artifactCount > 0)
-        : nonPinnedWorkspaces
+  const runningAgents = workspaceList.reduce((sum, item) => sum + item.runningAgents, 0)
+  const focusedWorkspaces = nonPinnedWorkspaces
   const focusTitle = focus === 'workspaces' ? '置顶工作区' : focus === 'running' ? '进行中的项目' : '产物相关项目'
   const listTitle =
     focus === 'running'
@@ -1565,7 +1611,7 @@ function WorkbenchScreen({
         </View>
         <View style={styles.homeAvatarRow}>
           {activeWorkspaceAgents.slice(0, 4).map((agent, index) => (
-            <View key={agent.id} style={{ marginLeft: index === 0 ? 0 : -10 }}>
+            <View key={getProjectAgentInstanceKey(agent, index)} style={{ marginLeft: index === 0 ? 0 : -10 }}>
               <AgentGlyph agentId={agent.id} label={agent.name} provider={agent.modelProvider} color={getProjectAgentColor(agent)} size={mobileScale.workspaceAgentAvatar} />
             </View>
           ))}
@@ -1578,28 +1624,18 @@ function WorkbenchScreen({
         </GlassCard>
       </Pressable>
 
-      <View style={styles.homeStatGrid}>
-        <Pressable
-          style={styles.statPressable}
-          onPress={() => {
-            setFocus('workspaces')
-          }}
-        >
-          <StatCard label="工作区" value={String(workspaceList.length)} icon="view-grid-outline" tone="#2563eb" active={focus === 'workspaces'} />
-        </Pressable>
-        <Pressable
-          style={styles.statPressable}
-          onPress={() => {
-            setFocus('running')
-            onStatusFilterChange('active')
-          }}
-        >
-          <StatCard label="运行中" value={String(runningAgents)} icon="lightning-bolt-outline" tone="#db2777" active={focus === 'running'} />
-        </Pressable>
-        <View style={styles.statPressable}>
-          <StatCard label="产物" value={String(artifacts.length)} icon="package-variant-closed" tone="#059669" />
+      <Pressable
+        style={[styles.workspaceSummaryRow, focus === 'workspaces' && styles.workspaceSummaryRowActive]}
+        onPress={() => {
+          setFocus('workspaces')
+        }}
+      >
+        <View style={styles.workspaceSummaryIcon}>
+          <MaterialCommunityIcons name="view-grid-outline" size={21} color="#2563eb" />
         </View>
-      </View>
+        <Text style={styles.workspaceSummaryTitle}>工作区</Text>
+        <Text style={styles.workspaceSummaryCount}>{workspaceList.length}</Text>
+      </Pressable>
 
       <GlassCard style={styles.searchCard}>
         <MaterialCommunityIcons name="magnify" size={24} color="#64748b" />
@@ -1783,22 +1819,26 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
   const isStandard = layoutTier === 'standard'
   const isWide = layoutTier === 'wide'
   const insets = useSafeAreaInsets()
-  const keyboardBottomSpacing = useIosKeyboardBottomSpacing(insets.bottom)
+  const keyboardBottomSpacing = useKeyboardBottomSpacing(insets.bottom)
   const keyboardOffset = 0
   const composerBottomSpacing = Platform.OS === 'ios' ? keyboardBottomSpacing : 0
-  const composerSafePadding = Platform.OS === 'ios' ? Math.max(insets.bottom, 10) : 0
+  const composerSafePadding = Platform.OS === 'ios' ? Math.max(insets.bottom, 10) : Platform.OS === 'android' ? Math.max(insets.bottom, 8) : 0
   const projectId = workspace.projectId ?? workspace.id
   const [chatState, setChatState] = useState<ChatStateView>(() => createEmptyChatState())
   const [draftMessage, setDraftMessage] = useState('')
+  const [composerInputHeight, setComposerInputHeight] = useState(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
+  const scrollToBottomButtonBottom = composerSafePadding + Math.max(56, composerInputHeight + CHAT_COMPOSER_VERTICAL_PADDING * 2) + 12
   const [chatLoading, setChatLoading] = useState(false)
   const [chatError, setChatError] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [expandedProcessIds, setExpandedProcessIds] = useState<Set<string>>(() => new Set())
   const [draftSelection, setDraftSelection] = useState({ start: 0, end: 0 })
   const [selectedMentionAgentId, setSelectedMentionAgentId] = useState<string | undefined>()
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const chatScrollRef = useRef<ScrollView | null>(null)
   const streamRef = useRef<ProjectMessageStream | null>(null)
   const lastFailedMessageRef = useRef<FailedChatSend | null>(null)
-  const visibleChatAgents = getVisibleChatAgents(workspace, chatState.agents)
+  const visibleChatAgents = getVisibleChatAgents(workspace, chatState.agents, chatState.conversationId)
   const activeMentionToken = workspace.kind === 'group' ? findActiveMentionToken(draftMessage, draftSelection.start) : null
   const mentionCandidates = useMemo(() => {
     if (workspace.kind !== 'group' || !activeMentionToken) return []
@@ -1806,10 +1846,15 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
       .filter(agent => projectAgentMatchesMentionQuery(agent, activeMentionToken.query))
       .slice(0, 8)
   }, [activeMentionToken?.query, visibleChatAgents, workspace.kind])
-  const showMentionMenu = workspace.kind === 'group' && !streaming && !!activeMentionToken && mentionCandidates.length > 0
+  const composerDisabled = streaming || chatLoading
+  const sendButtonDisabled = !draftMessage.trim() || composerDisabled
+  const showMentionMenu = workspace.kind === 'group' && !composerDisabled && !!activeMentionToken && mentionCandidates.length > 0
 
   function handleDraftMessageChange(nextText: string) {
     setDraftMessage(nextText)
+    if (!nextText) {
+      setComposerInputHeight(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
+    }
     if (selectedMentionAgentId && findMentionedProjectAgentId(nextText, visibleChatAgents) !== selectedMentionAgentId) {
       setSelectedMentionAgentId(undefined)
     }
@@ -1827,6 +1872,18 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
     setDraftMessage(nextMessage)
     setSelectedMentionAgentId(agent.id)
     setDraftSelection({ start: nextCursor, end: nextCursor })
+  }
+
+  function scrollChatToBottom(animated = true) {
+    chatScrollRef.current?.scrollToEnd({ animated })
+    setShowScrollToBottom(false)
+  }
+
+  function handleChatScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent
+    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y
+    const shouldShow = distanceFromBottom > CHAT_SCROLL_TO_BOTTOM_THRESHOLD
+    setShowScrollToBottom(current => (current === shouldShow ? current : shouldShow))
   }
 
   async function loadChatState() {
@@ -1849,8 +1906,10 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
     setChatState(createEmptyChatState())
     setExpandedProcessIds(new Set())
     setDraftMessage('')
+    setComposerInputHeight(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
     setDraftSelection({ start: 0, end: 0 })
     setSelectedMentionAgentId(undefined)
+    setShowScrollToBottom(false)
     lastFailedMessageRef.current = null
     setStreaming(false)
     void loadChatState()
@@ -1939,7 +1998,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
 
   async function sendMessage(retryPayload?: FailedChatSend) {
     const content = (retryPayload?.content ?? draftMessage).trim()
-    if (!content || streaming) return
+    if (!content || composerDisabled) return
     const targetAgentId =
       workspace.kind === 'direct'
         ? workspace.agents[0]
@@ -1950,11 +2009,12 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
       id: `local-${Date.now()}`,
       sender: 'user',
       text: content,
-      time: formatMessageTime(now),
+      time: formatChatMessageTime(now),
       createdAt: now,
     }
     if (!retryPayload) {
       setDraftMessage('')
+      setComposerInputHeight(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
       setDraftSelection({ start: 0, end: 0 })
       setSelectedMentionAgentId(undefined)
     }
@@ -2013,11 +2073,19 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
   const messageCountText = chatState.messagePage ? `第 ${chatState.messagePage.page ?? 1} 页 · ${chatState.messagePage.total} 条消息` : `${chatState.messages.length} 条消息`
 
   return (
-    <KeyboardAvoidingView style={[styles.chatScreen, { paddingBottom: composerBottomSpacing }]} behavior={Platform.OS === 'ios' ? undefined : 'height'} keyboardVerticalOffset={keyboardOffset}>
+    <KeyboardAvoidingView style={[styles.chatScreen, { paddingBottom: composerBottomSpacing }]} keyboardVerticalOffset={keyboardOffset}>
       <ScrollView
+        ref={chatScrollRef}
         style={styles.chatScroll}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        onScroll={handleChatScroll}
+        onContentSizeChange={() => {
+          if (!showScrollToBottom) {
+            requestAnimationFrame(() => scrollChatToBottom(false))
+          }
+        }}
+        scrollEventThrottle={16}
         contentContainerStyle={[
           styles.chatScrollInner,
           isCompact && styles.chatScrollInnerCompact,
@@ -2041,7 +2109,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
           </Pressable>
           <View style={styles.chatAgentOverview}>
             {visibleChatAgents.slice(0, isCompact ? 3 : 4).map((agent, index) => (
-              <View key={agent.id} style={{ marginLeft: index === 0 ? 0 : -8 }}>
+              <View key={getProjectAgentInstanceKey(agent, index)} style={{ marginLeft: index === 0 ? 0 : -8 }}>
                 <AgentGlyph agentId={agent.id} label={agent.name} provider={agent.modelProvider} color={getProjectAgentColor(agent)} size={mobileScale.chatMiniAvatar} />
               </View>
             ))}
@@ -2111,12 +2179,24 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
         ) : null}
       </ScrollView>
 
+      {showScrollToBottom && !showMentionMenu ? (
+        <Pressable
+          accessibilityLabel="回到底部"
+          accessibilityRole="button"
+          hitSlop={8}
+          style={[styles.chatScrollToBottomButton, { bottom: scrollToBottomButtonBottom }]}
+          onPress={() => scrollChatToBottom()}
+        >
+          <MaterialCommunityIcons name="chevron-down" size={24} color="#2563eb" />
+        </Pressable>
+      ) : null}
+
       <View style={[styles.chatComposerDock, { paddingBottom: composerSafePadding }]}>
         {showMentionMenu ? (
           <GlassCard style={styles.mentionAgentMenu}>
             <ScrollView style={styles.mentionAgentList} keyboardShouldPersistTaps="always" nestedScrollEnabled showsVerticalScrollIndicator={mentionCandidates.length > 3}>
-              {mentionCandidates.map(agent => (
-                <Pressable key={agent.id} style={styles.mentionAgentRow} onPress={() => insertMentionAgent(agent)}>
+              {mentionCandidates.map((agent, index) => (
+                <Pressable key={getProjectAgentInstanceKey(agent, index)} style={styles.mentionAgentRow} onPress={() => insertMentionAgent(agent)}>
                   <AgentGlyph agentId={agent.id} label={agent.name} provider={agent.modelProvider} color={getProjectAgentColor(agent)} size={34} />
                   <View style={styles.mentionAgentCopy}>
                     <View style={styles.mentionAgentNameRow}>
@@ -2136,14 +2216,22 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
             placeholderTextColor="#94a3b8"
             value={draftMessage}
             onChangeText={handleDraftMessageChange}
+            onContentSizeChange={event => {
+              const nextHeight = Math.min(
+                CHAT_COMPOSER_INPUT_MAX_HEIGHT,
+                Math.max(CHAT_COMPOSER_INPUT_MIN_HEIGHT, Math.ceil(event.nativeEvent.contentSize.height)),
+              )
+              setComposerInputHeight(nextHeight)
+            }}
             onSelectionChange={event => setDraftSelection(event.nativeEvent.selection)}
-            style={styles.chatComposerInput}
-            editable={!streaming}
+            style={[styles.chatComposerInput, { height: composerInputHeight }]}
+            editable={!composerDisabled}
             multiline
-            scrollEnabled
+            scrollEnabled={composerInputHeight >= CHAT_COMPOSER_INPUT_MAX_HEIGHT}
+            textAlignVertical={composerInputHeight > CHAT_COMPOSER_INPUT_MIN_HEIGHT ? 'top' : 'center'}
           />
-          <Pressable style={[styles.chatSendButton, (!draftMessage.trim() || streaming) && styles.chatSendButtonDisabled]} onPress={() => void sendMessage()} disabled={!draftMessage.trim() || streaming}>
-            <MaterialCommunityIcons name={streaming ? 'progress-clock' : 'arrow-up'} size={25} color="#fff" />
+          <Pressable style={[styles.chatSendButton, sendButtonDisabled && styles.chatSendButtonDisabled]} onPress={() => void sendMessage()} disabled={sendButtonDisabled}>
+            <MaterialCommunityIcons name={composerDisabled ? 'progress-clock' : 'arrow-up'} size={25} color="#fff" />
           </Pressable>
         </GlassCard>
       </View>
@@ -3198,7 +3286,7 @@ function WorkspaceCard({
       </View>
       <View style={styles.workspaceAvatarRow}>
         {workspaceAgents.slice(0, 4).map((agent, index) => (
-          <View key={agent.id} style={{ marginLeft: index === 0 ? 0 : -10 }}>
+          <View key={getProjectAgentInstanceKey(agent, index)} style={{ marginLeft: index === 0 ? 0 : -10 }}>
             <AgentGlyph agentId={agent.id} label={agent.name} provider={agent.modelProvider} color={getProjectAgentColor(agent)} size={mobileScale.workspaceAgentAvatar} />
           </View>
         ))}
@@ -4114,6 +4202,36 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
+  workspaceSummaryRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 4,
+  },
+  workspaceSummaryRowActive: {
+    opacity: 1,
+  },
+  workspaceSummaryIcon: {
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 17,
+    backgroundColor: 'rgba(219,234,254,0.74)',
+  },
+  workspaceSummaryTitle: {
+    flex: 1,
+    minWidth: 0,
+    color: '#172033',
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  workspaceSummaryCount: {
+    color: '#2563eb',
+    fontSize: 20,
+    fontWeight: '900',
+  },
   statPressable: {
     flex: 1,
   },
@@ -4666,9 +4784,28 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 14,
     paddingTop: 4,
+    position: 'relative',
   },
   chatScroll: {
     flex: 1,
+  },
+  chatScrollToBottomButton: {
+    position: 'absolute',
+    right: 18,
+    zIndex: 20,
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(191,219,254,0.9)',
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    shadowColor: '#1e293b',
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 5,
   },
   chatScrollInner: {
     gap: 14,

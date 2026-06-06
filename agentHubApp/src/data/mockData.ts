@@ -16,6 +16,8 @@ export type Agent = {
 export type Workspace = {
   id: string
   projectId?: string
+  runtimeWorkspaceId?: string
+  conversationId?: string
   name: string
   goal: string
   kind: 'group' | 'direct'
