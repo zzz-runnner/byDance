@@ -65,14 +65,55 @@ export type ProjectAgent = {
   role?: string
   description?: string
   whenToUse?: string
+  systemPrompt?: string
   modelProvider?: string
   model?: string
+  contextPolicy?: Record<string, unknown>
+  tools?: string[]
+  permissions?: Record<string, unknown>
+  disallowedTools?: string[]
+  permissionMode?: 'readonly' | 'ask' | 'acceptEdits' | 'dangerous'
+  runtimePolicy?: {
+    workspaceOnly: boolean
+    allowNetwork: boolean
+    allowShell: boolean
+    maxRunSeconds: number
+  }
+  outputSchema?: string
+  isolation?: 'shared' | 'worktree'
   skills?: string[]
-  source?: string
+  routingProfile?: Record<string, unknown>
+  source?: 'built-in' | 'workspace' | 'custom' | string
   workspaceId?: string
   conversationId?: string
   createdAt?: string
   updatedAt?: string
+}
+
+export type UpdateProjectAgentInput = {
+  name?: string
+  role?: string
+  description?: string
+  whenToUse?: string
+  systemPrompt?: string
+  modelProvider?: string
+  model?: string
+  contextPolicy?: ProjectAgent['contextPolicy']
+  tools?: string[]
+  permissions?: ProjectAgent['permissions']
+  disallowedTools?: string[]
+  permissionMode?: ProjectAgent['permissionMode']
+  runtimePolicy?: ProjectAgent['runtimePolicy']
+  outputSchema?: string
+  isolation?: ProjectAgent['isolation']
+  skills?: string[]
+  routingProfile?: ProjectAgent['routingProfile']
+}
+
+export type CreateProjectAgentInput = UpdateProjectAgentInput & {
+  id?: string
+  name: string
+  systemPrompt: string
 }
 
 export type WorkbenchOverview = {
@@ -166,6 +207,7 @@ export type ProjectWorkflowEvent = {
     expectedOutput?: string
     artifactId?: string
     artifactType?: string
+    changeSetId?: string
     title?: string
     previewUrl?: string
     zipUrl?: string
@@ -182,6 +224,14 @@ export type ProjectWorkflowEvent = {
     runId?: string
   }
   createdAt?: string
+}
+
+export type ProjectChangedFile = {
+  path: string
+  status: string
+  additions?: number
+  deletions?: number
+  patch?: string
 }
 
 export const PROJECT_WORKFLOW_STREAM_EVENT_NAMES = [
@@ -228,12 +278,96 @@ export type ProjectStreamEvent = 'assistant_delta' | 'message' | ProjectWorkflow
 
 export type ProjectArtifact = {
   id: string
+  workspaceId?: string
+  agentRunId?: string
   type?: string
   title?: string
   content?: string
   summary?: string
+  url?: string
   createdByAgentId?: string
   createdAt?: string
+  metadata?: Record<string, unknown>
+}
+
+export type ProjectChangeSet = {
+  id: string
+  workspaceId?: string
+  agentRunId?: string
+  summary?: string
+  patch?: string
+  files?: ProjectChangedFile[]
+  createdAt?: string
+}
+
+export type DeliveryAssetStatus = 'idle' | 'ready' | 'failed'
+
+export type ProjectDeliveryAsset = {
+  status: DeliveryAssetStatus
+  summary: string
+  versionId?: string
+  url?: string
+  createdAt?: string
+  updatedAt?: string
+  log?: string
+}
+
+export type ProjectDeliverySummary = {
+  projectId: string
+  currentVersion?: {
+    versionId: string
+    createdAt?: string
+    updatedAt?: string
+  }
+  sourceArchive: ProjectDeliveryAsset
+  build: ProjectDeliveryAsset
+  deployment: ProjectDeliveryAsset
+}
+
+export type ProjectVersionRecord = {
+  versionId: string
+  tag?: string
+  commitSha?: string
+  sourceZipUrl?: string
+  buildPreviewUrl?: string
+  buildStatus?: 'pending' | 'success' | 'failed'
+  buildLog?: string
+  isCurrent?: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type ProjectDeploymentRecord = {
+  deploymentId?: string
+  versionId: string
+  deployUrl: string
+  createdAt?: string
+}
+
+export type ProjectPreviewTarget = {
+  path: string
+  url: string
+  source?: 'runtime' | 'module-shell' | 'build'
+}
+
+export type ProjectPreviewCapability = {
+  mode: 'static' | 'module-shell' | 'build' | 'unsupported'
+  framework: string
+  reason: string
+  sourceHash: string
+  entryPath?: string
+  defaultTargetPath?: string
+  targets: ProjectPreviewTarget[]
+  build?: {
+    status: 'idle' | 'running' | 'success' | 'failed'
+    sourceHash: string
+    buildId?: string
+    summary: string
+    startedAt?: string
+    finishedAt?: string
+    logExcerpt?: string
+    error?: string
+  }
 }
 
 export type ProjectStateEnvelope = {
@@ -243,6 +377,7 @@ export type ProjectStateEnvelope = {
     agents?: ProjectAgent[]
     workflowEvents?: ProjectWorkflowEvent[]
     artifacts?: ProjectArtifact[]
+    changeSets?: ProjectChangeSet[]
   }
   messagePage?: {
     page?: number
@@ -472,6 +607,295 @@ export async function fetchProjectState(projectId: string, input?: ProjectStateI
       error instanceof Error && error.name === 'AbortError'
         ? '加载对话状态超时。'
         : '无法加载对话状态。'
+    throw new BusinessBackendError(message)
+  } finally {
+    timeout.cancel()
+  }
+}
+
+export async function fetchProjectPreviewCapability(projectId: string): Promise<ProjectPreviewCapability> {
+  const timeout = withTimeout(10000)
+
+  try {
+    const response = await fetch(absoluteBackendUrl(`/api/projects/${encodeURIComponent(projectId)}/preview-capability`), {
+      method: 'GET',
+      signal: timeout.signal,
+    })
+    return await readJson<ProjectPreviewCapability>(response, 'Load project preview capability')
+  } catch (error) {
+    if (error instanceof BusinessBackendError) {
+      throw error
+    }
+
+    const message =
+      error instanceof Error && error.name === 'AbortError'
+        ? '加载预览能力超时。'
+        : '无法加载预览能力。'
+    throw new BusinessBackendError(message)
+  } finally {
+    timeout.cancel()
+  }
+}
+
+export async function triggerProjectPreviewBuild(projectId: string, force = false): Promise<ProjectPreviewCapability> {
+  const timeout = withTimeout(10000)
+  const query = force ? '?force=true' : ''
+
+  try {
+    const response = await fetch(absoluteBackendUrl(`/api/projects/${encodeURIComponent(projectId)}/preview-build${query}`), {
+      method: 'POST',
+      signal: timeout.signal,
+    })
+    return await readJson<ProjectPreviewCapability>(response, 'Start project preview build')
+  } catch (error) {
+    if (error instanceof BusinessBackendError) {
+      throw error
+    }
+
+    const message =
+      error instanceof Error && error.name === 'AbortError'
+        ? '启动预览构建超时。'
+        : '无法启动预览构建。'
+    throw new BusinessBackendError(message)
+  } finally {
+    timeout.cancel()
+  }
+}
+
+export async function fetchProjectDeliverySummary(projectId: string): Promise<ProjectDeliverySummary> {
+  const timeout = withTimeout(10000)
+
+  try {
+    const response = await fetch(absoluteBackendUrl(`/api/projects/${encodeURIComponent(projectId)}/delivery`), {
+      method: 'GET',
+      signal: timeout.signal,
+    })
+    return await readJson<ProjectDeliverySummary>(response, 'Load project delivery summary')
+  } catch (error) {
+    if (error instanceof BusinessBackendError) {
+      throw error
+    }
+
+    const message =
+      error instanceof Error && error.name === 'AbortError'
+        ? '加载交付状态超时。'
+        : '无法加载交付状态。'
+    throw new BusinessBackendError(message)
+  } finally {
+    timeout.cancel()
+  }
+}
+
+export async function createProjectVersion(projectId: string, message?: string): Promise<ProjectVersionRecord> {
+  const timeout = withTimeout(20000)
+
+  try {
+    const response = await fetch(absoluteBackendUrl(`/api/projects/${encodeURIComponent(projectId)}/versions`), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(message ? { message } : {}),
+      signal: timeout.signal,
+    })
+    return await readJson<ProjectVersionRecord>(response, 'Create project version')
+  } catch (error) {
+    if (error instanceof BusinessBackendError) {
+      throw error
+    }
+
+    const messageText =
+      error instanceof Error && error.name === 'AbortError'
+        ? '保存源码版本超时。'
+        : '无法保存源码版本。'
+    throw new BusinessBackendError(messageText)
+  } finally {
+    timeout.cancel()
+  }
+}
+
+export async function buildProjectVersion(projectId: string, versionId?: string): Promise<ProjectVersionRecord> {
+  const timeout = withTimeout(60000)
+
+  try {
+    const response = await fetch(absoluteBackendUrl(`/api/projects/${encodeURIComponent(projectId)}/builds`), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(versionId ? { versionId } : {}),
+      signal: timeout.signal,
+    })
+    return await readJson<ProjectVersionRecord>(response, 'Build project version')
+  } catch (error) {
+    if (error instanceof BusinessBackendError) {
+      throw error
+    }
+
+    const message =
+      error instanceof Error && error.name === 'AbortError'
+        ? '交付构建超时。'
+        : '无法执行交付构建。'
+    throw new BusinessBackendError(message)
+  } finally {
+    timeout.cancel()
+  }
+}
+
+export async function deployProjectVersion(projectId: string, versionId?: string): Promise<ProjectDeploymentRecord> {
+  const timeout = withTimeout(30000)
+
+  try {
+    const response = await fetch(absoluteBackendUrl(`/api/projects/${encodeURIComponent(projectId)}/deploy`), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(versionId ? { versionId } : {}),
+      signal: timeout.signal,
+    })
+    return await readJson<ProjectDeploymentRecord>(response, 'Deploy project version')
+  } catch (error) {
+    if (error instanceof BusinessBackendError) {
+      throw error
+    }
+
+    const message =
+      error instanceof Error && error.name === 'AbortError'
+        ? '本地部署超时。'
+        : '无法执行本地部署。'
+    throw new BusinessBackendError(message)
+  } finally {
+    timeout.cancel()
+  }
+}
+
+export async function applyProjectChangeSet(projectId: string, changeSetId: string): Promise<unknown> {
+  const timeout = withTimeout(20000)
+
+  try {
+    const response = await fetch(
+      absoluteBackendUrl(`/api/projects/${encodeURIComponent(projectId)}/change-sets/${encodeURIComponent(changeSetId)}/apply`),
+      {
+        method: 'POST',
+        signal: timeout.signal,
+      },
+    )
+    return await readJson<unknown>(response, 'Apply project change set')
+  } catch (error) {
+    if (error instanceof BusinessBackendError) {
+      throw error
+    }
+
+    const message =
+      error instanceof Error && error.name === 'AbortError'
+        ? '应用代码 Diff 超时。'
+        : '无法应用代码 Diff。'
+    throw new BusinessBackendError(message)
+  } finally {
+    timeout.cancel()
+  }
+}
+
+export async function fetchProjectAgents(projectId: string): Promise<ProjectAgent[]> {
+  const timeout = withTimeout(10000)
+
+  try {
+    const response = await fetch(absoluteBackendUrl(`/api/projects/${encodeURIComponent(projectId)}/agents`), {
+      method: 'GET',
+      signal: timeout.signal,
+    })
+    const payload = await readJson<ProjectAgent[] | { agents?: ProjectAgent[] }>(response, 'Load project agents')
+    return Array.isArray(payload) ? payload : payload.agents ?? []
+  } catch (error) {
+    if (error instanceof BusinessBackendError) {
+      throw error
+    }
+
+    const message =
+      error instanceof Error && error.name === 'AbortError'
+        ? '加载当前工作区 Agent 超时。'
+        : '无法加载当前工作区 Agent。'
+    throw new BusinessBackendError(message)
+  } finally {
+    timeout.cancel()
+  }
+}
+
+export async function createProjectAgent(projectId: string, input: CreateProjectAgentInput): Promise<ProjectAgent> {
+  const timeout = withTimeout(10000)
+
+  try {
+    const response = await fetch(absoluteBackendUrl(`/api/projects/${encodeURIComponent(projectId)}/agents`), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+      signal: timeout.signal,
+    })
+    return await readJson<ProjectAgent>(response, 'Create project agent')
+  } catch (error) {
+    if (error instanceof BusinessBackendError) {
+      throw error
+    }
+
+    const message =
+      error instanceof Error && error.name === 'AbortError'
+        ? '创建当前工作区 Agent 超时。'
+        : '无法创建当前工作区 Agent。'
+    throw new BusinessBackendError(message)
+  } finally {
+    timeout.cancel()
+  }
+}
+
+export async function updateProjectAgent(projectId: string, agentId: string, input: UpdateProjectAgentInput): Promise<ProjectAgent> {
+  const timeout = withTimeout(10000)
+
+  try {
+    const response = await fetch(absoluteBackendUrl(`/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentId)}`), {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+      signal: timeout.signal,
+    })
+    return await readJson<ProjectAgent>(response, 'Update project agent')
+  } catch (error) {
+    if (error instanceof BusinessBackendError) {
+      throw error
+    }
+
+    const message =
+      error instanceof Error && error.name === 'AbortError'
+        ? '更新当前工作区 Agent 超时。'
+        : '无法更新当前工作区 Agent。'
+    throw new BusinessBackendError(message)
+  } finally {
+    timeout.cancel()
+  }
+}
+
+export async function deleteProjectAgent(projectId: string, agentId: string): Promise<{ deleted: boolean; agentId: string; workspaceId: string }> {
+  const timeout = withTimeout(10000)
+
+  try {
+    const response = await fetch(absoluteBackendUrl(`/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentId)}`), {
+      method: 'DELETE',
+      signal: timeout.signal,
+    })
+    return await readJson<{ deleted: boolean; agentId: string; workspaceId: string }>(response, 'Delete project agent')
+  } catch (error) {
+    if (error instanceof BusinessBackendError) {
+      throw error
+    }
+
+    const message =
+      error instanceof Error && error.name === 'AbortError'
+        ? '删除当前工作区 Agent 超时。'
+        : '无法删除当前工作区 Agent。'
     throw new BusinessBackendError(message)
   } finally {
     timeout.cancel()
