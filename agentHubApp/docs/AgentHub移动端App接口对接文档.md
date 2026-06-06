@@ -482,7 +482,7 @@ DELETE /api/projects/:projectId/agents/:agentId
 移动端使用建议：
 
 - Agent 首页如果没有选中项目，不再读取全局 Agent；可以展示空态，或等移动端专用聚合接口上线后读取聚合结果。
-- 进入具体工作区后，用 `GET /api/projects/:projectId/agents` 展示该 workspace 可见 Agent。
+- 进入具体工作区后，用 `GET /api/projects/:projectId/agents` 展示该 workspace 的 Agent 列表；业务后端会直接透传 Agent 服务返回结果。
 - 移动端编辑 Agent 时必须走项目级接口。
 - 内置 Agent 只允许在工作区内覆盖 `name`、`modelProvider`、`model`。
 - 内置 Agent 不可删除。
@@ -563,7 +563,7 @@ Agent 主要响应字段：
 | `conversationId` | `string` | 可选 | Agent 所属 runtime conversation；当前语义上必有。 |
 | `role`、`description`、`skills` 等 | 多类型 | 可选 | runtime 可能返回的扩展字段，App 按需读取。 |
 
-说明：`GET /api/projects/:projectId/agents` 返回 `Agent[]`；单 Agent 接口返回 `Agent`；删除接口返回 runtime 删除结果，App 侧通常只需要本地移除并刷新列表。`GET /api/agents` 当前返回 `400`。
+说明：`GET /api/projects/:projectId/agents` 返回 `Agent[]`，当前等价于读取该项目绑定 `workspaceId` 下 Agent 服务返回的工作区 Agent 列表，不再由业务后端按 conversation 二次过滤；单 Agent 接口返回 `Agent`；删除接口返回 runtime 删除结果，App 侧通常只需要本地移除并刷新列表。`GET /api/agents` 当前返回 `400`。
 
 单聊工作区创建自建 Agent 错误示例：
 
@@ -817,8 +817,8 @@ DELETE /api/agents/:agentId
 | --- | --- | --- | --- |
 | `GET /api/agents` | 无 | 无 | 返回 `400`。不存在全局 Agent，App 不使用。 |
 | `GET /api/agents/:agentId` | `agentId` 必填 | 无 | 返回 `400`。不存在全局 Agent，App 不使用。 |
-| `POST /api/agents` | 无 | 同项目级 `POST /api/projects/:projectId/agents`，其中 `name`、`systemPrompt` 必填 | 不建议 App 使用。 |
-| `PATCH /api/agents/:agentId` | `agentId` 必填 | 同项目级 `PATCH /api/projects/:projectId/agents/:agentId`，所有字段可选 | 不建议 App 使用。 |
+| `POST /api/agents` | 无 | 兼容保留路由；当前返回 `400`，应改用 `POST /api/projects/:projectId/agents` | App 不应使用。 |
+| `PATCH /api/agents/:agentId` | `agentId` 必填 | 兼容保留路由；当前返回 `400`，应改用 `PATCH /api/projects/:projectId/agents/:agentId` | App 不应使用。 |
 | `DELETE /api/agents/:agentId` | `agentId` 必填 | 无 | 不建议 App 使用。 |
 
 原因：
