@@ -50,6 +50,10 @@ export class AgentHubClientService {
     })
   }
 
+  async deleteWorkspace(workspaceId: string): Promise<{ deleted: boolean; workspaceId: string }> {
+    return this.deleteJson(`/api/workspaces/${encodeURIComponent(workspaceId)}`)
+  }
+
   /**
    * Loads the full runtime state snapshot from AgentHub.
    * Input: none.

@@ -59,12 +59,24 @@ export class LocalStorageService implements OnModuleInit {
     return this.resolveInsideStorage('artifacts', 'source', this.safeSegment(projectId), `${this.safeSegment(versionId)}.zip`)
   }
 
+  sourceArtifactsRootForProject(projectId: string): string {
+    return this.resolveInsideStorage('artifacts', 'source', this.safeSegment(projectId))
+  }
+
   buildArtifactDir(projectId: string, versionId: string): string {
     return this.resolveInsideStorage('artifacts', 'build', this.safeSegment(projectId), this.safeSegment(versionId))
   }
 
+  buildArtifactsRootForProject(projectId: string): string {
+    return this.resolveInsideStorage('artifacts', 'build', this.safeSegment(projectId))
+  }
+
   deployLatestDir(projectId: string): string {
     return this.resolveInsideStorage('deploy', this.safeSegment(projectId), 'latest')
+  }
+
+  deployProjectRoot(projectId: string): string {
+    return this.resolveInsideStorage('deploy', this.safeSegment(projectId))
   }
 
   tmpBuildDir(jobId: string): string {

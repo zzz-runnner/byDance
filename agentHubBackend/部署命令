@@ -26,3 +26,5 @@ docker run -d \
    -e BUILD_MEMORY_LIMIT=2g \
    -e DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)" \
    agenthub-backend:latest
+
+docker ps

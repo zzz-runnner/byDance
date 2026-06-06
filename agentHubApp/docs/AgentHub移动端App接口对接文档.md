@@ -261,6 +261,7 @@ PUT    /api/projects/:projectId/pin
 DELETE /api/projects/:projectId/pin
 PUT    /api/projects/:projectId/archive
 DELETE /api/projects/:projectId/archive
+DELETE /api/projects/:projectId
 ```
 
 专用接口只有 `projectId` 路径参数，均无请求体；响应字段与 `POST /api/projects` 返回的项目对象一致。
@@ -269,6 +270,8 @@ DELETE /api/projects/:projectId/archive
 
 - App 内优先用 `PATCH /metadata`，一次更新多个轻量状态。
 - 操作后更新本地列表状态，并后台刷新 `/api/workbench`。
+- 删除工作区时调用 `DELETE /api/projects/:projectId`，成功后从本地列表移除，并退出当前工作区页面。
+- 当该项目是某个 `workspaceId` 的最后一个业务绑定时，后端会同步彻底删除对应的 AgentHub Runtime workspace。
 
 ### 2.5 项目状态 / 对话主数据
 

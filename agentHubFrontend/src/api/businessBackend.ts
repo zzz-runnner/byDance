@@ -38,6 +38,12 @@ type BusinessProject = {
   updatedAt?: string
 }
 
+type DeleteBusinessProjectResponse = {
+  deleted: boolean
+  projectId: string
+  workspaceId: string
+}
+
 type AgentsResponse = AgentDefinition[] | {
   agents?: AgentDefinition[]
 }
@@ -343,6 +349,13 @@ export async function updateBusinessWorkspaceMetadata(
     body: JSON.stringify(input),
   })
   return readJson<BusinessProject>(response, 'Update workspace metadata')
+}
+
+export async function deleteBusinessWorkspace(projectId: string): Promise<DeleteBusinessProjectResponse> {
+  const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}`), {
+    method: 'DELETE',
+  })
+  return readJson<DeleteBusinessProjectResponse>(response, 'Delete workspace')
 }
 
 /**

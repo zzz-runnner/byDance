@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { mkdtemp, readFile, rm, unlink } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, unlink } from 'node:fs/promises'
 import { isoNow } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import type { LocalToolGateway } from '../tool-gateway'
@@ -29,7 +29,9 @@ type CodexStreamItem = {
 }
 
 async function createEphemeralCodexHome(): Promise<string> {
-  return mkdtemp(path.join(tmpdir(), 'agenthub-codex-'))
+  const codexRunsRoot = path.join('/app/data/codex-runs')
+  await mkdir(codexRunsRoot, { recursive: true })
+  return mkdtemp(path.join(codexRunsRoot, 'codex-'))
 }
 
 /**
@@ -329,6 +331,7 @@ export function createCodexAdapter(env: ServerEnv, toolGateway: LocalToolGateway
         input.runtime.repoPath,
         '--skip-git-repo-check',
         '--ephemeral',
+        '--dangerously-bypass-approvals-and-sandbox',
         '--sandbox',
         toCodexSandbox(input),
         '--output-last-message',

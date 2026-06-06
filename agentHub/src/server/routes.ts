@@ -672,6 +672,38 @@ export async function registerRoutes(app: FastifyInstance, services: WorkflowSer
     return services.store.read()
   })
 
+  app.delete('/api/workspaces/:workspaceId', async (request, reply) => {
+    const params = WorkspaceParamsSchema.parse(request.params)
+    const currentState = await services.store.read()
+    if (!currentState.workspaces.some(workspace => workspace.id === params.workspaceId)) {
+      reply.status(404)
+      return reply.send({ error: `Workspace not found: ${params.workspaceId}` })
+    }
+
+    await services.store.update(state => {
+      state.workspaces = state.workspaces.filter(workspace => workspace.id !== params.workspaceId)
+      state.conversations = state.conversations.filter(conversation => conversation.workspaceId !== params.workspaceId)
+      state.messages = state.messages.filter(message => message.workspaceId !== params.workspaceId)
+      state.agents = state.agents.filter(agent => agent.workspaceId !== params.workspaceId)
+      state.workspaceAgentMembers = state.workspaceAgentMembers.filter(member => member.workspaceId !== params.workspaceId)
+      state.agentSessions = state.agentSessions.filter(session => session.workspaceId !== params.workspaceId)
+      state.agentSessionMessages = state.agentSessionMessages.filter(message => message.workspaceId !== params.workspaceId)
+      state.taskHandoffs = state.taskHandoffs.filter(handoff => handoff.workspaceId !== params.workspaceId)
+      state.agentRuns = state.agentRuns.filter(run => run.workspaceId !== params.workspaceId)
+      state.artifacts = state.artifacts.filter(artifact => artifact.workspaceId !== params.workspaceId)
+      state.changeSets = state.changeSets.filter(changeSet => changeSet.workspaceId !== params.workspaceId)
+      state.contextSnapshots = state.contextSnapshots.filter(snapshot => snapshot.workspaceId !== params.workspaceId)
+      state.workflowEvents = state.workflowEvents.filter(event => event.workspaceId !== params.workspaceId)
+      state.diagnosticLogs = state.diagnosticLogs.filter(log => log.workspaceId !== params.workspaceId)
+    })
+    await services.runtime.deleteWorkspace(params.workspaceId)
+
+    return {
+      deleted: true,
+      workspaceId: params.workspaceId,
+    }
+  })
+
   app.get('/api/workspaces/:workspaceId/agents', async (request, reply) => {
     const params = WorkspaceParamsSchema.parse(request.params)
     const state = await services.store.read()

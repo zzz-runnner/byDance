@@ -3908,6 +3908,52 @@ a {
   padding: 16px;
 }
 
+.confirm-dialog-shell {
+  width: min(100%, 480px);
+}
+
+.confirm-dialog {
+  display: grid;
+  gap: 14px;
+}
+
+.confirm-dialog__title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.confirm-dialog__title h2 {
+  margin: 0;
+  color: #20202a;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.confirm-dialog__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.34);
+  color: #4a5571;
+}
+
+.confirm-dialog__icon.is-danger {
+  color: var(--danger);
+}
+
+.confirm-dialog__note {
+  margin: 0;
+}
+
+.confirm-dialog__actions {
+  justify-content: end;
+}
+
 .agent-dialog {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);

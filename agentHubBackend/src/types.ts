@@ -23,6 +23,12 @@ export interface ProjectResponse extends StoredProjectRecord {
   agentHubZipUrl: string
 }
 
+export interface DeleteProjectResponse {
+  deleted: boolean
+  projectId: string
+  workspaceId: string
+}
+
 export interface ProjectStatePage {
   limit: number
   total: number
