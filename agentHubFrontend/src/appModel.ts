@@ -308,7 +308,7 @@ export function stageLabel(stage: string | undefined): string {
  * Output: CSS tone class suffix.
  */
 export function agentTone(agentId: string): string {
-  if (agentId === 'engineer') {
+  if (agentId === 'engineer' || agentId === 'codex-direct' || agentId === 'claude-code-direct') {
     return 'blue'
   }
 

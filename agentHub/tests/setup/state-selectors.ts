@@ -23,11 +23,14 @@ export function selectPrimaryGroup(state: AppState): WorkspaceConversation {
  * Input: application state and agent id. Output: workspace and direct conversation.
  */
 export function selectAgentDirect(state: AppState, agentId: string): WorkspaceConversation {
-  const workspace = state.workspaces[0]
   const conversation = state.conversations.find(item =>
-    item.workspaceId === workspace.id && item.type === 'direct' && item.participants.includes(agentId))
+    item.type === 'direct' && item.participants.includes(agentId))
   if (!conversation) {
     throw new Error(`Seed direct conversation not found for agent: ${agentId}`)
+  }
+  const workspace = state.workspaces.find(item => item.id === conversation.workspaceId)
+  if (!workspace) {
+    throw new Error(`Seed direct workspace not found for agent: ${agentId}`)
   }
   return { workspace, conversation }
 }

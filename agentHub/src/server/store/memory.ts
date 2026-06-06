@@ -34,7 +34,11 @@ export class MemoryStateStore implements StateStore {
 
   async createAgent(agent: AgentDefinition): Promise<AgentDefinition> {
     return this.update(state => {
-      if (state.agents.some(item => item.id === agent.id)) {
+      if (state.agents.some(item =>
+        item.id === agent.id &&
+        item.workspaceId === agent.workspaceId &&
+        item.conversationId === agent.conversationId,
+      )) {
         throw new Error(`Agent already exists: ${agent.id}`)
       }
       const parsed = AgentDefinitionSchema.parse(agent)
@@ -48,7 +52,11 @@ export class MemoryStateStore implements StateStore {
     updater: (agent: AgentDefinition) => AgentDefinition,
   ): Promise<AgentDefinition | undefined> {
     return this.update(state => {
-      const index = state.agents.findIndex(agent => agent.id === agentId)
+      const matchingIndexes = state.agents.flatMap((agent, index) => agent.id === agentId ? [index] : [])
+      if (matchingIndexes.length > 1) {
+        throw new Error(`Agent update is ambiguous without workspace/conversation scope: ${agentId}`)
+      }
+      const index = matchingIndexes[0] ?? -1
       if (index === -1) {
         return undefined
       }
@@ -61,7 +69,9 @@ export class MemoryStateStore implements StateStore {
   async deleteAgent(agentId: string): Promise<boolean> {
     return this.update(state => {
       const previousLength = state.agents.length
-      state.agents = state.agents.filter(agent => agent.id !== agentId)
+      state.agents = state.agents.filter(agent =>
+        !(agent.id === agentId && !agent.workspaceId && !agent.conversationId),
+      )
       return state.agents.length !== previousLength
     })
   }

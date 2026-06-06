@@ -1,0 +1,10 @@
+docker rm -f agenthub-nginx 2>/dev/null || true
+
+docker run -d \
+    --name agenthub-nginx \
+    --restart unless-stopped \
+    -p 5173:5173 \
+    --network agenthub_default \
+    -v /opt/agenthub/nginx/conf.d:/etc/nginx/conf.d:ro \
+    -v /opt/agenthub/byDance/agentHubFrontend/dist:/opt/agenthub/byDance/agentHubFrontend/dist:ro \
+    nginx:1.27-alpine

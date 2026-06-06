@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AppState } from '../../src/shared/contracts'
 import { cleanupTestApp, createMockTestApp, type TestApp } from '../setup/test-app'
+import { selectAgentDirect } from '../setup/state-selectors'
 
 let testApp: TestApp | undefined
 
@@ -141,12 +142,7 @@ describe('mock workflow integration', () => {
   it('creates handoff and run records for explicit direct-agent run tasks', async () => {
     testApp = await createMockTestApp('agenthub-workflow-')
     const initialState = (await testApp.app.inject({ method: 'GET', url: '/api/state' })).json() as AppState
-    const workspace = initialState.workspaces[0]
-    const directConversation = initialState.conversations.find(item =>
-      item.workspaceId === workspace.id && item.type === 'direct' && item.participants.includes('engineer'))
-    if (!directConversation) {
-      throw new Error('Seed engineer direct conversation not found.')
-    }
+    const { workspace, conversation: directConversation } = selectAgentDirect(initialState, 'codex-direct')
 
     const response = await testApp.app.inject({
       method: 'POST',
@@ -154,16 +150,16 @@ describe('mock workflow integration', () => {
       payload: {
         workspaceId: workspace.id,
         conversationId: directConversation.id,
-        agentId: 'engineer',
+        agentId: 'codex-direct',
         content: '/run 请只输出一句话，不要修改文件。',
       },
     })
 
     const state = response.json() as AppState
     expect(response.statusCode).toBe(200)
-    expect(state.taskHandoffs.some(handoff => handoff.agentId === 'engineer')).toBe(true)
+    expect(state.taskHandoffs.some(handoff => handoff.agentId === 'codex-direct')).toBe(true)
     expect(state.agentRuns.some(run =>
-      run.agentId === 'engineer' && run.logs.some(log => log.includes('mock adapter used')),
+      run.agentId === 'codex-direct' && run.logs.some(log => log.includes('mock adapter used')),
     )).toBe(true)
   })
 })

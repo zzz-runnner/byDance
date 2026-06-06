@@ -1,10 +1,17 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { X } from 'lucide-react'
-import type { AgentDefinition, Workspace } from '../types'
+import type { Workspace } from '../types'
 import { GlassPanel } from './GlassPanel'
 
 type RoomMode = 'group' | 'direct'
 type GroupWorkspaceType = Exclude<Workspace['workspaceType'], 'chat'>
+type DirectAgentProvider = 'claude' | 'codex'
+type DirectAgentOption = {
+  id: 'claude-code-direct' | 'codex-direct'
+  name: string
+  provider: DirectAgentProvider
+}
+type DirectAgentId = DirectAgentOption['id']
 
 export type CreateWorkspaceInput = {
   name: string
@@ -16,7 +23,6 @@ export type CreateWorkspaceInput = {
 
 type CreateWorkspaceDialogProps = {
   open: boolean
-  agents: AgentDefinition[]
   submitting: boolean
   errorMessage: string
   sourceTargetLabel: string
@@ -46,6 +52,27 @@ const GROUP_WORKSPACE_TYPES: Array<{
   },
 ]
 
+function directAgentLabel(option: DirectAgentOption): string {
+  return option.name
+}
+
+const DIRECT_AGENT_OPTIONS: DirectAgentOption[] = [
+  {
+    id: 'claude-code-direct',
+    name: 'Claude Code Agent',
+    provider: 'claude',
+  },
+  {
+    id: 'codex-direct',
+    name: 'Codex Agent',
+    provider: 'codex',
+  },
+]
+
+function toDirectAgentId(value: string): DirectAgentId {
+  return value === 'claude-code-direct' ? 'claude-code-direct' : 'codex-direct'
+}
+
 /**
  * Renders the create-workspace dialog for the live backend flow.
  * Input: dialog state, available agents, submit state, and callbacks.
@@ -53,15 +80,17 @@ const GROUP_WORKSPACE_TYPES: Array<{
  */
 export function CreateWorkspaceDialog({
   open,
-  agents,
   submitting,
   errorMessage,
   sourceTargetLabel,
   onClose,
   onSubmit,
 }: CreateWorkspaceDialogProps) {
-  const directAgents = useMemo(() => agents.filter(agent => agent.id !== 'user'), [agents])
-  const preferredDirectAgentId = directAgents.find(agent => agent.id === 'engineer')?.id ?? directAgents[0]?.id ?? 'engineer'
+  const directAgentOptions = DIRECT_AGENT_OPTIONS
+  const preferredDirectAgentId =
+    directAgentOptions.find(option => option.provider === 'codex')?.id ??
+    directAgentOptions[0]?.id ??
+    'codex-direct'
 
   const [name, setName] = useState('')
   const [goal, setGoal] = useState('')
@@ -80,6 +109,13 @@ export function CreateWorkspaceDialog({
     setWorkspaceType('dev')
     setTargetAgentId(preferredDirectAgentId)
   }, [open, preferredDirectAgentId])
+
+  useEffect(() => {
+    if (!open || roomMode !== 'direct' || directAgentOptions.some(option => option.id === targetAgentId)) {
+      return
+    }
+    setTargetAgentId(preferredDirectAgentId)
+  }, [directAgentOptions, open, preferredDirectAgentId, roomMode, targetAgentId])
 
   useEffect(() => {
     if (!open) {
@@ -107,8 +143,9 @@ export function CreateWorkspaceDialog({
 
     const nextName = name.trim()
     const nextGoal = goal.trim()
+    const selectedDirectAgent = directAgentOptions.find(option => option.id === targetAgentId)
 
-    if (!nextName || !nextGoal) {
+    if (!nextName || !nextGoal || (roomMode === 'direct' && !selectedDirectAgent)) {
       return
     }
 
@@ -117,7 +154,7 @@ export function CreateWorkspaceDialog({
       goal: nextGoal,
       roomMode,
       workspaceType: roomMode === 'direct' ? 'chat' : workspaceType,
-      targetAgentId: roomMode === 'direct' ? targetAgentId : undefined,
+      targetAgentId: roomMode === 'direct' ? selectedDirectAgent?.id : undefined,
     })
   }
 
@@ -214,16 +251,16 @@ export function CreateWorkspaceDialog({
                 <select
                   id="workspace-agent"
                   value={targetAgentId}
-                  onChange={event => setTargetAgentId(event.currentTarget.value)}
+                  onChange={event => setTargetAgentId(toDirectAgentId(event.currentTarget.value))}
                   disabled={submitting}
                 >
-                  {directAgents.map(agent => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.name}
+                  {directAgentOptions.map(option => (
+                    <option key={option.id} value={option.id}>
+                      {directAgentLabel(option)} · {providerLabel(option.provider)}
                     </option>
                   ))}
                 </select>
-                <p className="field-hint">单聊模式会固定写入 chat 类型工作区。</p>
+                <p className="field-hint">单聊只能选择默认 Claude Code 或 Codex Agent，并固定写入 chat 类型工作区。</p>
               </div>
             )}
 
@@ -237,7 +274,7 @@ export function CreateWorkspaceDialog({
               <button className="secondary-button" type="button" onClick={onClose} disabled={submitting}>
                 取消
               </button>
-              <button className="primary-button" type="submit" disabled={submitting}>
+              <button className="primary-button" type="submit" disabled={submitting || (roomMode === 'direct' && directAgentOptions.length === 0)}>
                 {submitting ? '创建中...' : '创建工作区'}
               </button>
             </div>
@@ -246,4 +283,8 @@ export function CreateWorkspaceDialog({
       </div>
     </div>
   )
+}
+
+function providerLabel(provider: DirectAgentProvider): string {
+  return provider === 'claude' ? 'Claude' : 'Codex'
 }

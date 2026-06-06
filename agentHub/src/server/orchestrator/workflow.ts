@@ -27,7 +27,7 @@ import {
   stripLeadingAgentMention,
   stripLeadingOrchestratorMention,
 } from '../agents/agent-presentation'
-import { resolveWorkspaceAgent, resolveWorkspaceAgents } from '../agents/workspace-agents'
+import { resolveConversationAgents, resolveWorkspaceAgent, resolveWorkspaceAgents } from '../agents/workspace-agents'
 import type { StateStore } from '../store/types'
 import { WorkspaceRuntimeManager } from '../runtime/workspace'
 import type { LocalToolGateway } from '../tool-gateway'
@@ -251,7 +251,7 @@ function applyExecutionSafety(
   conversation: Conversation,
   routing: PlannedRoutingDecision,
 ): PlannedRoutingDecision {
-  const workspaceAgents = resolveWorkspaceAgents(state, workspace.id)
+  const workspaceAgents = resolveConversationAgents(state, workspace.id, conversation.id)
   const decision = routing.decision
   if (decision.execution !== 'parallel') {
     return routing
@@ -312,7 +312,7 @@ function applyTaskStageGuard(
   route?: TurnRoute,
   userContent?: string,
 ): PlannedRoutingDecision {
-  const workspaceAgents = resolveWorkspaceAgents(state, workspace.id)
+  const workspaceAgents = resolveConversationAgents(state, workspace.id, conversation.id)
   if (!route || routing.decision.kind !== 'dispatch_agents') {
     if (!route || route.taskStage !== 'requirements_intake' && route.taskStage !== 'planning') {
       return routing
@@ -566,7 +566,7 @@ function applyReviewSafety(
   conversation: Conversation,
   routing: PlannedRoutingDecision,
 ): PlannedRoutingDecision {
-  const workspaceAgents = resolveWorkspaceAgents(state, workspace.id)
+  const workspaceAgents = resolveConversationAgents(state, workspace.id, conversation.id)
   const decision = routing.decision
   if (decision.kind !== 'dispatch_agents') {
     return routing
@@ -1480,7 +1480,7 @@ async function runSynthesis(
   userMessage: string,
   results: TaskBriefRunResult[],
 ): Promise<PlannedSynthesis> {
-  const workspaceAgents = resolveWorkspaceAgents(state, workspace.id)
+  const workspaceAgents = resolveConversationAgents(state, workspace.id, conversation.id)
   const localSummaries = results.map(result => result.summary)
   if (canUseLocalRequirementSynthesis(routing, results)) {
     const requirementSummaries = results.map(result => `${result.agentName}: ${compactText(result.output, 1200)}`)
@@ -1704,7 +1704,7 @@ export async function handleUserMessage(input: SendMessageInput, services: Workf
   const state = await workflowServices.store.read()
   const workspace = requiredById(state.workspaces, input.workspaceId, 'Workspace')
   const conversation = requiredById(state.conversations, input.conversationId, 'Conversation')
-  const workspaceAgents = resolveWorkspaceAgents(state, workspace.id)
+  const workspaceAgents = resolveConversationAgents(state, workspace.id, conversation.id)
   const explicitAgentLock = resolveExplicitAgentLock(input.content, conversation, workspaceAgents, input.agentId)
   const normalizedMainContent = conversation.type === 'group'
     ? stripLeadingOrchestratorMention(input.content, workspaceAgents) || input.content.trim()

@@ -11,10 +11,10 @@ afterEach(async () => {
 })
 
 describe('direct agent run workflow', () => {
-  it('syncs handoff, run, artifact, and event state for a mock engineer run', async () => {
+  it('syncs handoff, run, artifact, and event state for a mock Codex direct run', async () => {
     testApp = await createMockTestApp('agenthub-direct-run-')
     const initialState = (await testApp.app.inject({ method: 'GET', url: '/api/state' })).json() as AppState
-    const { workspace, conversation } = selectAgentDirect(initialState, 'engineer')
+    const { workspace, conversation } = selectAgentDirect(initialState, 'codex-direct')
 
     const response = await testApp.app.inject({
       method: 'POST',
@@ -22,13 +22,13 @@ describe('direct agent run workflow', () => {
       payload: {
         workspaceId: workspace.id,
         conversationId: conversation.id,
-        agentId: 'engineer',
+        agentId: 'codex-direct',
         content: '/run 请只输出一句话，不要修改文件。',
       },
     })
     const state = response.json() as AppState
-    const run = [...state.agentRuns].reverse().find(item => item.agentId === 'engineer')
-    const handoff = [...state.taskHandoffs].reverse().find(item => item.agentId === 'engineer')
+    const run = [...state.agentRuns].reverse().find(item => item.agentId === 'codex-direct')
+    const handoff = [...state.taskHandoffs].reverse().find(item => item.agentId === 'codex-direct')
 
     expect(response.statusCode).toBe(200)
     expect(run?.status).not.toBe('running')
