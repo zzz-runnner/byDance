@@ -137,7 +137,10 @@ type FailedChatSend = {
 const PROCESS_PREVIEW_STEP_COUNT = 3
 const STREAM_WORKFLOW_EVENT_NAME_SET = new Set<string>(PROJECT_WORKFLOW_STREAM_EVENT_NAMES)
 const IOS_KEYBOARD_COMPOSER_GAP = 8
+const ANDROID_KEYBOARD_COMPOSER_GAP = 10
 const CHAT_COMPOSER_VERTICAL_PADDING = 6
+const CHAT_COMPOSER_INPUT_MIN_HEIGHT = 40
+const CHAT_COMPOSER_INPUT_MAX_HEIGHT = 92
 
 const tabs: { key: TabKey; label: string; icon: IconName }[] = [
   { key: 'workbench', label: '工作台', icon: 'view-dashboard-outline' },
@@ -587,19 +590,22 @@ function upsertStreamingAssistantMessage(messages: ChatMessageView[], input: { m
   return [...messages, nextMessage]
 }
 
-function useIosKeyboardBottomSpacing(bottomInset: number): number {
+function useKeyboardBottomSpacing(bottomInset: number): number {
   const [keyboardSpacing, setKeyboardSpacing] = useState(0)
 
   useEffect(() => {
-    if (Platform.OS !== 'ios') {
+    if (Platform.OS !== 'ios' && Platform.OS !== 'android') {
       setKeyboardSpacing(0)
       return
     }
 
-    const keyboardFrameSubscription = Keyboard.addListener('keyboardWillChangeFrame', event => {
-      setKeyboardSpacing(Math.max(0, event.endCoordinates.height - bottomInset + IOS_KEYBOARD_COMPOSER_GAP))
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow'
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide'
+    const composerGap = Platform.OS === 'ios' ? IOS_KEYBOARD_COMPOSER_GAP : ANDROID_KEYBOARD_COMPOSER_GAP
+    const keyboardFrameSubscription = Keyboard.addListener(showEvent, event => {
+      setKeyboardSpacing(Math.max(0, event.endCoordinates.height - bottomInset + composerGap))
     })
-    const keyboardHideSubscription = Keyboard.addListener('keyboardWillHide', () => {
+    const keyboardHideSubscription = Keyboard.addListener(hideEvent, () => {
       setKeyboardSpacing(0)
     })
 
@@ -1783,13 +1789,14 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
   const isStandard = layoutTier === 'standard'
   const isWide = layoutTier === 'wide'
   const insets = useSafeAreaInsets()
-  const keyboardBottomSpacing = useIosKeyboardBottomSpacing(insets.bottom)
+  const keyboardBottomSpacing = useKeyboardBottomSpacing(insets.bottom)
   const keyboardOffset = 0
   const composerBottomSpacing = Platform.OS === 'ios' ? keyboardBottomSpacing : 0
-  const composerSafePadding = Platform.OS === 'ios' ? Math.max(insets.bottom, 10) : 0
+  const composerSafePadding = Platform.OS === 'ios' ? Math.max(insets.bottom, 10) : Platform.OS === 'android' ? Math.max(insets.bottom, 8) : 0
   const projectId = workspace.projectId ?? workspace.id
   const [chatState, setChatState] = useState<ChatStateView>(() => createEmptyChatState())
   const [draftMessage, setDraftMessage] = useState('')
+  const [composerInputHeight, setComposerInputHeight] = useState(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
   const [chatLoading, setChatLoading] = useState(false)
   const [chatError, setChatError] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -1806,10 +1813,15 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
       .filter(agent => projectAgentMatchesMentionQuery(agent, activeMentionToken.query))
       .slice(0, 8)
   }, [activeMentionToken?.query, visibleChatAgents, workspace.kind])
-  const showMentionMenu = workspace.kind === 'group' && !streaming && !!activeMentionToken && mentionCandidates.length > 0
+  const composerDisabled = streaming || chatLoading
+  const sendButtonDisabled = !draftMessage.trim() || composerDisabled
+  const showMentionMenu = workspace.kind === 'group' && !composerDisabled && !!activeMentionToken && mentionCandidates.length > 0
 
   function handleDraftMessageChange(nextText: string) {
     setDraftMessage(nextText)
+    if (!nextText) {
+      setComposerInputHeight(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
+    }
     if (selectedMentionAgentId && findMentionedProjectAgentId(nextText, visibleChatAgents) !== selectedMentionAgentId) {
       setSelectedMentionAgentId(undefined)
     }
@@ -1849,6 +1861,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
     setChatState(createEmptyChatState())
     setExpandedProcessIds(new Set())
     setDraftMessage('')
+    setComposerInputHeight(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
     setDraftSelection({ start: 0, end: 0 })
     setSelectedMentionAgentId(undefined)
     lastFailedMessageRef.current = null
@@ -1939,7 +1952,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
 
   async function sendMessage(retryPayload?: FailedChatSend) {
     const content = (retryPayload?.content ?? draftMessage).trim()
-    if (!content || streaming) return
+    if (!content || composerDisabled) return
     const targetAgentId =
       workspace.kind === 'direct'
         ? workspace.agents[0]
@@ -1955,6 +1968,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
     }
     if (!retryPayload) {
       setDraftMessage('')
+      setComposerInputHeight(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
       setDraftSelection({ start: 0, end: 0 })
       setSelectedMentionAgentId(undefined)
     }
@@ -2013,7 +2027,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
   const messageCountText = chatState.messagePage ? `第 ${chatState.messagePage.page ?? 1} 页 · ${chatState.messagePage.total} 条消息` : `${chatState.messages.length} 条消息`
 
   return (
-    <KeyboardAvoidingView style={[styles.chatScreen, { paddingBottom: composerBottomSpacing }]} behavior={Platform.OS === 'ios' ? undefined : 'height'} keyboardVerticalOffset={keyboardOffset}>
+    <KeyboardAvoidingView style={[styles.chatScreen, { paddingBottom: composerBottomSpacing }]} keyboardVerticalOffset={keyboardOffset}>
       <ScrollView
         style={styles.chatScroll}
         showsVerticalScrollIndicator={false}
@@ -2136,14 +2150,22 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
             placeholderTextColor="#94a3b8"
             value={draftMessage}
             onChangeText={handleDraftMessageChange}
+            onContentSizeChange={event => {
+              const nextHeight = Math.min(
+                CHAT_COMPOSER_INPUT_MAX_HEIGHT,
+                Math.max(CHAT_COMPOSER_INPUT_MIN_HEIGHT, Math.ceil(event.nativeEvent.contentSize.height)),
+              )
+              setComposerInputHeight(nextHeight)
+            }}
             onSelectionChange={event => setDraftSelection(event.nativeEvent.selection)}
-            style={styles.chatComposerInput}
-            editable={!streaming}
+            style={[styles.chatComposerInput, { height: composerInputHeight }]}
+            editable={!composerDisabled}
             multiline
-            scrollEnabled
+            scrollEnabled={composerInputHeight >= CHAT_COMPOSER_INPUT_MAX_HEIGHT}
+            textAlignVertical={composerInputHeight > CHAT_COMPOSER_INPUT_MIN_HEIGHT ? 'top' : 'center'}
           />
-          <Pressable style={[styles.chatSendButton, (!draftMessage.trim() || streaming) && styles.chatSendButtonDisabled]} onPress={() => void sendMessage()} disabled={!draftMessage.trim() || streaming}>
-            <MaterialCommunityIcons name={streaming ? 'progress-clock' : 'arrow-up'} size={25} color="#fff" />
+          <Pressable style={[styles.chatSendButton, sendButtonDisabled && styles.chatSendButtonDisabled]} onPress={() => void sendMessage()} disabled={sendButtonDisabled}>
+            <MaterialCommunityIcons name={composerDisabled ? 'progress-clock' : 'arrow-up'} size={25} color="#fff" />
           </Pressable>
         </GlassCard>
       </View>
