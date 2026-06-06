@@ -32,6 +32,7 @@ export type WorkbenchOverviewInput = {
 
 export type WorkbenchRoom = {
   id: string
+  conversationId?: string
   kind: 'group' | 'direct'
   title?: string
   subtitle?: string
@@ -57,6 +58,8 @@ export type WorkbenchRoom = {
 }
 
 export type ProjectAgent = {
+  rowId?: string
+  row_id?: string
   id: string
   name?: string
   role?: string
@@ -66,6 +69,8 @@ export type ProjectAgent = {
   model?: string
   skills?: string[]
   source?: string
+  workspaceId?: string
+  conversationId?: string
   createdAt?: string
   updatedAt?: string
 }
