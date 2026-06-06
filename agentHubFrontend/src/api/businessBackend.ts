@@ -144,6 +144,44 @@ export function createEmptyWorkbenchState(agents: AgentDefinition[] = []): AppSt
 }
 
 /**
+ * Maps common backend/runtime English errors into concise Chinese UI copy.
+ * Input: raw backend detail text. Output: localized detail when a known pattern matches.
+ */
+function localizeBackendErrorDetail(detail: string): string {
+  const normalized = detail.trim()
+  const nameConflictMatch = normalized.match(/^Agent name already exists in workspace:\s*(.+)$/i)
+  if (nameConflictMatch) {
+    return `当前工作区中已存在同名 Agent：${nameConflictMatch[1]}`
+  }
+
+  const idConflictMatch = normalized.match(/^Agent already exists:\s*(.+)$/i)
+  if (idConflictMatch) {
+    return `Agent 标识已存在：${idConflictMatch[1]}`
+  }
+
+  if (/^Custom agents can only be added to group workspaces\.?$/i.test(normalized)) {
+    return '只有群聊工作区可以创建自定义 Agent'
+  }
+  if (/^Direct workspaces can only talk to built-in Claude Code or Codex direct agents\.?$/i.test(normalized)) {
+    return '单聊工作区只能选择内置的 Claude Code 或 Codex Agent'
+  }
+  if (/^Built-in agent cannot be deleted:\s*(.+)$/i.test(normalized)) {
+    const agentId = normalized.replace(/^Built-in agent cannot be deleted:\s*/i, '')
+    return `默认 Agent 不允许删除：${agentId}`
+  }
+  if (/^Agent not found in workspace:\s*(.+)$/i.test(normalized) || /^Agent not found in project workspace room:\s*(.+)$/i.test(normalized)) {
+    const agentId = normalized.replace(/^Agent not found(?: in workspace| in project workspace room):\s*/i, '')
+    return `当前工作区中未找到该 Agent：${agentId}`
+  }
+  if (/^Workspace not found:\s*(.+)$/i.test(normalized)) {
+    const workspaceId = normalized.replace(/^Workspace not found:\s*/i, '')
+    return `未找到工作区：${workspaceId}`
+  }
+
+  return normalized
+}
+
+/**
  * Parses a JSON response and gives errors a backend-oriented label.
  * Input: fetch response and operation label.
  * Output: parsed JSON payload.
@@ -152,11 +190,15 @@ async function readJson<T>(response: Response, label: string): Promise<T> {
   if (!response.ok) {
     let detail = ''
     try {
-      const payload = await response.json() as { message?: string | string[] }
+      const payload = await response.json() as { message?: string | string[]; error?: string | string[] }
       if (Array.isArray(payload.message)) {
         detail = payload.message.join('; ')
       } else if (typeof payload.message === 'string') {
         detail = payload.message
+      } else if (Array.isArray(payload.error)) {
+        detail = payload.error.join('; ')
+      } else if (typeof payload.error === 'string') {
+        detail = payload.error
       }
     } catch {
       try {
@@ -166,7 +208,7 @@ async function readJson<T>(response: Response, label: string): Promise<T> {
       }
     }
 
-    const suffix = detail ? `: ${detail}` : ''
+    const suffix = detail ? `：${localizeBackendErrorDetail(detail)}` : ''
     throw new Error(`${label} failed: ${response.status}${suffix}`)
   }
 
