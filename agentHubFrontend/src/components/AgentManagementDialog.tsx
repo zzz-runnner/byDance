@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { Bot, Clock, Plus, Save, Search, ShieldCheck, Trash2, X } from 'lucide-react'
+import { Bot, Clock, LoaderCircle, Plus, Save, Search, ShieldCheck, Trash2, X } from 'lucide-react'
 import type { CreateBusinessAgentInput, UpdateBusinessAgentInput } from '../api/businessBackend'
 import type { AgentDefinition, AgentProvider } from '../types'
 import { AgentAvatar } from './AgentAvatar'
@@ -21,6 +21,7 @@ type AgentManagementDialogProps = {
   agents: AgentDefinition[]
   roomKind?: 'group' | 'direct'
   saving: boolean
+  loading?: boolean
   deletingAgentId?: string
   errorMessage: string
   onClose: () => void
@@ -141,6 +142,7 @@ export function AgentManagementDialog({
   agents,
   roomKind = 'group',
   saving,
+  loading = false,
   deletingAgentId,
   errorMessage,
   onClose,
@@ -393,16 +395,22 @@ export function AgentManagementDialog({
                   <span className="agent-list-item__badge">{providerLabel(agent.modelProvider)}</span>
                 </button>
               ))}
-              {searchText && visibleAgentCount === 0 ? (
+              {loading ? (
+                <div className="agent-dialog__empty">
+                  <LoaderCircle className="icon-spin" size={16} />
+                  <span>正在加载当前工作区 Agent</span>
+                </div>
+              ) : null}
+              {!loading && searchText && visibleAgentCount === 0 ? (
                 <div className="agent-dialog__empty">
                   <Bot size={16} />
                   <span>没有匹配的 Agent</span>
                 </div>
               ) : null}
-              {!searchText && visibleAgentCount === 0 ? (
+              {!loading && !searchText && visibleAgentCount === 0 ? (
                 <div className="agent-dialog__empty">
                   <Bot size={16} />
-                  <span>当前工作区没有加载到 Agent</span>
+                  <span>接口未返回当前工作区 Agent</span>
                 </div>
               ) : null}
             </aside>

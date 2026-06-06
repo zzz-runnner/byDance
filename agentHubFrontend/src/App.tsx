@@ -345,15 +345,15 @@ export function App() {
   const activeConversationId = activeRoom?.conversation.id ?? ''
   const manageableAgents = useMemo(
     () => {
-      const hasProjectScopedAgents = dialogAgentsProjectId === activeProjectId && dialogAgents.length > 0
-      const sourceAgents = hasProjectScopedAgents ? dialogAgents : state.agents
+      const hasProjectScopedAgentResponse = dialogAgentsProjectId === activeProjectId
+      const sourceAgents = hasProjectScopedAgentResponse ? dialogAgents : state.agents
 
       return sourceAgents.filter(agent => {
         if (!activeRoom) {
           return false
         }
 
-        if (hasProjectScopedAgents) {
+        if (hasProjectScopedAgentResponse) {
           return true
         }
 
@@ -1142,21 +1142,6 @@ export function App() {
   }
 
   /**
-   * Resends the latest user message for the active conversation.
-   * Input: none.
-   * Output: triggers the same send path as a normal submission.
-   */
-  async function handleRegenerate() {
-    const lastUserMessage = [...currentMessages].reverse().find(message => message.senderType === 'user')
-
-    if (!lastUserMessage || sending || connectionStatus !== 'live') {
-      return
-    }
-
-    await handleSend(lastUserMessage.content, lastUserMessage.replyTo)
-  }
-
-  /**
    * Copies one message body into the system clipboard when supported.
    * Input: message content.
    * Output: writes to clipboard and silently ignores unsupported environments.
@@ -1354,7 +1339,6 @@ export function App() {
               codeSelectionTarget={pendingCodeSelection}
               hasOlderMessages={messagePage.hasMore}
               loadingOlderMessages={loadingOlderMessages}
-              onRegenerate={() => void handleRegenerate()}
               onLoadOlderMessages={() => void handleLoadOlderMessages()}
               onReplyToMessage={handleReplyToMessage}
               onCancelReply={() => setPendingReplyTo(undefined)}
@@ -1386,6 +1370,7 @@ export function App() {
         agents={manageableAgents}
         roomKind={activeRoom?.kind}
         saving={agentMutationSaving || loadingDialogAgents}
+        loading={loadingDialogAgents}
         deletingAgentId={deletingAgentId}
         errorMessage={agentMutationError}
         onClose={() => {

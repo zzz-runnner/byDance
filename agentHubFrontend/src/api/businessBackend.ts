@@ -286,7 +286,8 @@ export async function createBusinessAgent(input: CreateBusinessAgentInput): Prom
 
 export async function fetchBusinessProjectAgents(projectId: string): Promise<AgentDefinition[]> {
   const response = await fetch(backendUrl(`/api/projects/${encodeURIComponent(projectId)}/agents`))
-  return readJson<AgentDefinition[]>(response, 'Load project agents')
+  const payload = await readJson<AgentsResponse>(response, 'Load project agents')
+  return extractAgents(payload)
 }
 
 export async function createBusinessProjectAgent(

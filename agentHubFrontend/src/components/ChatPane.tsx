@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  Bot,
   Braces,
   CheckCircle2,
   ChevronDown,
@@ -15,9 +16,7 @@ import {
   LoaderCircle,
   MessageSquareReply,
   Pin,
-  RefreshCcw,
   ShieldCheck,
-  SlidersHorizontal,
   TerminalSquare,
   X,
 } from 'lucide-react'
@@ -75,7 +74,6 @@ type ChatPaneProps = {
   codeSelectionTarget?: CodeSelectionReference
   hasOlderMessages: boolean
   loadingOlderMessages: boolean
-  onRegenerate: () => void
   onLoadOlderMessages: () => void
   onReplyToMessage: (replyTo: ReplyReference) => void
   onCancelReply: () => void
@@ -455,7 +453,6 @@ export function ChatPane({
   codeSelectionTarget,
   hasOlderMessages,
   loadingOlderMessages,
-  onRegenerate,
   onLoadOlderMessages,
   onReplyToMessage,
   onCancelReply,
@@ -755,25 +752,16 @@ export function ChatPane({
             status={headerStatus}
             label={headerStatusLabel}
           />
-          {room?.kind === 'group' ? (
-            <button
-              className="secondary-button chat-agent-button"
-              type="button"
-              onClick={onOpenAgentManagement}
-              disabled={sending || !room || composerDisabled || !onOpenAgentManagement}
-            >
-              <SlidersHorizontal size={15} />
-              Agents
-            </button>
-          ) : null}
           <button
-            className="icon-button"
+            className="chat-ai-agent-button"
             type="button"
-            title="重新生成上一条任务"
-            onClick={onRegenerate}
-            disabled={sending || !room || composerDisabled}
+            title="Agent 管理"
+            aria-label="进入 Agent 管理"
+            onClick={onOpenAgentManagement}
+            disabled={sending || !room || composerDisabled || !onOpenAgentManagement}
           >
-            <RefreshCcw size={16} />
+            <span className="chat-ai-agent-button__halo" aria-hidden="true" />
+            <Bot size={17} />
           </button>
         </div>
       </header>

@@ -8,6 +8,7 @@ import {
   Modal,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -17,6 +18,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native'
+import { WebView } from 'react-native-webview'
 import { StatusBar } from 'expo-status-bar'
 import { LinearGradient } from 'expo-linear-gradient'
 import * as Clipboard from 'expo-clipboard'
@@ -29,29 +31,47 @@ import { Pill } from './src/components/Pill'
 import { createMobileScale, type LayoutTier } from './src/styles/mobileScale'
 import {
   BUSINESS_API_BASE_URL,
+  absoluteBackendUrl,
+  applyProjectChangeSet,
   archiveWorkspace,
+  buildProjectVersion,
   createBusinessWorkspace,
+  createProjectAgent,
+  createProjectVersion,
+  deleteProjectAgent,
+  deployProjectVersion,
   fetchBusinessHealth,
+  fetchProjectDeliverySummary,
+  fetchProjectPreviewCapability,
+  fetchProjectAgents,
   fetchProjectState,
   fetchWorkbenchOverview,
   pinWorkspace,
   streamProjectMessage,
+  triggerProjectPreviewBuild,
   unarchiveWorkspace,
   unpinWorkspace,
+  updateProjectAgent,
   updateWorkspaceMetadata,
   PROJECT_WORKFLOW_STREAM_EVENT_NAMES,
   type BusinessProject,
+  type CreateProjectAgentInput,
   type CreateWorkspaceInput,
   type ProjectArtifact,
   type ProjectAgent,
+  type ProjectChangeSet,
+  type ProjectChangedFile,
+  type ProjectDeliverySummary,
   type ProjectMessage,
   type ProjectMessageStream,
+  type ProjectPreviewCapability,
   type ProjectStateEnvelope,
   type ProjectStreamEvent,
   type ProjectWorkflowEvent,
   type ProjectWorkflowStreamEvent,
   type StreamProjectMessageInput,
   type SortDirection,
+  type UpdateProjectAgentInput,
   type WorkbenchOverview,
   type WorkbenchRoom,
   type WorkspaceListStatus,
@@ -74,6 +94,7 @@ const background = require('./assets/background/mainBackground.png')
 const homeIcon = require('./assets/home/icon.png')
 
 type TabKey = 'workbench' | 'chat' | 'agents'
+type AgentEntryMode = 'global' | 'workspace'
 type MobileScale = ReturnType<typeof createMobileScale>
 type BackendStatus = 'checking' | 'ready' | 'unavailable'
 type WorkbenchPageState = {
@@ -111,6 +132,18 @@ type ChatMessageView = ChatMessage & {
   createdAt?: string
   turnId?: string
 }
+type AgentView = Agent & {
+  source?: ProjectAgent['source']
+  workspaceId?: string
+  conversationId?: string
+  model?: string
+  description?: string
+  whenToUse?: string
+  systemPrompt?: string
+  permissionMode?: ProjectAgent['permissionMode']
+  runtimePolicy?: ProjectAgent['runtimePolicy']
+  raw: ProjectAgent
+}
 type ChatProcessGroup = {
   id: string
   turnId: string
@@ -141,8 +174,12 @@ const STREAM_WORKFLOW_EVENT_NAME_SET = new Set<string>(PROJECT_WORKFLOW_STREAM_E
 const IOS_KEYBOARD_COMPOSER_GAP = 8
 const ANDROID_KEYBOARD_COMPOSER_GAP = 10
 const CHAT_COMPOSER_VERTICAL_PADDING = 6
+const CHAT_COMPOSER_INPUT_MAX_LINES = 4
+const CHAT_COMPOSER_INPUT_LINE_HEIGHT = 20
+const CHAT_COMPOSER_INPUT_VERTICAL_PADDING = 10
+const CHAT_COMPOSER_INPUT_CONTENT_MAX_HEIGHT = CHAT_COMPOSER_INPUT_LINE_HEIGHT * CHAT_COMPOSER_INPUT_MAX_LINES
 const CHAT_COMPOSER_INPUT_MIN_HEIGHT = 40
-const CHAT_COMPOSER_INPUT_MAX_HEIGHT = 92
+const CHAT_COMPOSER_INPUT_MAX_HEIGHT = CHAT_COMPOSER_INPUT_CONTENT_MAX_HEIGHT + CHAT_COMPOSER_INPUT_VERTICAL_PADDING * 2
 const CHAT_SCROLL_TO_BOTTOM_THRESHOLD = 140
 
 const tabs: { key: TabKey; label: string; icon: IconName }[] = [
@@ -153,6 +190,53 @@ const tabs: { key: TabKey; label: string; icon: IconName }[] = [
 
 const WORKBENCH_PAGE_SIZE = 10
 const PINNED_WORKBENCH_PAGE_SIZE = 50
+const DEFAULT_GROUP_AGENT_IDS = ['orchestrator', 'product-manager', 'engineer', 'reviewer'] as const
+const DEFAULT_GROUP_PROJECT_AGENTS: ProjectAgent[] = [
+  {
+    id: 'orchestrator',
+    name: '项目经理 Agent',
+    role: '负责理解用户请求、拆任务、调度子 Agent 并汇总结论。',
+    description: 'AgentHub 主脑，负责工作区内多 Agent 协作和结果汇总。',
+    whenToUse: '群聊任务、跨 Agent 协作、任务拆解和结果汇总时调用。',
+    modelProvider: 'claude',
+    model: 'default',
+    skills: ['routing', 'context-building', 'summarization'],
+    source: 'built-in',
+  },
+  {
+    id: 'product-manager',
+    name: '产品经理 Agent',
+    role: '负责澄清需求、定义范围和验收标准。',
+    description: '把用户输入整理成可执行的产品任务包。',
+    whenToUse: '需求模糊、需要拆功能、需要验收标准时调用。',
+    modelProvider: 'claude',
+    model: 'default',
+    skills: ['requirements', 'acceptance-criteria'],
+    source: 'built-in',
+  },
+  {
+    id: 'engineer',
+    name: '工程师 Agent',
+    role: '负责实现代码、生成 Diff 和产物预览。',
+    description: '默认由 Codex 执行工程任务，后续可切换 Claude Code 或其他执行器。',
+    whenToUse: '需要实现、修改、修复、生成代码或构建预览时调用。',
+    modelProvider: 'codex',
+    model: 'default',
+    skills: ['typescript', 'runtime', 'diff'],
+    source: 'built-in',
+  },
+  {
+    id: 'reviewer',
+    name: '测试审查 Agent',
+    role: '负责质量检查、风险发现和验收结论。',
+    description: '默认由 Claude Code 执行审查任务，输出 PASS / FAIL / PARTIAL。',
+    whenToUse: '实现完成后、需要检查质量或验收时调用。',
+    modelProvider: 'claude',
+    model: 'default',
+    skills: ['review', 'testing'],
+    source: 'built-in',
+  },
+]
 const DEFAULT_WORKBENCH_FILTERS: WorkbenchFilterState = {
   status: 'active',
   sortBy: 'updatedAt',
@@ -192,6 +276,93 @@ function compactText(value?: string, fallback = '暂无内容'): string {
   const text = value?.replace(/\s+/g, ' ').trim()
   if (!text) return fallback
   return text.length > 120 ? `${text.slice(0, 120)}...` : text
+}
+
+function compactLongText(value?: string, maxLength = 240, fallback = '暂无内容'): string {
+  const text = value?.replace(/\s+/g, ' ').trim()
+  if (!text) return fallback
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
+}
+
+function artifactKindFromType(type?: string): ArtifactKind {
+  if (type === 'web-preview' || type === 'preview') return 'preview'
+  if (type === 'zip') return 'zip'
+  if (type === 'deploy-status' || type === 'deploy') return 'deploy'
+  if (type === 'diff') return 'diff'
+  if (type === 'text') return 'text'
+  return 'artifact'
+}
+
+function artifactIconForKind(kind: ArtifactKind): IconName {
+  if (kind === 'preview') return 'cellphone-screenshot'
+  if (kind === 'diff') return 'source-branch'
+  if (kind === 'review') return 'shield-check-outline'
+  if (kind === 'zip') return 'folder-zip-outline'
+  if (kind === 'deploy') return 'cloud-upload-outline'
+  if (kind === 'text') return 'text-box-outline'
+  return 'file-document-outline'
+}
+
+function artifactMetricForKind(kind: ArtifactKind, artifact?: Pick<ArtifactView, 'fileCount' | 'verdict' | 'url'>): string {
+  if (kind === 'preview') return artifact?.url ? 'preview ready' : 'preview'
+  if (kind === 'diff') return 'code diff'
+  if (kind === 'review') return artifact?.verdict ?? 'review'
+  if (kind === 'zip') return artifact?.fileCount !== undefined ? `${artifact.fileCount} files` : 'source zip'
+  if (kind === 'deploy') return artifact?.url ? 'deployment ready' : 'deploy'
+  if (kind === 'text') return 'summary'
+  return 'artifact'
+}
+
+function artifactStatusForKind(kind: ArtifactKind): Pick<ArtifactView, 'status' | 'statusLabel'> {
+  if (kind === 'zip') return { status: 'ready', statusLabel: '可下载' }
+  return { status: 'ready', statusLabel: '可查看' }
+}
+
+function absoluteArtifactUrl(url?: string): string | undefined {
+  return url ? absoluteBackendUrl(url) : undefined
+}
+
+function readMetadataNumber(metadata: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = metadata?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function readDeliverySurface(metadata: Record<string, unknown> | undefined): DeliverySurface | undefined {
+  const kind = metadata?.kind
+  return kind === 'build' || kind === 'deployment' ? kind : undefined
+}
+
+function normalizeIssueList(value: unknown[] | undefined): string[] {
+  return (value ?? [])
+    .map(issue => {
+      if (typeof issue === 'string') return issue
+      if (issue && typeof issue === 'object') {
+        const record = issue as Record<string, unknown>
+        const path = typeof record.path === 'string' ? record.path : undefined
+        const message = typeof record.message === 'string' ? record.message : JSON.stringify(record)
+        return path ? `${path}: ${message}` : message
+      }
+      return String(issue)
+    })
+    .filter(item => item.trim().length > 0)
+}
+
+function normalizeChangedFiles(value: unknown[] | ProjectChangedFile[] | undefined): ProjectChangedFile[] {
+  const files: ProjectChangedFile[] = []
+  for (const file of value ?? []) {
+    if (!file || typeof file !== 'object') continue
+    const record = file as Record<string, unknown>
+    const path = typeof record.path === 'string' ? record.path : undefined
+    if (!path) continue
+    files.push({
+      path,
+      status: typeof record.status === 'string' ? record.status : 'modified',
+      additions: typeof record.additions === 'number' ? record.additions : 0,
+      deletions: typeof record.deletions === 'number' ? record.deletions : 0,
+      patch: typeof record.patch === 'string' ? record.patch : undefined,
+    })
+  }
+  return files
 }
 
 function mapRuntimeStatus(status?: string): Workspace['status'] {
@@ -240,17 +411,218 @@ function mapProjectMessageToChatMessage(message: ProjectMessage): ChatMessageVie
 }
 
 function mapProjectArtifactToArtifactView(artifact: ProjectArtifact): ArtifactView {
-  const type = artifact.type === 'preview' || artifact.type === 'diff' || artifact.type === 'review' || artifact.type === 'text' ? artifact.type : 'text'
+  const type = artifactKindFromType(artifact.type)
+  const fileCount = readMetadataNumber(artifact.metadata, 'fileCount')
+  const byteLength = readMetadataNumber(artifact.metadata, 'byteLength')
+  const deliverySurface = readDeliverySurface(artifact.metadata)
+  const url = absoluteArtifactUrl(artifact.url)
+  const base = {
+    fileCount,
+    byteLength,
+    url,
+  }
   return {
     id: artifact.id,
     type,
     title: artifact.title ?? '未命名产物',
-    summary: compactText(artifact.summary ?? artifact.content, '暂无摘要'),
-    metric: artifact.createdByAgentId ?? artifact.type ?? 'artifact',
-    icon: type === 'preview' ? 'cellphone-screenshot' : type === 'diff' ? 'source-branch' : type === 'review' ? 'shield-check-outline' : 'file-document-outline',
+    summary: compactLongText(artifact.summary ?? artifact.content, 240, '暂无摘要'),
+    metric: artifactMetricForKind(type, base),
+    icon: artifactIconForKind(type),
+    ...artifactStatusForKind(type),
+    createdAt: artifact.createdAt,
+    agentId: artifact.createdByAgentId,
+    url,
+    deliverySurface,
+    detailText: artifact.type === 'text' ? artifact.content : undefined,
+    fileCount,
+    byteLength,
+    source: 'artifact',
+  }
+}
+
+function mapChangeSetToArtifactView(changeSet: ProjectChangeSet): ArtifactView {
+  const files = normalizeChangedFiles(changeSet.files)
+  const additions = files.reduce((sum, file) => sum + (file.additions ?? 0), 0)
+  const deletions = files.reduce((sum, file) => sum + (file.deletions ?? 0), 0)
+  return {
+    id: changeSet.id,
+    type: 'diff',
+    title: '代码 Diff',
+    summary: compactLongText(changeSet.summary, 260, '已生成代码变更。'),
+    metric: files.length ? `${files.length} files · +${additions}/-${deletions}` : 'code diff',
+    icon: artifactIconForKind('diff'),
     status: 'ready',
     statusLabel: '可查看',
+    createdAt: changeSet.createdAt,
+    patch: changeSet.patch,
+    files,
+    changeSetId: changeSet.id,
+    source: 'changeSet',
   }
+}
+
+function mapReviewEventToArtifactView(event: ProjectWorkflowEvent): ArtifactView | undefined {
+  const detail = event.event
+  if (!detail || (detail.type !== 'review_verdict' && detail.type !== 'delivery_validation_finished')) {
+    return undefined
+  }
+
+  const verdict = detail.type === 'review_verdict' ? detail.verdict : detail.status
+  return {
+    id: `${detail.type}-${detail.runId ?? event.id}`,
+    type: 'review',
+    title: detail.type === 'review_verdict' ? '审查结论' : '交付校验',
+    summary: compactLongText(detail.summary, 280, '暂无审查摘要。'),
+    metric: verdict ? verdict.toUpperCase() : 'review',
+    icon: artifactIconForKind('review'),
+    status: verdict === 'fail' || verdict === 'failed' ? 'failed' : 'ready',
+    statusLabel: '可查看',
+    createdAt: event.createdAt,
+    turnId: detail.turnId,
+    agentId: detail.agentId,
+    verdict: verdict ? verdict.toUpperCase() : undefined,
+    issues: normalizeIssueList(detail.issues),
+    source: 'review',
+  }
+}
+
+function pushUniqueArtifactView(artifacts: ArtifactView[], artifact: ArtifactView): void {
+  const index = artifacts.findIndex(item => item.id === artifact.id)
+  if (index >= 0) {
+    artifacts[index] = {
+      ...artifacts[index],
+      ...artifact,
+    }
+    return
+  }
+  artifacts.push(artifact)
+}
+
+function latestArtifact(artifacts: ArtifactView[], predicate: (artifact: ArtifactView) => boolean): ArtifactView | undefined {
+  return artifacts
+    .filter(predicate)
+    .sort((left, right) => getTimeMs(left.createdAt) - getTimeMs(right.createdAt))
+    .at(-1)
+}
+
+function sortArtifactViews(artifacts: ArtifactView[]): ArtifactView[] {
+  const weight: Record<ArtifactKind, number> = {
+    preview: 0,
+    diff: 1,
+    review: 2,
+    zip: 3,
+    deploy: 4,
+    text: 5,
+    artifact: 6,
+  }
+  return artifacts.slice().sort((left, right) => {
+    const kindGap = weight[left.type] - weight[right.type]
+    if (kindGap !== 0) return kindGap
+    return getTimeMs(left.createdAt) - getTimeMs(right.createdAt)
+  })
+}
+
+function summarizeLatestArtifacts(artifacts: ArtifactView[]): ArtifactView[] {
+  const latest = [
+    latestArtifact(artifacts, artifact => artifact.type === 'preview' && Boolean(artifact.url)),
+    latestArtifact(artifacts, artifact => artifact.type === 'diff'),
+    latestArtifact(artifacts, artifact => artifact.type === 'review'),
+    latestArtifact(artifacts, artifact => artifact.type === 'zip'),
+    latestArtifact(artifacts, artifact => artifact.type === 'deploy'),
+    latestArtifact(artifacts, artifact => artifact.type === 'text'),
+    latestArtifact(artifacts, artifact => artifact.type === 'artifact'),
+  ].filter((artifact): artifact is ArtifactView => Boolean(artifact))
+
+  return sortArtifactViews(latest.filter((artifact, index, list) => list.findIndex(item => item.id === artifact.id) === index))
+}
+
+function buildArtifactViewsFromProjectState(envelope: ProjectStateEnvelope): ArtifactView[] {
+  const artifactsById = new Map((envelope.state.artifacts ?? []).map(artifact => [artifact.id, artifact]))
+  const changeSetsById = new Map((envelope.state.changeSets ?? []).map(changeSet => [changeSet.id, changeSet]))
+  const result: ArtifactView[] = []
+  const eventTypes = new Set(['artifact_created', 'preview_ready', 'zip_ready', 'change_set_created', 'review_verdict', 'delivery_validation_finished'])
+
+  for (const event of envelope.state.workflowEvents ?? []) {
+    const detail = event.event
+    if (!detail?.type || !eventTypes.has(detail.type)) continue
+
+    if ((detail.type === 'artifact_created' || detail.type === 'preview_ready' || detail.type === 'zip_ready') && detail.artifactId) {
+      const artifact = artifactsById.get(detail.artifactId)
+      if (artifact) {
+        pushUniqueArtifactView(result, {
+          ...mapProjectArtifactToArtifactView(artifact),
+          turnId: detail.turnId,
+          createdAt: artifact.createdAt ?? event.createdAt,
+        })
+      } else if (detail.type === 'preview_ready' && detail.previewUrl) {
+        pushUniqueArtifactView(result, {
+          id: detail.artifactId,
+          type: 'preview',
+          title: '本地预览',
+          summary: compactLongText(detail.previewUrl, 220, '预览已生成。'),
+          metric: 'preview ready',
+          icon: artifactIconForKind('preview'),
+          status: 'ready',
+          statusLabel: '可查看',
+          createdAt: event.createdAt,
+          turnId: detail.turnId,
+          agentId: detail.agentId,
+          url: absoluteArtifactUrl(detail.previewUrl),
+          source: 'artifact',
+        })
+      }
+      continue
+    }
+
+    if (detail.type === 'change_set_created' && detail.changeSetId) {
+      const changeSet = changeSetsById.get(detail.changeSetId)
+      if (changeSet) {
+        pushUniqueArtifactView(result, {
+          ...mapChangeSetToArtifactView(changeSet),
+          turnId: detail.turnId,
+          createdAt: changeSet.createdAt ?? event.createdAt,
+        })
+      } else {
+        pushUniqueArtifactView(result, {
+          id: detail.changeSetId,
+          type: 'diff',
+          title: '代码 Diff',
+          summary: compactLongText(detail.summary, 260, '已生成代码 Diff。'),
+          metric: detail.files?.length ? `${detail.files.length} files` : 'code diff',
+          icon: artifactIconForKind('diff'),
+          status: 'ready',
+          statusLabel: '可查看',
+          createdAt: event.createdAt,
+          turnId: detail.turnId,
+          files: normalizeChangedFiles(detail.files),
+          changeSetId: detail.changeSetId,
+          source: 'changeSet',
+        })
+      }
+      continue
+    }
+
+    const reviewArtifact = mapReviewEventToArtifactView(event)
+    if (reviewArtifact) {
+      pushUniqueArtifactView(result, reviewArtifact)
+    }
+  }
+
+  for (const message of envelope.state.messages ?? []) {
+    for (const artifact of message.artifacts ?? []) {
+      pushUniqueArtifactView(result, {
+        ...mapProjectArtifactToArtifactView(artifact),
+        turnId: message.turnId,
+        createdAt: artifact.createdAt ?? message.createdAt,
+      })
+    }
+  }
+
+  for (const artifact of envelope.state.artifacts ?? []) {
+    pushUniqueArtifactView(result, mapProjectArtifactToArtifactView(artifact))
+  }
+
+  return summarizeLatestArtifacts(result)
 }
 
 function getProjectAgentColor(agent?: ProjectAgent): string | undefined {
@@ -258,6 +630,47 @@ function getProjectAgentColor(agent?: ProjectAgent): string | undefined {
   if (agent?.modelProvider === 'claude') return '#7c3aed'
   if (agent?.modelProvider === 'mock') return '#64748b'
   return undefined
+}
+
+function isBuiltInAgentView(agent: Pick<ProjectAgent, 'model' | 'source'> | Pick<AgentView, 'model' | 'source'>): boolean {
+  if (agent.source === 'workspace') return false
+  return (agent.model ?? 'default') === 'default'
+}
+
+function getDefaultGroupProjectAgents(): ProjectAgent[] {
+  const byId = new Map(DEFAULT_GROUP_PROJECT_AGENTS.map(agent => [agent.id, agent]))
+  return DEFAULT_GROUP_AGENT_IDS.flatMap(agentId => {
+    const agent = byId.get(agentId)
+    return agent ? [{ ...agent }] : []
+  })
+}
+
+function mapProjectAgentToAgentView(agent: ProjectAgent, index: number): AgentView {
+  const fallback = agents.find(item => item.id === agent.id)
+  const provider = agent.modelProvider === 'codex' || agent.modelProvider === 'mock' || agent.modelProvider === 'claude'
+    ? agent.modelProvider
+    : fallback?.provider ?? 'mock'
+  const model = agent.model ?? 'default'
+  const color = getProjectAgentColor(agent) ?? fallback?.color ?? ['#7c3aed', '#2563eb', '#10b981', '#f59e0b'][index % 4]
+  return {
+    id: agent.id,
+    name: agent.name ?? fallback?.name ?? agent.id,
+    role: agent.role ?? agent.description ?? agent.whenToUse ?? fallback?.role ?? '当前工作区 Agent',
+    provider,
+    status: fallback?.status ?? 'idle',
+    color,
+    skills: agent.skills?.length ? agent.skills : [isBuiltInAgentView(agent) ? '内置' : '自定义', provider],
+    source: agent.source,
+    workspaceId: agent.workspaceId,
+    conversationId: agent.conversationId,
+    model,
+    description: agent.description,
+    whenToUse: agent.whenToUse,
+    systemPrompt: agent.systemPrompt,
+    permissionMode: agent.permissionMode,
+    runtimePolicy: agent.runtimePolicy,
+    raw: agent,
+  }
 }
 
 function findProjectAgent(agentList: ProjectAgent[], agentId?: string): ProjectAgent | undefined {
@@ -284,6 +697,18 @@ function getUniqueProjectAgents(agentList: ProjectAgent[]): ProjectAgent[] {
     seen.add(key)
     return true
   })
+}
+
+function mergeProjectAgents(...agentLists: ProjectAgent[][]): ProjectAgent[] {
+  return getUniqueProjectAgents(agentLists.flat())
+}
+
+async function fetchAgentsForWorkspaces(workspaceItems: Workspace[]): Promise<ProjectAgent[]> {
+  const projectIds = Array.from(new Set(workspaceItems.map(workspace => workspace.projectId ?? workspace.id).filter(isNonEmptyString)))
+  if (projectIds.length === 0) return []
+
+  const results = await Promise.allSettled(projectIds.map(projectId => fetchProjectAgents(projectId)))
+  return mergeProjectAgents(...results.map(result => result.status === 'fulfilled' ? result.value : []))
 }
 
 function projectAgentMatchesWorkspace(agent: ProjectAgent, workspace: Workspace, conversationId?: string): boolean {
@@ -703,7 +1128,7 @@ function appendProcessStepToGroups(groups: ChatProcessGroup[], turnId: string, s
 function buildChatStateView(envelope: ProjectStateEnvelope): ChatStateView {
   const messages = (envelope.state.messages ?? []).map(mapProjectMessageToChatMessage)
   const processGroups = buildProcessGroups(envelope.state.workflowEvents ?? [])
-  const artifacts = (envelope.state.artifacts ?? []).slice(-4).map(mapProjectArtifactToArtifactView)
+  const artifacts = buildArtifactViewsFromProjectState(envelope)
 
   return createChatStateView({
     messages,
@@ -781,10 +1206,14 @@ export default function App() {
   })
   const [retryCount, setRetryCount] = useState(0)
   const [activeTab, setActiveTab] = useState<TabKey>('workbench')
+  const [agentEntryMode, setAgentEntryMode] = useState<AgentEntryMode>('global')
   const [appMenuOpen, setAppMenuOpen] = useState(false)
   const [workspaceList, setWorkspaceList] = useState<Workspace[]>(workspaces)
   const [pinnedWorkspaceList, setPinnedWorkspaceList] = useState<Workspace[]>(workspaces.filter(workspace => workspace.pinned).slice(0, 5))
   const [workbenchAgentList, setWorkbenchAgentList] = useState<ProjectAgent[]>([])
+  const [workspaceAgentRegistry, setWorkspaceAgentRegistry] = useState<ProjectAgent[]>([])
+  const [agentRegistryWorkspaceId, setAgentRegistryWorkspaceId] = useState('')
+  const [agentRegistryLoading, setAgentRegistryLoading] = useState(false)
   const [workbenchLoading, setWorkbenchLoading] = useState(false)
   const [loadingMoreWorkspaces, setLoadingMoreWorkspaces] = useState(false)
   const [workbenchPage, setWorkbenchPage] = useState<WorkbenchPageState>({
@@ -811,11 +1240,20 @@ export default function App() {
     return Array.from(byId.values())
   }, [pinnedWorkspaceList, workspaceList])
   const activeWorkspace = knownWorkspaceList.find(workspace => workspace.id === activeWorkspaceId) ?? knownWorkspaceList[0] ?? workspaces[0]
+  const defaultAgentRegistry = useMemo(() => getDefaultGroupProjectAgents(), [])
+  const isWorkspaceAgentPage = activeTab === 'agents' && agentEntryMode === 'workspace'
+  const canCreateAgent = isWorkspaceAgentPage && activeWorkspace.kind === 'group'
+  const currentAgentProjectId = activeWorkspace.projectId ?? activeWorkspace.id
+  const agentRegistryTitle = isWorkspaceAgentPage ? activeWorkspace.name : 'Agent Registry'
+  const agentScreenProjectAgents = isWorkspaceAgentPage && agentRegistryWorkspaceId === currentAgentProjectId
+    ? workspaceAgentRegistry
+    : defaultAgentRegistry
   const title = useMemo(() => {
     if (activeTab === 'workbench') return '工作台'
     if (activeTab === 'chat') return '对话'
+    if (agentEntryMode === 'workspace') return activeWorkspace.name
     return '我的 Agent'
-  }, [activeTab])
+  }, [activeTab, activeWorkspace.name, agentEntryMode])
   const retryBackendHealth = () => setRetryCount(count => count + 1)
 
   function showBackendRetryDialog(input: Omit<BackendRetryDialogState, 'visible'>) {
@@ -866,7 +1304,8 @@ export default function App() {
         })
       }
       const nextWorkspaces = overview.rooms.map(mapWorkbenchRoomToWorkspace)
-      setWorkbenchAgentList(overview.agents ?? [])
+      const scopedAgents = await fetchAgentsForWorkspaces(nextWorkspaces)
+      setWorkbenchAgentList(mergeProjectAgents(overview.agents ?? [], scopedAgents))
       const pinnedFromCurrentPage = nextWorkspaces.filter(item => item.pinned)
       setPinnedWorkspaceList(pinnedFromCurrentPage.slice(0, 5))
       setWorkspaceList(current => {
@@ -909,7 +1348,8 @@ export default function App() {
       const nextPinnedWorkspaces = overview.rooms
         .map(mapWorkbenchRoomToWorkspace)
         .filter(item => item.pinned)
-      setWorkbenchAgentList(overview.agents ?? [])
+      const scopedAgents = await fetchAgentsForWorkspaces(nextPinnedWorkspaces)
+      setWorkbenchAgentList(current => mergeProjectAgents(current, overview.agents ?? [], scopedAgents))
       setPinnedWorkspaceList(nextPinnedWorkspaces.slice(0, 5))
     } catch {
       setPinnedWorkspaceList(current => current)
@@ -960,12 +1400,45 @@ export default function App() {
     }
   }
 
-  function showBackendResponseDialog(title: string, payload: BusinessProject) {
+  function showBackendResponseDialog(title: string, payload: unknown) {
     setBackendResponseDialog({
       visible: true,
       title,
       body: JSON.stringify(payload, null, 2),
     })
+  }
+
+  async function openActiveWorkspaceAgents() {
+    const projectId = activeWorkspace.projectId ?? activeWorkspace.id
+    setAgentEntryMode('workspace')
+    setActiveTab('agents')
+    setAgentRegistryLoading(true)
+    setAgentRegistryWorkspaceId(projectId)
+    setWorkspaceAgentRegistry([])
+
+    try {
+      const nextAgents = await fetchProjectAgents(projectId)
+      setWorkspaceAgentRegistry(nextAgents)
+      showBackendResponseDialog('当前工作区 Agent 响应体', {
+        request: {
+          method: 'GET',
+          url: `/api/projects/${projectId}/agents`,
+        },
+        response: nextAgents,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '当前工作区 Agent 加载失败。'
+      showBackendRetryDialog({
+        title: 'Agent 加载失败',
+        message: '无法从当前工作区接口读取 Agent，请稍后重试。',
+        detail: message,
+        onRetry: () => {
+          void openActiveWorkspaceAgents()
+        },
+      })
+    } finally {
+      setAgentRegistryLoading(false)
+    }
   }
 
   async function handleUpdateWorkspaceMetadata(workspace: Workspace, input: { pinned?: boolean; archived?: boolean }, options?: { showResponse?: boolean }) {
@@ -1107,11 +1580,24 @@ export default function App() {
             <>
           <View style={[styles.header, activeTab === 'agents' && styles.agentHeader, activeTab === 'chat' && styles.codeHeader]}>
             <View style={[styles.headerLeft, activeTab === 'agents' && styles.agentHeaderLeft, activeTab === 'chat' && styles.codeHeaderLeft, tightChatHeader && styles.chatHeaderLeftTight]}>
-              <Pressable style={styles.headerAvatarButton} onPress={() => setAppMenuOpen(true)}>
-                <AgentGlyph agentId="orchestrator" size={mobileScale.headerAvatar} />
+              <Pressable
+                style={[styles.headerAvatarButton, isWorkspaceAgentPage && styles.headerBackButton]}
+                onPress={() => {
+                  if (isWorkspaceAgentPage) {
+                    setActiveTab('chat')
+                    return
+                  }
+                  setAppMenuOpen(true)
+                }}
+              >
+                {isWorkspaceAgentPage ? (
+                  <MaterialCommunityIcons name="chevron-left" size={mobileScale.headerIcon + 6} color="#0f172a" />
+                ) : (
+                  <AgentGlyph agentId="orchestrator" size={mobileScale.headerAvatar} />
+                )}
               </Pressable>
               <View style={styles.headerCopy}>
-                {activeTab === 'chat' ? null : <Text style={styles.eyebrow}>AGENTHUB</Text>}
+                {activeTab === 'chat' || isWorkspaceAgentPage ? null : <Text style={styles.eyebrow}>AGENTHUB</Text>}
                 <Text style={[styles.headerTitle, { fontSize: mobileScale.pageTitle }, activeTab === 'chat' && styles.chatHeaderTitle, activeTab === 'chat' && { fontSize: mobileScale.chatTitle }]} numberOfLines={1}>
                   {activeTab === 'chat' ? activeWorkspace.name : title}
                 </Text>
@@ -1133,8 +1619,10 @@ export default function App() {
             </View>
             {activeTab === 'chat' ? (
               <View style={styles.chatHeaderActions}>
-                <GlassCard compact style={styles.codeHeaderButton}>
-                  <MaterialCommunityIcons name="refresh" size={mobileScale.headerIcon - 2} color="#0f172a" />
+                <GlassCard compact style={[styles.codeHeaderButton, styles.chatAgentManageButton]}>
+                  <Pressable style={styles.headerButtonPressable} onPress={() => void openActiveWorkspaceAgents()}>
+                    <MaterialCommunityIcons name="robot-outline" size={mobileScale.headerIcon - 2} color="#2563eb" />
+                  </Pressable>
                 </GlassCard>
               </View>
             ) : activeTab === 'workbench' ? (
@@ -1157,7 +1645,7 @@ export default function App() {
                   </Pressable>
                 </GlassCard>
               </View>
-            ) : activeTab === 'agents' ? (
+            ) : activeTab === 'agents' && canCreateAgent ? (
               <View style={styles.agentHeaderActions}>
                 <GlassCard compact style={[styles.agentCreateButton, layoutTier === 'compact' && styles.agentCreateButtonCompact]}>
                   <Pressable style={styles.agentCreatePressable} onPress={() => setAgentCreateSignal(signal => signal + 1)}>
@@ -1165,11 +1653,8 @@ export default function App() {
                     <Text style={styles.agentCreateText}>新建</Text>
                   </Pressable>
                 </GlassCard>
-                <GlassCard compact style={styles.headerAction}>
-                  <MaterialCommunityIcons name="cog-outline" size={mobileScale.headerIcon - 2} color="#0f172a" />
-                </GlassCard>
               </View>
-            ) : (
+            ) : activeTab === 'agents' ? null : (
               <GlassCard compact style={styles.headerAction}>
                 <View style={styles.bellWrap}>
                   <MaterialCommunityIcons name="bell-outline" size={20} color="#1f2937" />
@@ -1243,7 +1728,20 @@ export default function App() {
                   }}
                 />
               ) : null}
-              {activeTab === 'agents' ? <AgentScreen layoutTier={layoutTier} mobileScale={mobileScale} createSignal={agentCreateSignal} /> : null}
+              {activeTab === 'agents' ? (
+                <AgentScreen
+                  layoutTier={layoutTier}
+                  mobileScale={mobileScale}
+                  createSignal={agentCreateSignal}
+                  registryTitle={agentRegistryTitle}
+                  canCreate={canCreateAgent}
+                  workspace={activeWorkspace}
+                  projectAgents={agentScreenProjectAgents}
+                  loading={isWorkspaceAgentPage && agentRegistryLoading}
+                  onShowResponse={showBackendResponseDialog}
+                  onShowError={showBackendRetryDialog}
+                />
+              ) : null}
             </ScrollView>
           )}
 
@@ -1253,6 +1751,9 @@ export default function App() {
             mobileScale={mobileScale}
             onClose={() => setAppMenuOpen(false)}
             onChange={nextTab => {
+              if (nextTab === 'agents') {
+                setAgentEntryMode('global')
+              }
               setActiveTab(nextTab)
               setAppMenuOpen(false)
             }}
@@ -1304,10 +1805,28 @@ type WorkbenchFocus = 'workspaces' | 'running' | 'artifacts'
 type WorkspaceDropdownKey = 'status' | 'sortBy' | 'sortDirection'
 type AgentFilter = 'all' | 'running' | 'reviewing' | 'idle' | 'builtin'
 type ArtifactStatus = 'generating' | 'partial' | 'ready' | 'failed'
+type ArtifactKind = 'preview' | 'diff' | 'review' | 'zip' | 'deploy' | 'text' | 'artifact'
+type DeliverySurface = 'build' | 'deployment'
 
-type ArtifactView = Artifact & {
+type ArtifactView = Omit<Artifact, 'type' | 'icon'> & {
+  type: ArtifactKind
+  icon: IconName
   status: ArtifactStatus
   statusLabel: string
+  createdAt?: string
+  turnId?: string
+  agentId?: string
+  url?: string
+  deliverySurface?: DeliverySurface
+  verdict?: string
+  issues?: string[]
+  detailText?: string
+  patch?: string
+  files?: ProjectChangedFile[]
+  fileCount?: number
+  byteLength?: number
+  changeSetId?: string
+  source?: 'artifact' | 'changeSet' | 'review' | 'delivery'
 }
 
 function BackendGate({
@@ -1827,6 +2346,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
   const [chatState, setChatState] = useState<ChatStateView>(() => createEmptyChatState())
   const [draftMessage, setDraftMessage] = useState('')
   const [composerInputHeight, setComposerInputHeight] = useState(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
+  const [composerInputScrollable, setComposerInputScrollable] = useState(false)
   const scrollToBottomButtonBottom = composerSafePadding + Math.max(56, composerInputHeight + CHAT_COMPOSER_VERTICAL_PADDING * 2) + 12
   const [chatLoading, setChatLoading] = useState(false)
   const [chatError, setChatError] = useState('')
@@ -1835,6 +2355,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
   const [draftSelection, setDraftSelection] = useState({ start: 0, end: 0 })
   const [selectedMentionAgentId, setSelectedMentionAgentId] = useState<string | undefined>()
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const [selectedArtifact, setSelectedArtifact] = useState<ArtifactView | null>(null)
   const chatScrollRef = useRef<ScrollView | null>(null)
   const streamRef = useRef<ProjectMessageStream | null>(null)
   const lastFailedMessageRef = useRef<FailedChatSend | null>(null)
@@ -1854,6 +2375,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
     setDraftMessage(nextText)
     if (!nextText) {
       setComposerInputHeight(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
+      setComposerInputScrollable(false)
     }
     if (selectedMentionAgentId && findMentionedProjectAgentId(nextText, visibleChatAgents) !== selectedMentionAgentId) {
       setSelectedMentionAgentId(undefined)
@@ -1907,6 +2429,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
     setExpandedProcessIds(new Set())
     setDraftMessage('')
     setComposerInputHeight(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
+    setComposerInputScrollable(false)
     setDraftSelection({ start: 0, end: 0 })
     setSelectedMentionAgentId(undefined)
     setShowScrollToBottom(false)
@@ -2015,6 +2538,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
     if (!retryPayload) {
       setDraftMessage('')
       setComposerInputHeight(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
+      setComposerInputScrollable(false)
       setDraftSelection({ start: 0, end: 0 })
       setSelectedMentionAgentId(undefined)
     }
@@ -2169,15 +2693,25 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
 
         {chatState.artifacts.length > 0 ? (
           <GlassCard style={styles.currentArtifactsPanel}>
-            <Text style={styles.currentArtifactsTitle}>当前产出</Text>
-            <View style={[styles.currentArtifactGrid, isCompact && styles.currentArtifactGridCompact]}>
+            <View style={styles.currentArtifactsHead}>
+              <Text style={styles.currentArtifactsTitle}>最新产物</Text>
+              <Text style={styles.currentArtifactsSubtitle}>来自本工作区响应体</Text>
+            </View>
+            <View style={styles.currentArtifactGrid}>
               {chatState.artifacts.map(item => (
-                <CurrentArtifactCard key={item.id} artifact={item} mobileScale={mobileScale} onPress={() => undefined} />
+                <CurrentArtifactCard key={item.id} artifact={item} mobileScale={mobileScale} onPress={() => setSelectedArtifact(item)} />
               ))}
             </View>
           </GlassCard>
         ) : null}
       </ScrollView>
+
+      <ArtifactDetailModal
+        artifact={selectedArtifact}
+        projectId={projectId}
+        onClose={() => setSelectedArtifact(null)}
+        onRefresh={() => void loadChatState()}
+      />
 
       {showScrollToBottom && !showMentionMenu ? (
         <Pressable
@@ -2217,18 +2751,20 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
             value={draftMessage}
             onChangeText={handleDraftMessageChange}
             onContentSizeChange={event => {
-              const nextHeight = Math.min(
-                CHAT_COMPOSER_INPUT_MAX_HEIGHT,
-                Math.max(CHAT_COMPOSER_INPUT_MIN_HEIGHT, Math.ceil(event.nativeEvent.contentSize.height)),
-              )
+              const measuredContentHeight = Math.ceil(event.nativeEvent.contentSize.height)
+              const measuredInputHeight = Platform.OS === 'ios'
+                ? measuredContentHeight + CHAT_COMPOSER_INPUT_VERTICAL_PADDING * 2
+                : measuredContentHeight
+              const nextHeight = Math.min(CHAT_COMPOSER_INPUT_MAX_HEIGHT, Math.max(CHAT_COMPOSER_INPUT_MIN_HEIGHT, measuredInputHeight))
               setComposerInputHeight(nextHeight)
+              setComposerInputScrollable(measuredContentHeight > CHAT_COMPOSER_INPUT_CONTENT_MAX_HEIGHT)
             }}
             onSelectionChange={event => setDraftSelection(event.nativeEvent.selection)}
             style={[styles.chatComposerInput, { height: composerInputHeight }]}
             editable={!composerDisabled}
             multiline
-            scrollEnabled={composerInputHeight >= CHAT_COMPOSER_INPUT_MAX_HEIGHT}
-            textAlignVertical={composerInputHeight > CHAT_COMPOSER_INPUT_MIN_HEIGHT ? 'top' : 'center'}
+            scrollEnabled={composerInputScrollable}
+            textAlignVertical="top"
           />
           <Pressable style={[styles.chatSendButton, sendButtonDisabled && styles.chatSendButtonDisabled]} onPress={() => void sendMessage()} disabled={sendButtonDisabled}>
             <MaterialCommunityIcons name={composerDisabled ? 'progress-clock' : 'arrow-up'} size={25} color="#fff" />
@@ -2450,15 +2986,13 @@ function LegacyChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspaceP
 
         <GlassCard style={styles.currentArtifactsPanel}>
           <Text style={styles.currentArtifactsTitle}>当前产出（工程师）</Text>
-          <View style={[styles.currentArtifactGrid, isCompact && styles.currentArtifactGridCompact]}>
+          <View style={styles.currentArtifactGrid}>
             {artifactViews.map(item => (
                 <CurrentArtifactCard
                   key={item.id}
                   artifact={item}
                   mobileScale={mobileScale}
-                onPress={() => {
-                  if (item.status === 'ready' || item.status === 'partial') setSelectedArtifact(item)
-                }}
+                onPress={() => setSelectedArtifact(item)}
               />
             ))}
           </View>
@@ -2477,21 +3011,25 @@ function LegacyChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspaceP
           <MaterialCommunityIcons name="arrow-up" size={25} color="#fff" />
         </Pressable>
       </GlassCard>
-      <ArtifactDetailModal artifact={selectedArtifact} onClose={() => setSelectedArtifact(null)} />
+      <ArtifactDetailModal
+        artifact={selectedArtifact}
+        projectId={workspace.projectId ?? workspace.id}
+        onClose={() => setSelectedArtifact(null)}
+      />
     </KeyboardAvoidingView>
   )
 }
 
 function CurrentArtifactCard({ artifact, mobileScale, onPress }: { artifact: ArtifactView; mobileScale: MobileScale; onPress: () => void }) {
-  const tone = artifact.status === 'ready' ? 'green' : artifact.status === 'partial' ? 'blue' : artifact.status === 'failed' ? 'muted' : 'muted'
-  const disabled = artifact.status === 'generating' || artifact.status === 'failed'
+  const tone = artifact.status === 'ready' ? 'green' : artifact.status === 'partial' ? 'blue' : artifact.status === 'failed' ? 'red' : 'muted'
+  const disabled = artifact.status === 'generating'
   return (
     <Pressable style={[styles.currentArtifactCard, { minHeight: mobileScale.artifactCardMinHeight }, disabled && styles.currentArtifactCardDisabled]} onPress={onPress} disabled={disabled}>
-      <MaterialCommunityIcons name={artifact.icon} size={mobileScale.headerIcon} color={tone === 'green' ? '#10b981' : tone === 'muted' ? '#334155' : '#5572ff'} />
-      <Text style={styles.currentArtifactTitle}>{artifact.title}</Text>
-      <Text style={[styles.currentArtifactMeta, tone === 'green' && styles.currentArtifactMetaGreen, tone === 'muted' && styles.currentArtifactMetaMuted]}>{artifact.metric}</Text>
-      <View style={[styles.artifactStatusBadge, artifact.status === 'ready' && styles.artifactStatusReady, artifact.status === 'partial' && styles.artifactStatusPartial]}>
-        <Text style={[styles.artifactStatusText, artifact.status === 'ready' && styles.artifactStatusReadyText, artifact.status === 'partial' && styles.artifactStatusPartialText]}>{artifact.statusLabel}</Text>
+      <MaterialCommunityIcons name={artifact.icon} size={mobileScale.headerIcon} color={tone === 'green' ? '#10b981' : tone === 'red' ? '#dc2626' : tone === 'muted' ? '#334155' : '#5572ff'} />
+      <Text style={styles.currentArtifactTitle} numberOfLines={2}>{artifact.title}</Text>
+      <Text style={[styles.currentArtifactMeta, tone === 'green' && styles.currentArtifactMetaGreen, tone === 'red' && styles.currentArtifactMetaFailed, tone === 'muted' && styles.currentArtifactMetaMuted]} numberOfLines={2}>{artifact.metric}</Text>
+      <View style={[styles.artifactStatusBadge, artifact.status === 'ready' && styles.artifactStatusReady, artifact.status === 'partial' && styles.artifactStatusPartial, artifact.status === 'failed' && styles.artifactStatusFailed]}>
+        <Text style={[styles.artifactStatusText, artifact.status === 'ready' && styles.artifactStatusReadyText, artifact.status === 'partial' && styles.artifactStatusPartialText, artifact.status === 'failed' && styles.artifactStatusFailedText]}>{artifact.statusLabel}</Text>
       </View>
     </Pressable>
   )
@@ -2776,14 +3314,114 @@ function WorkspacePanelModal({
   )
 }
 
-function ArtifactDetailModal({ artifact, onClose }: { artifact: ArtifactView | null; onClose: () => void }) {
+function ArtifactDetailModal({
+  artifact,
+  projectId,
+  onClose,
+  onRefresh,
+}: {
+  artifact: ArtifactView | null
+  projectId: string
+  onClose: () => void
+  onRefresh?: () => void
+}) {
+  const [deliverySummary, setDeliverySummary] = useState<ProjectDeliverySummary | undefined>()
+  const [previewCapability, setPreviewCapability] = useState<ProjectPreviewCapability | undefined>()
+  const [artifactAction, setArtifactAction] = useState<'delivery' | 'preview' | 'save' | 'build' | 'deploy' | 'apply' | undefined>()
+  const [artifactError, setArtifactError] = useState('')
+  const [artifactNotice, setArtifactNotice] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadArtifactContext() {
+      if (!artifact) return
+      setArtifactError('')
+      setArtifactNotice('')
+      try {
+        const [delivery, capability] = await Promise.all([
+          fetchProjectDeliverySummary(projectId).catch(() => undefined),
+          fetchProjectPreviewCapability(projectId).catch(() => undefined),
+        ])
+        if (cancelled) return
+        setDeliverySummary(delivery)
+        setPreviewCapability(capability)
+      } catch {
+        if (!cancelled) {
+          setDeliverySummary(undefined)
+          setPreviewCapability(undefined)
+        }
+      }
+    }
+
+    void loadArtifactContext()
+    return () => {
+      cancelled = true
+    }
+  }, [artifact?.id, projectId])
+
   if (!artifact) return null
 
+  const previewTargetUrl =
+    artifact.url ??
+    absoluteArtifactUrl(previewCapability?.targets.find(target => target.path === previewCapability.defaultTargetPath)?.url) ??
+    absoluteArtifactUrl(previewCapability?.targets[0]?.url)
+  const sourceUrl = artifact.type === 'zip'
+    ? artifact.url
+    : absoluteArtifactUrl(deliverySummary?.sourceArchive.url)
+  const buildUrl = absoluteArtifactUrl(deliverySummary?.build.url)
+  const deploymentUrl = artifact.type === 'deploy'
+    ? artifact.url
+    : absoluteArtifactUrl(deliverySummary?.deployment.url)
   const statusRows = [
-    { label: '最近版本', value: 'v0.1.0 已生成', icon: 'source-branch' as IconName },
-    { label: '最近构建', value: '成功 · 只读摘要', icon: 'hammer-wrench' as IconName },
-    { label: '最近部署', value: '未触发 · 请回 Web', icon: 'cloud-upload-outline' as IconName },
+    {
+      label: '源码快照',
+      value: deliverySummary?.sourceArchive.summary ?? '暂未读取',
+      icon: 'source-branch' as IconName,
+    },
+    {
+      label: '构建产物',
+      value: deliverySummary?.build.summary ?? previewCapability?.build?.summary ?? '暂未读取',
+      icon: 'hammer-wrench' as IconName,
+    },
+    {
+      label: '本地部署',
+      value: deliverySummary?.deployment.summary ?? '暂未读取',
+      icon: 'cloud-upload-outline' as IconName,
+    },
   ]
+  const files = artifact.files ?? []
+  const issues = artifact.issues ?? []
+
+  async function runArtifactAction(action: NonNullable<typeof artifactAction>, task: () => Promise<unknown>, notice: string) {
+    setArtifactAction(action)
+    setArtifactError('')
+    setArtifactNotice('')
+    try {
+      await task()
+      const nextDelivery = await fetchProjectDeliverySummary(projectId).catch(() => undefined)
+      const nextCapability = await fetchProjectPreviewCapability(projectId).catch(() => undefined)
+      setDeliverySummary(nextDelivery)
+      setPreviewCapability(nextCapability)
+      setArtifactNotice(notice)
+      onRefresh?.()
+    } catch (error) {
+      setArtifactError(error instanceof Error ? error.message : '操作失败。')
+    } finally {
+      setArtifactAction(undefined)
+    }
+  }
+
+  function openUrl(url?: string) {
+    if (!url) return
+    void Linking.openURL(url)
+  }
+
+  function copyText(value?: string) {
+    if (!value) return
+    void Clipboard.setStringAsync(value)
+    setArtifactNotice('已复制到剪贴板')
+  }
 
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
@@ -2816,39 +3454,100 @@ function ArtifactDetailModal({ artifact, onClose }: { artifact: ArtifactView | n
               <Text style={styles.artifactHeroSummary}>{artifact.summary}</Text>
             </View>
 
-            <View style={styles.artifactSection}>
-              <Text style={styles.sectionTitle}>预览摘要</Text>
-              <Text style={styles.bodyText}>预览状态 ready，可在 Web 工作台查看完整页面；App 仅展示摘要与入口。</Text>
-            </View>
+            {artifactNotice ? (
+              <View style={styles.artifactNotice}>
+                <MaterialCommunityIcons name="check-circle-outline" size={18} color="#059669" />
+                <Text style={styles.artifactNoticeText}>{artifactNotice}</Text>
+              </View>
+            ) : null}
+            {artifactError ? (
+              <View style={[styles.artifactNotice, styles.artifactNoticeError]}>
+                <MaterialCommunityIcons name="alert-circle-outline" size={18} color="#dc2626" />
+                <Text style={[styles.artifactNoticeText, styles.artifactNoticeErrorText]}>{artifactError}</Text>
+              </View>
+            ) : null}
 
-            <View style={styles.artifactSection}>
-              <Text style={styles.sectionTitle}>文件摘要</Text>
-              {codeFiles.slice(0, 3).map(file => (
-                <View key={file.path} style={styles.artifactFileRow}>
-                  <MaterialCommunityIcons name="file-code-outline" size={18} color="#2563eb" />
-                  <View style={styles.artifactFileCopy}>
-                    <Text style={styles.cardTitle} numberOfLines={1}>{file.path}</Text>
-                    <Text style={styles.bodyText}>{file.language} · {file.changed} · {file.lines || 'asset'} 行</Text>
-                  </View>
+            {previewTargetUrl ? (
+              <View style={styles.artifactSection}>
+                <View style={styles.artifactSectionHeader}>
+                  <Text style={styles.sectionTitle}>预览</Text>
+                  <Pressable style={styles.artifactSmallButton} onPress={() => openUrl(previewTargetUrl)}>
+                    <Text style={styles.artifactSmallButtonText}>外部打开</Text>
+                    <MaterialCommunityIcons name="open-in-new" size={14} color="#2563eb" />
+                  </Pressable>
                 </View>
-              ))}
-            </View>
+                <View style={styles.artifactWebPreview}>
+                  <WebView source={{ uri: previewTargetUrl }} style={styles.artifactWebView} startInLoadingState />
+                </View>
+                <Text style={styles.bodyText} numberOfLines={2}>{previewTargetUrl}</Text>
+              </View>
+            ) : null}
 
-            <View style={styles.artifactSectionGrid}>
-              <View style={styles.artifactMiniPanel}>
-                <Text style={styles.sectionTitle}>Diff</Text>
-                <Text style={styles.artifactHeroMetric}>+428 / -0</Text>
-                <Text style={styles.bodyText}>关键改动集中在 App.tsx 与 mock 数据。</Text>
+            {artifact.type === 'diff' ? (
+              <View style={styles.artifactSection}>
+                <View style={styles.artifactSectionHeader}>
+                  <Text style={styles.sectionTitle}>代码 Diff</Text>
+                  {artifact.changeSetId ? (
+                    <Pressable
+                      style={styles.artifactSmallButton}
+                      onPress={() => runArtifactAction(
+                        'apply',
+                        () => applyProjectChangeSet(projectId, artifact.changeSetId as string),
+                        '已提交应用 Diff 请求',
+                      )}
+                      disabled={artifactAction === 'apply'}
+                    >
+                      <Text style={styles.artifactSmallButtonText}>{artifactAction === 'apply' ? '应用中' : '应用'}</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                {files.length ? (
+                  <View style={styles.artifactFileList}>
+                    {files.slice(0, 8).map(file => (
+                      <View key={file.path} style={styles.artifactFileRow}>
+                        <MaterialCommunityIcons name="file-code-outline" size={18} color="#2563eb" />
+                        <View style={styles.artifactFileCopy}>
+                          <Text style={styles.cardTitle} numberOfLines={1}>{file.path}</Text>
+                          <Text style={styles.bodyText}>{file.status} · +{file.additions ?? 0} / -{file.deletions ?? 0}</Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+                {artifact.patch ? (
+                  <Pressable style={styles.artifactCodeBlock} onPress={() => copyText(artifact.patch)}>
+                    <Text style={styles.artifactCodeText}>{artifact.patch}</Text>
+                  </Pressable>
+                ) : null}
               </View>
-              <View style={styles.artifactMiniPanel}>
-                <Text style={styles.sectionTitle}>Review</Text>
-                <Text style={styles.artifactHeroMetric}>pass</Text>
-                <Text style={styles.bodyText}>当前无阻塞项，建议继续真机验证。</Text>
+            ) : null}
+
+            {artifact.type === 'review' ? (
+              <View style={styles.artifactSection}>
+                <Text style={styles.sectionTitle}>审查 / 校验</Text>
+                {artifact.verdict ? <Text style={styles.artifactHeroMetric}>{artifact.verdict}</Text> : null}
+                {issues.length ? (
+                  issues.map(issue => (
+                    <View key={issue} style={styles.artifactIssueRow}>
+                      <MaterialCommunityIcons name="alert-circle-outline" size={17} color="#f59e0b" />
+                      <Text style={styles.bodyText}>{issue}</Text>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.bodyText}>这一轮没有返回额外问题。</Text>
+                )}
               </View>
-            </View>
+            ) : null}
+
+            {(artifact.type === 'text' || artifact.type === 'artifact' || artifact.type === 'deploy') && artifact.detailText ? (
+              <View style={styles.artifactSection}>
+                <Text style={styles.sectionTitle}>正文</Text>
+                <Text style={styles.artifactHeroSummary}>{artifact.detailText}</Text>
+              </View>
+            ) : null}
 
             <View style={styles.artifactSection}>
-              <Text style={styles.sectionTitle}>交付状态只读摘要</Text>
+              <Text style={styles.sectionTitle}>交付状态</Text>
               {statusRows.map(row => (
                 <View key={row.label} style={styles.deliveryStatusRow}>
                   <MaterialCommunityIcons name={row.icon} size={19} color="#475569" />
@@ -2856,6 +3555,75 @@ function ArtifactDetailModal({ artifact, onClose }: { artifact: ArtifactView | n
                   <Text style={styles.deliveryStatusValue}>{row.value}</Text>
                 </View>
               ))}
+              <View style={styles.artifactActionGrid}>
+                <Pressable
+                  style={styles.deliveryOutlineButton}
+                  onPress={() => runArtifactAction(
+                    'save',
+                    () => createProjectVersion(projectId, `App 保存源码版本 ${new Date().toLocaleString('zh-CN', { hour12: false })}`),
+                    '源码版本已保存',
+                  )}
+                  disabled={Boolean(artifactAction)}
+                >
+                  <Text style={styles.deliveryOutlineText}>{artifactAction === 'save' ? '保存中' : '保存版本'}</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.deliveryPrimaryButton}
+                  onPress={() => runArtifactAction(
+                    'build',
+                    async () => {
+                      const version = deliverySummary?.currentVersion?.versionId
+                        ? { versionId: deliverySummary.currentVersion.versionId }
+                        : await createProjectVersion(projectId, 'App 自动保存构建版本')
+                      return buildProjectVersion(projectId, version.versionId)
+                    },
+                    '构建请求已完成',
+                  )}
+                  disabled={Boolean(artifactAction)}
+                >
+                  <Text style={styles.deliveryPrimaryText}>{artifactAction === 'build' ? '构建中' : '开始构建'}</Text>
+                </Pressable>
+              </View>
+              <View style={styles.artifactActionGrid}>
+                <Pressable
+                  style={styles.deliveryGreenButton}
+                  onPress={() => runArtifactAction(
+                    'deploy',
+                    async () => {
+                      const version = deliverySummary?.currentVersion?.versionId
+                        ? { versionId: deliverySummary.currentVersion.versionId }
+                        : await createProjectVersion(projectId, 'App 自动保存部署版本')
+                      if (deliverySummary?.build.status !== 'ready') {
+                        await buildProjectVersion(projectId, version.versionId)
+                      }
+                      return deployProjectVersion(projectId, version.versionId)
+                    },
+                    '部署请求已完成',
+                  )}
+                  disabled={Boolean(artifactAction)}
+                >
+                  <Text style={styles.deliveryGreenText}>{artifactAction === 'deploy' ? '部署中' : '部署'}</Text>
+                  <MaterialCommunityIcons name="cloud-upload-outline" size={15} color="#22c59e" />
+                </Pressable>
+                <Pressable
+                  style={styles.deliveryOutlineButton}
+                  onPress={() => runArtifactAction(
+                    'preview',
+                    () => triggerProjectPreviewBuild(projectId, true),
+                    '预览构建已刷新',
+                  )}
+                  disabled={Boolean(artifactAction)}
+                >
+                  <Text style={styles.deliveryOutlineText}>{artifactAction === 'preview' ? '刷新中' : '刷新预览'}</Text>
+                </Pressable>
+              </View>
+              {(sourceUrl || buildUrl || deploymentUrl) ? (
+                <View style={styles.artifactLinkRow}>
+                  {sourceUrl ? <Pressable style={styles.artifactLinkButton} onPress={() => openUrl(sourceUrl)}><Text style={styles.artifactLinkText}>源码包</Text></Pressable> : null}
+                  {buildUrl ? <Pressable style={styles.artifactLinkButton} onPress={() => openUrl(buildUrl)}><Text style={styles.artifactLinkText}>构建产物</Text></Pressable> : null}
+                  {deploymentUrl ? <Pressable style={styles.artifactLinkButton} onPress={() => openUrl(deploymentUrl)}><Text style={styles.artifactLinkText}>部署入口</Text></Pressable> : null}
+                </View>
+              ) : null}
             </View>
           </ScrollView>
         </GlassCard>
@@ -3001,46 +3769,151 @@ function DeliveryStatusCard({ icon, title, status, body, time, tone }: { icon: I
   )
 }
 
-function AgentScreen({ layoutTier, mobileScale, createSignal }: { layoutTier: LayoutTier; mobileScale: MobileScale; createSignal: number }) {
+function AgentScreen({
+  layoutTier,
+  mobileScale,
+  createSignal,
+  registryTitle,
+  canCreate,
+  workspace,
+  projectAgents,
+  loading,
+  onShowResponse,
+  onShowError,
+}: {
+  layoutTier: LayoutTier
+  mobileScale: MobileScale
+  createSignal: number
+  registryTitle: string
+  canCreate: boolean
+  workspace: Workspace
+  projectAgents: ProjectAgent[]
+  loading: boolean
+  onShowResponse: (title: string, payload: unknown) => void
+  onShowError: (input: Omit<BackendRetryDialogState, 'visible'>) => void
+}) {
   const showFullRegistry = layoutTier === 'wide'
-  const [visibleAgents, setVisibleAgents] = useState<Agent[]>(agents)
-  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
-  const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
+  const loadedAgents = useMemo(
+    () => projectAgents.map(mapProjectAgentToAgentView),
+    [projectAgents],
+  )
+  const [visibleAgents, setVisibleAgents] = useState<AgentView[]>(loadedAgents)
+  const [selectedAgent, setSelectedAgent] = useState<AgentView | null>(null)
+  const [editingAgent, setEditingAgent] = useState<AgentView | null>(null)
   const [agentConfigOpen, setAgentConfigOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<AgentFilter>('all')
   const runningCount = visibleAgents.filter(agent => agent.status !== 'idle').length
-  const builtinCount = visibleAgents.filter(agent => agent.id === 'orchestrator' || agent.id === 'engineer').length
+  const builtinCount = visibleAgents.filter(isBuiltInAgentView).length
   const agentSearch = useMemo(
-    () => new Fuse<Agent>(visibleAgents, { keys: ['name', 'role', 'provider', 'skills'], threshold: 0.34 }),
+    () => new Fuse<AgentView>(visibleAgents, { keys: ['name', 'role', 'provider', 'skills', 'source', 'model', 'description', 'whenToUse'], threshold: 0.34 }),
     [visibleAgents],
   )
   const searchedAgents = query.trim() ? agentSearch.search(query.trim()).map(result => result.item) : visibleAgents
   const filteredAgents = searchedAgents.filter(agent => {
     if (filter === 'all') return true
-    if (filter === 'builtin') return agent.id === 'orchestrator' || agent.id === 'engineer'
+    if (filter === 'builtin') return isBuiltInAgentView(agent)
     return agent.status === filter
   })
-  const deleteAgent = (agentId: string) => {
-    if (agentId === 'orchestrator' || agentId === 'engineer') return
-    setVisibleAgents(current => current.filter(agent => agent.id !== agentId))
-    if (selectedAgent?.id === agentId) setSelectedAgent(null)
-  }
-  const saveAgent = (nextAgent: Agent) => {
+  const refreshAgentFromResponse = (response: ProjectAgent) => {
     setVisibleAgents(current => {
-      const exists = current.some(agent => agent.id === nextAgent.id)
-      return exists ? current.map(agent => (agent.id === nextAgent.id ? nextAgent : agent)) : [nextAgent, ...current]
+      const nextAgentView = mapProjectAgentToAgentView(response, current.length)
+      return current.some(agent => agent.id === nextAgentView.id)
+        ? current.map(agent => (agent.id === nextAgentView.id ? nextAgentView : agent))
+        : [...current, nextAgentView]
     })
-    setSelectedAgent(null)
-    setAgentConfigOpen(false)
+  }
+  const createAgent = async (input: CreateProjectAgentInput) => {
+    if (!canCreate) return
+    const projectId = workspace.projectId ?? workspace.id
+    try {
+      const response = await createProjectAgent(projectId, input)
+      refreshAgentFromResponse(response)
+      setSelectedAgent(null)
+      setAgentConfigOpen(false)
+      onShowResponse('新建 Agent 响应体', {
+        request: {
+          method: 'POST',
+          url: `/api/projects/${projectId}/agents`,
+          body: input,
+        },
+        response,
+      })
+    } catch (error) {
+      onShowError({
+        title: '新建 Agent 失败',
+        message: '只有群聊工作区可以创建自定义 Agent，请确认接口状态后重试。',
+        detail: error instanceof Error ? error.message : '创建失败',
+        onRetry: () => {
+          void createAgent(input)
+        },
+      })
+    }
+  }
+  const deleteAgent = async (agent: AgentView) => {
+    if (isBuiltInAgentView(agent)) return
+    const projectId = workspace.projectId ?? workspace.id
+    try {
+      const response = await deleteProjectAgent(projectId, agent.id)
+      setVisibleAgents(current => current.filter(item => item.id !== agent.id))
+      if (selectedAgent?.id === agent.id) setSelectedAgent(null)
+      onShowResponse('删除 Agent 响应体', {
+        request: {
+          method: 'DELETE',
+          url: `/api/projects/${projectId}/agents/${agent.id}`,
+        },
+        response,
+      })
+    } catch (error) {
+      onShowError({
+        title: '删除 Agent 失败',
+        message: '只有自定义 Agent 可以删除，请确认接口状态后重试。',
+        detail: error instanceof Error ? error.message : '删除失败',
+        onRetry: () => {
+          void deleteAgent(agent)
+        },
+      })
+    }
+  }
+  const saveAgent = async (nextAgent: AgentView, input: UpdateProjectAgentInput) => {
+    if (isBuiltInAgentView(nextAgent)) return
+    const projectId = workspace.projectId ?? workspace.id
+    try {
+      const response = await updateProjectAgent(projectId, nextAgent.id, input)
+      refreshAgentFromResponse(response)
+      setSelectedAgent(null)
+      setAgentConfigOpen(false)
+      onShowResponse('编辑 Agent 响应体', {
+        request: {
+          method: 'PATCH',
+          url: `/api/projects/${projectId}/agents/${nextAgent.id}`,
+          body: input,
+        },
+        response,
+      })
+    } catch (error) {
+      onShowError({
+        title: '编辑 Agent 失败',
+        message: '无法保存当前自定义 Agent，请稍后重试。',
+        detail: error instanceof Error ? error.message : '保存失败',
+        onRetry: () => {
+          void saveAgent(nextAgent, input)
+        },
+      })
+    }
   }
 
   useEffect(() => {
-    if (createSignal === 0) return
+    setVisibleAgents(loadedAgents)
+    setSelectedAgent(null)
+  }, [loadedAgents])
+
+  useEffect(() => {
+    if (createSignal === 0 || !canCreate) return
     setEditingAgent(null)
     setSelectedAgent(null)
     setAgentConfigOpen(true)
-  }, [createSignal])
+  }, [canCreate, createSignal])
 
   if (agentConfigOpen) {
     return (
@@ -3048,6 +3921,7 @@ function AgentScreen({ layoutTier, mobileScale, createSignal }: { layoutTier: La
         agent={editingAgent}
         onBack={() => setAgentConfigOpen(false)}
         onSave={saveAgent}
+        onCreate={createAgent}
       />
     )
   }
@@ -3060,7 +3934,7 @@ function AgentScreen({ layoutTier, mobileScale, createSignal }: { layoutTier: La
             <MaterialCommunityIcons name="layers-triple" size={Math.round(mobileScale.workspaceCardIcon * 0.44)} color="#5572ff" />
           </View>
           <View style={styles.registryCopy}>
-            <Text style={[styles.registryTitle, { fontSize: mobileScale.registryTitle }]} numberOfLines={1}>Agent Registry</Text>
+            <Text style={[styles.registryTitle, { fontSize: mobileScale.registryTitle }]} numberOfLines={1}>{registryTitle}</Text>
             <Text style={[styles.agentSummaryText, { fontSize: mobileScale.bodyText, lineHeight: mobileScale.bodyLineHeight }]}>管理模型、提示词、工具权限和上下文策略</Text>
           </View>
         </View>
@@ -3121,13 +3995,13 @@ function AgentScreen({ layoutTier, mobileScale, createSignal }: { layoutTier: La
       </View>
 
       {filteredAgents.map(agent => (
-        <AgentCard key={agent.id} agent={agent} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => setSelectedAgent(agent)} onDelete={() => deleteAgent(agent.id)} />
+        <AgentCard key={agent.id} agent={agent} layoutTier={layoutTier} mobileScale={mobileScale} onPress={() => setSelectedAgent(agent)} onDelete={() => void deleteAgent(agent)} />
       ))}
       {filteredAgents.length === 0 ? (
         <GlassCard style={styles.emptyStateCard}>
-          <MaterialCommunityIcons name="account-search-outline" size={28} color="#64748b" />
-          <Text style={styles.cardTitle}>没有匹配的 Agent</Text>
-          <Text style={styles.bodyText}>换一个关键词或状态筛选试试。</Text>
+          <MaterialCommunityIcons name={loading ? 'progress-clock' : 'account-search-outline'} size={28} color="#64748b" />
+          <Text style={styles.cardTitle}>{loading ? '正在加载 Agent' : '没有匹配的 Agent'}</Text>
+          <Text style={styles.bodyText}>{loading ? '正在请求当前工作区的 Agent 接口。' : '换一个关键词或状态筛选试试。'}</Text>
         </GlassCard>
       ) : null}
       <Text style={styles.agentLoadedText}>已显示 {filteredAgents.length} / {visibleAgents.length} 个 Agent</Text>
@@ -3365,12 +4239,11 @@ function ArtifactStrip({ artifacts: items }: { artifacts: Artifact[] }) {
   )
 }
 
-function AgentDetailModal({ agent, mobileScale, onClose, onEdit }: { agent: Agent | null; mobileScale: MobileScale; onClose: () => void; onEdit: (agent: Agent) => void }) {
+function AgentDetailModal({ agent, mobileScale, onClose, onEdit }: { agent: AgentView | null; mobileScale: MobileScale; onClose: () => void; onEdit: (agent: AgentView) => void }) {
   if (!agent) return null
 
-  const isBuiltin = agent.id === 'orchestrator' || agent.id === 'engineer'
+  const isBuiltin = isBuiltInAgentView(agent)
   const statusLabel = agent.status === 'running' ? '运行中' : agent.status === 'reviewing' ? '审查中' : '空闲中'
-  const recentWorkspaces = workspaces.filter(workspace => workspace.agents.includes(agent.id)).slice(0, 2)
 
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
@@ -3382,7 +4255,7 @@ function AgentDetailModal({ agent, mobileScale, onClose, onEdit }: { agent: Agen
             <View style={styles.agentDetailTitleRow}>
               <AgentGlyph agentId={agent.id} size={mobileScale.agentDetailAvatar} />
               <View style={styles.artifactDetailTitleCopy}>
-                <Text style={styles.homeWorkspaceEyebrow}>{isBuiltin ? 'BUILT-IN AGENT' : 'CUSTOM AGENT'}</Text>
+                <Text style={styles.homeWorkspaceEyebrow}>{isBuiltin ? 'DEFAULT AGENT' : 'CUSTOM AGENT'}</Text>
                 <Text style={styles.artifactDetailTitle}>{agent.name}</Text>
               </View>
             </View>
@@ -3401,7 +4274,10 @@ function AgentDetailModal({ agent, mobileScale, onClose, onEdit }: { agent: Agen
                 <Text style={styles.homeMetaTextBlue}>{agent.provider}</Text>
               </View>
               <View style={styles.homeMetaChip}>
-                <Text style={styles.homeMetaTextGray}>model mock</Text>
+                <Text style={styles.homeMetaTextGray}>{agent.model ?? 'default'}</Text>
+              </View>
+              <View style={styles.homeMetaChip}>
+                <Text style={styles.homeMetaTextGray}>{agent.id}</Text>
               </View>
             </View>
 
@@ -3410,8 +4286,22 @@ function AgentDetailModal({ agent, mobileScale, onClose, onEdit }: { agent: Agen
               <Text style={styles.artifactHeroSummary}>{agent.role}</Text>
             </View>
 
+            {agent.description ? (
+              <View style={styles.artifactSection}>
+                <Text style={styles.sectionTitle}>description</Text>
+                <Text style={styles.artifactHeroSummary}>{agent.description}</Text>
+              </View>
+            ) : null}
+
+            {agent.whenToUse ? (
+              <View style={styles.artifactSection}>
+                <Text style={styles.sectionTitle}>whenToUse</Text>
+                <Text style={styles.artifactHeroSummary}>{agent.whenToUse}</Text>
+              </View>
+            ) : null}
+
             <View style={styles.artifactSection}>
-              <Text style={styles.sectionTitle}>技能标签</Text>
+              <Text style={styles.sectionTitle}>skills</Text>
               <View style={styles.agentSkillLine}>
                 {agent.skills.map(skill => (
                   <View key={skill} style={styles.agentSkillChip}>
@@ -3421,24 +4311,10 @@ function AgentDetailModal({ agent, mobileScale, onClose, onEdit }: { agent: Agen
               </View>
             </View>
 
-            <View style={styles.artifactSection}>
-              <Text style={styles.sectionTitle}>最近参与</Text>
-              {recentWorkspaces.map(workspace => (
-                <View key={workspace.id} style={styles.activityRow}>
-                  <View style={styles.activityDot} />
-                  <View style={styles.activityCopy}>
-                    <Text style={styles.cardTitle}>{workspace.name}</Text>
-                    <Text style={styles.bodyText} numberOfLines={1}>{workspace.latestEventLabel}</Text>
-                  </View>
-                  <Text style={styles.activityTime}>{workspace.updatedAt}</Text>
-                </View>
-              ))}
-            </View>
-
             <View style={styles.artifactSectionGrid}>
               <View style={styles.artifactMiniPanel}>
                 <Text style={styles.sectionTitle}>轻管理</Text>
-                <Text style={styles.bodyText}>{isBuiltin ? '内置 Agent 仅支持查看资料。' : '可编辑名称、简介、provider、model 与技能标签。'}</Text>
+                <Text style={styles.bodyText}>{isBuiltin ? '内置 Agent 不显示删除和编辑入口。' : '自定义 Agent 支持编辑和删除。'}</Text>
               </View>
               <Pressable
                 style={[styles.agentEditMockButton, isBuiltin && styles.agentEditMockButtonDisabled]}
@@ -3456,7 +4332,17 @@ function AgentDetailModal({ agent, mobileScale, onClose, onEdit }: { agent: Agen
   )
 }
 
-function AgentConfigPage({ agent, onBack, onSave }: { agent: Agent | null; onBack: () => void; onSave: (agent: Agent) => void }) {
+function AgentConfigPage({
+  agent,
+  onBack,
+  onSave,
+  onCreate,
+}: {
+  agent: AgentView | null
+  onBack: () => void
+  onSave: (agent: AgentView, input: UpdateProjectAgentInput) => void
+  onCreate: (input: CreateProjectAgentInput) => void
+}) {
   const [name, setName] = useState('')
   const [provider, setProvider] = useState<Agent['provider']>('claude')
   const [providerOpen, setProviderOpen] = useState(false)
@@ -3475,17 +4361,19 @@ function AgentConfigPage({ agent, onBack, onSave }: { agent: Agent | null; onBac
   useEffect(() => {
     setName(agent?.name ?? '')
     setProvider(agent?.provider ?? 'claude')
-    setModel('')
+    setModel(agent?.model ?? '')
     setRole(agent?.role ?? 'Custom Agent')
-    setMaxRunSeconds('300')
-    setDescription(agent?.role ?? 'User-created Agent')
-    setWhenToUse('Use when the user explicitly selects or mentions this Agent.')
-    setSystemPrompt('You are a focused custom Agent. Follow the workspace context and return concise, actionable output.')
+    setMaxRunSeconds(String(agent?.runtimePolicy?.maxRunSeconds ?? 300))
+    setDescription(agent?.description ?? agent?.role ?? 'User-created Agent')
+    setWhenToUse(agent?.whenToUse ?? 'Use when the user explicitly selects or mentions this Agent.')
+    setSystemPrompt(agent?.systemPrompt ?? 'You are a focused custom Agent. Follow the workspace context and return concise, actionable output.')
     setProviderOpen(false)
   }, [agent])
 
   const submit = () => {
     const fallbackName = name.trim() || '新建 Agent'
+    const trimmedModel = model.trim()
+    const nextModel = trimmedModel || (agent ? undefined : 'custom')
     const nextAgent: Agent = {
       id: agent?.id ?? `agent-${Date.now()}`,
       name: fallbackName,
@@ -3495,7 +4383,33 @@ function AgentConfigPage({ agent, onBack, onSave }: { agent: Agent | null; onBac
       color: agent?.color ?? '#f59e0b',
       skills: agent?.skills ?? ['自定义', '指令', '配置'],
     }
-    onSave(nextAgent)
+    const input = {
+      name: nextAgent.name,
+      role: role.trim() || 'Custom Agent',
+      description: description.trim() || role.trim() || 'User-created Agent',
+      whenToUse: whenToUse.trim(),
+      systemPrompt: systemPrompt.trim(),
+      modelProvider: provider,
+      ...(nextModel ? { model: nextModel } : {}),
+      runtimePolicy: {
+        workspaceOnly: agent?.runtimePolicy?.workspaceOnly ?? true,
+        allowNetwork: agent?.runtimePolicy?.allowNetwork ?? false,
+        allowShell: agent?.runtimePolicy?.allowShell ?? false,
+        maxRunSeconds: Number(maxRunSeconds) || 300,
+      },
+      skills: agent?.skills ?? ['自定义', provider],
+    }
+
+    if (agent) {
+      onSave(agent, input)
+      return
+    }
+
+    onCreate({
+      ...input,
+      name: input.name,
+      systemPrompt: input.systemPrompt,
+    })
   }
 
   return (
@@ -3598,8 +4512,8 @@ function AgentField({
   )
 }
 
-function AgentCard({ agent, layoutTier, mobileScale, onPress, onDelete }: { agent: Agent; layoutTier: LayoutTier; mobileScale: MobileScale; onPress?: () => void; onDelete?: () => void }) {
-  const isBuiltin = agent.id === 'orchestrator' || agent.id === 'engineer'
+function AgentCard({ agent, layoutTier, mobileScale, onPress, onDelete }: { agent: AgentView; layoutTier: LayoutTier; mobileScale: MobileScale; onPress?: () => void; onDelete?: () => void }) {
+  const isBuiltin = isBuiltInAgentView(agent)
   const statusLabel = agent.status === 'running' ? '运行中' : agent.status === 'reviewing' ? '审查中' : '空闲中'
   const statusTone = agent.status === 'running' ? 'running' : agent.status === 'reviewing' ? 'reviewing' : 'idle'
   const isCompact = layoutTier === 'compact'
@@ -3609,7 +4523,7 @@ function AgentCard({ agent, layoutTier, mobileScale, onPress, onDelete }: { agen
   return (
     <Pressable onPress={onPress} disabled={!onPress}>
       <GlassCard style={[styles.agentCard, (isCompact || isStandard) && styles.agentCardResponsive]}>
-      <AgentGlyph agentId={agent.id} size={avatarSize} />
+      <AgentGlyph agentId={agent.id} label={agent.name} provider={agent.provider} color={agent.color} size={avatarSize} />
       <View style={styles.agentCopy}>
         <View style={styles.agentCardTop}>
           <Text style={[styles.agentName, { fontSize: mobileScale.agentCardTitle }]} numberOfLines={1}>{agent.name}</Text>
@@ -3646,16 +4560,6 @@ function AgentCard({ agent, layoutTier, mobileScale, onPress, onDelete }: { agen
             {agent.skills.slice(0, 3).map(skill => (
               <View key={skill} style={[styles.agentSkillChip, agent.status === 'reviewing' ? styles.reviewSkillChip : agent.status === 'running' ? styles.runningSkillChip : undefined]}>
                 <Text style={[styles.agentSkillText, { fontSize: mobileScale.labelText }, agent.status === 'reviewing' ? styles.reviewSkillText : agent.status === 'running' ? styles.runningSkillText : undefined]}>{skill}</Text>
-              </View>
-            ))}
-          </View>
-          <View style={styles.agentToolLine}>
-            {(['file-document-outline', 'console-line', 'web'] as IconName[]).map(icon => (
-              <View key={icon} style={styles.agentToolBox}>
-                <MaterialCommunityIcons name={icon} size={22} color="#334155" />
-                <View style={styles.toolCheck}>
-                  <MaterialCommunityIcons name="check" size={10} color="#fff" />
-                </View>
               </View>
             ))}
           </View>
@@ -3946,6 +4850,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 2,
   },
+  headerBackButton: {
+    width: 44,
+    height: 44,
+    marginTop: 0,
+    borderWidth: 1,
+    borderColor: 'rgba(226,232,240,0.72)',
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.52)',
+  },
   codeHeaderLeft: {
     flex: 1,
   },
@@ -3986,6 +4899,10 @@ const styles = StyleSheet.create({
     height: Platform.select({ android: 48, default: 54 }),
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  chatAgentManageButton: {
+    borderColor: 'rgba(37,99,235,0.22)',
+    backgroundColor: 'rgba(239,246,255,0.62)',
   },
   workspaceHeaderActions: {
     flexDirection: 'row',
@@ -5141,21 +6058,35 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
   },
+  currentArtifactsHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  currentArtifactsSubtitle: {
+    flexShrink: 1,
+    color: '#64748b',
+    textAlign: 'right',
+    fontSize: 12,
+    fontWeight: '800',
+  },
   currentArtifactGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 9,
   },
-  currentArtifactGridCompact: {
-    flexWrap: 'wrap',
-  },
   currentArtifactCard: {
-    flex: 1,
-    minWidth: 0,
-    minHeight: 118,
+    flexGrow: 1,
+    flexBasis: '31%',
+    minWidth: 104,
+    maxWidth: '48%',
+    minHeight: 126,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    padding: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.7)',
     borderRadius: 18,
@@ -5165,25 +6096,33 @@ const styles = StyleSheet.create({
     opacity: 0.62,
   },
   currentArtifactTitle: {
+    alignSelf: 'stretch',
     color: '#172033',
     textAlign: 'center',
-    fontSize: 13,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '900',
   },
   currentArtifactMeta: {
+    alignSelf: 'stretch',
     color: '#2563eb',
     textAlign: 'center',
-    fontSize: 13,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '900',
   },
   currentArtifactMetaGreen: {
     color: '#10b981',
+  },
+  currentArtifactMetaFailed: {
+    color: '#dc2626',
   },
   currentArtifactMetaMuted: {
     color: '#64748b',
   },
   artifactStatusBadge: {
     minHeight: 24,
+    minWidth: 54,
     paddingHorizontal: 8,
     alignItems: 'center',
     justifyContent: 'center',
@@ -5196,8 +6135,12 @@ const styles = StyleSheet.create({
   artifactStatusPartial: {
     backgroundColor: 'rgba(219,234,254,0.84)',
   },
+  artifactStatusFailed: {
+    backgroundColor: 'rgba(254,226,226,0.86)',
+  },
   artifactStatusText: {
     color: '#64748b',
+    textAlign: 'center',
     fontSize: 11,
     fontWeight: '900',
   },
@@ -5206,6 +6149,9 @@ const styles = StyleSheet.create({
   },
   artifactStatusPartialText: {
     color: '#2563eb',
+  },
+  artifactStatusFailedText: {
+    color: '#dc2626',
   },
   modalBackdrop: {
     flex: 1,
@@ -5302,6 +6248,106 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 18,
     backgroundColor: 'rgba(255,255,255,0.38)',
+  },
+  artifactSectionHeader: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  artifactSmallButton: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(219,234,254,0.72)',
+  },
+  artifactSmallButtonText: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  artifactNotice: {
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: 'rgba(209,250,229,0.72)',
+  },
+  artifactNoticeError: {
+    backgroundColor: 'rgba(254,226,226,0.78)',
+  },
+  artifactNoticeText: {
+    flex: 1,
+    minWidth: 0,
+    color: '#047857',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  artifactNoticeErrorText: {
+    color: '#dc2626',
+  },
+  artifactWebPreview: {
+    height: 320,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.28)',
+    borderRadius: 16,
+    backgroundColor: '#fff',
+  },
+  artifactWebView: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  artifactFileList: {
+    gap: 8,
+  },
+  artifactCodeBlock: {
+    maxHeight: 240,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(15,23,42,0.88)',
+  },
+  artifactCodeText: {
+    color: '#e2e8f0',
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    fontSize: 11,
+    lineHeight: 17,
+  },
+  artifactIssueRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  artifactActionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  artifactLinkRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  artifactLinkButton: {
+    minHeight: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,23,42,0.08)',
+  },
+  artifactLinkText: {
+    color: '#2563eb',
+    fontSize: 13,
+    fontWeight: '900',
   },
   loadMoreButtonDisabled: {
     opacity: 0.72,
@@ -5928,7 +6974,7 @@ const styles = StyleSheet.create({
   chatComposer: {
     minHeight: 56,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     gap: 8,
     paddingHorizontal: 12,
     paddingVertical: CHAT_COMPOSER_VERTICAL_PADDING,
@@ -5937,13 +6983,16 @@ const styles = StyleSheet.create({
   chatComposerInput: {
     flex: 1,
     minWidth: 0,
-    minHeight: 40,
-    maxHeight: 92,
-    paddingVertical: 10,
+    minHeight: CHAT_COMPOSER_INPUT_MIN_HEIGHT,
+    maxHeight: CHAT_COMPOSER_INPUT_MAX_HEIGHT,
+    paddingVertical: CHAT_COMPOSER_INPUT_VERTICAL_PADDING,
+    paddingTop: CHAT_COMPOSER_INPUT_VERTICAL_PADDING,
+    paddingBottom: CHAT_COMPOSER_INPUT_VERTICAL_PADDING,
     color: '#1f2937',
     fontSize: 15,
-    lineHeight: 20,
+    lineHeight: CHAT_COMPOSER_INPUT_LINE_HEIGHT,
     fontWeight: '700',
+    includeFontPadding: false,
     textAlignVertical: 'center',
   },
   composerToolButton: {
@@ -6845,32 +7894,6 @@ const styles = StyleSheet.create({
   },
   reviewSkillText: {
     color: '#b45309',
-  },
-  agentToolLine: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  agentToolBox: {
-    width: 39,
-    height: 39,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.72)',
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.32)',
-  },
-  toolCheck: {
-    position: 'absolute',
-    right: -2,
-    bottom: -2,
-    width: 15,
-    height: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-    backgroundColor: '#28bf7b',
   },
   agentLoadedText: {
     color: '#64748b',
