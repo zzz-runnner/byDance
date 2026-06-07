@@ -20,6 +20,7 @@ import {
   View,
 } from 'react-native'
 import { WebView } from 'react-native-webview'
+import Markdown from 'react-native-markdown-display'
 import { StatusBar } from 'expo-status-bar'
 import { LinearGradient } from 'expo-linear-gradient'
 import * as Clipboard from 'expo-clipboard'
@@ -30,6 +31,7 @@ import { AgentGlyph } from './src/components/AgentGlyph'
 import { GlassCard } from './src/components/GlassCard'
 import { Pill } from './src/components/Pill'
 import { createMobileScale, type LayoutTier } from './src/styles/mobileScale'
+import { normalizeAiMarkdown } from './src/utils/normalizeAiMarkdown'
 import {
   BUSINESS_API_BASE_URL,
   absoluteBackendUrl,
@@ -3208,10 +3210,169 @@ function ChatMessageBubble({
       <Pressable style={styles.agentMessageActionTarget} delayLongPress={280} onLongPress={() => onLongPress({ message, senderName: agentName })}>
         <GlassCard style={[styles.chatBubbleLarge, styles.chatBubbleLargeInAction]}>
           <ChatReplyPreview replyTo={message.replyTo} />
-          <Text style={[styles.chatBubbleText, { fontSize: mobileScale.messageText, lineHeight: mobileScale.messageLineHeight }]}>{message.text || '...'}</Text>
+          <ChatMarkdownContent content={message.text || '...'} mobileScale={mobileScale} />
         </GlassCard>
       </Pressable>
     </View>
+  )
+}
+
+function ChatMarkdownContent({ content, mobileScale }: { content: string; mobileScale: MobileScale }) {
+  const normalizedContent = useMemo(() => normalizeAiMarkdown(content, { mode: 'bubble' }) || '...', [content])
+  const markdownStyles = useMemo(() => {
+    const bodyText = {
+      color: '#172033',
+      fontSize: mobileScale.messageText,
+      lineHeight: mobileScale.messageLineHeight,
+      fontWeight: '700' as const,
+    }
+    const monoFont = Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' })
+
+    return {
+      body: {
+        ...bodyText,
+      },
+      text: {
+        ...bodyText,
+      },
+      paragraph: {
+        marginTop: 0,
+        marginBottom: 8,
+      },
+      heading1: {
+        color: '#0f172a',
+        fontSize: mobileScale.messageText + 6,
+        lineHeight: mobileScale.messageLineHeight + 7,
+        fontWeight: '900' as const,
+        marginTop: 4,
+        marginBottom: 10,
+      },
+      heading2: {
+        color: '#0f172a',
+        fontSize: mobileScale.messageText + 4,
+        lineHeight: mobileScale.messageLineHeight + 5,
+        fontWeight: '900' as const,
+        marginTop: 4,
+        marginBottom: 9,
+      },
+      heading3: {
+        color: '#0f172a',
+        fontSize: mobileScale.messageText + 2,
+        lineHeight: mobileScale.messageLineHeight + 4,
+        fontWeight: '900' as const,
+        marginTop: 4,
+        marginBottom: 8,
+      },
+      strong: {
+        color: '#0f172a',
+        fontWeight: '900' as const,
+      },
+      em: {
+        color: '#334155',
+        fontStyle: 'italic' as const,
+      },
+      bullet_list: {
+        marginBottom: 8,
+      },
+      ordered_list: {
+        marginBottom: 8,
+      },
+      bullet_list_icon: {
+        color: '#172033',
+        fontSize: mobileScale.messageText,
+        lineHeight: mobileScale.messageLineHeight,
+      },
+      ordered_list_icon: {
+        color: '#172033',
+        fontSize: mobileScale.messageText,
+        lineHeight: mobileScale.messageLineHeight,
+      },
+      bullet_list_content: {
+        flex: 1,
+        minWidth: 0,
+      },
+      ordered_list_content: {
+        flex: 1,
+        minWidth: 0,
+      },
+      list_item: {
+        marginBottom: 3,
+      },
+      code_inline: {
+        color: '#2563eb',
+        fontFamily: monoFont,
+        fontSize: Math.max(12, mobileScale.messageText - 1),
+        fontWeight: '800' as const,
+        backgroundColor: 'rgba(37,99,235,0.1)',
+        borderRadius: 6,
+        paddingHorizontal: 5,
+        paddingVertical: 1,
+      },
+      code_block: {
+        color: '#0f172a',
+        fontFamily: monoFont,
+        fontSize: Math.max(12, mobileScale.messageText - 2),
+        lineHeight: Math.max(18, mobileScale.messageLineHeight - 4),
+        backgroundColor: 'rgba(15,23,42,0.06)',
+        borderRadius: 12,
+        padding: 10,
+        marginTop: 4,
+        marginBottom: 10,
+      },
+      fence: {
+        color: '#0f172a',
+        fontFamily: monoFont,
+        fontSize: Math.max(12, mobileScale.messageText - 2),
+        lineHeight: Math.max(18, mobileScale.messageLineHeight - 4),
+        backgroundColor: 'rgba(15,23,42,0.06)',
+        borderRadius: 12,
+        padding: 10,
+        marginTop: 4,
+        marginBottom: 10,
+      },
+      blockquote: {
+        borderLeftWidth: 3,
+        borderLeftColor: '#7c3aed',
+        backgroundColor: 'rgba(124,58,237,0.08)',
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+        marginVertical: 8,
+      },
+      link: {
+        color: '#2563eb',
+        fontWeight: '900' as const,
+      },
+      hr: {
+        backgroundColor: 'rgba(100,116,139,0.18)',
+        height: 1,
+        marginVertical: 10,
+      },
+      table: {
+        borderWidth: 1,
+        borderColor: 'rgba(148,163,184,0.5)',
+        borderRadius: 8,
+        marginVertical: 8,
+      },
+      th: {
+        backgroundColor: 'rgba(37,99,235,0.08)',
+        padding: 6,
+      },
+      td: {
+        padding: 6,
+      },
+    }
+  }, [mobileScale])
+
+  function handleLinkPress(url: string) {
+    if (!url) return false
+    void Linking.openURL(url)
+    return false
+  }
+
+  return (
+    <Markdown style={markdownStyles} onLinkPress={handleLinkPress}>
+      {normalizedContent}
+    </Markdown>
   )
 }
 
