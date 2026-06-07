@@ -22,6 +22,7 @@ import {
   mergeWorkflowEvents,
   messagesForConversation,
 } from './appModel'
+import { buildChatTimeline } from './chatTimeline'
 import backgroundImage from './asset/background/newBG.png'
 import { ChatPane } from './components/ChatPane'
 import { AgentManagementDialog } from './components/AgentManagementDialog'
@@ -35,7 +36,10 @@ import { WorkspaceRail } from './components/WorkspaceRail'
 import type {
   AppState,
   AgentDefinition,
+  CodeWorkspaceDialogTab,
   CodeWorkspaceDialogRequest,
+  CodeWorkspaceDialogTurnArtifact,
+  CodeWorkspaceDialogTurnResult,
   CodeSelectionReference,
   ConnectionStatus,
   LiveWorkflowEvent,
@@ -58,6 +62,110 @@ const WORKSPACE_QUERY_DEBOUNCE_MS = 250
 const INITIAL_MESSAGE_PAGE_LIMIT = 40
 const MESSAGE_PAGE_STEP = 40
 const DIRECT_CHAT_AGENT_IDS = new Set(['claude-code-direct', 'codex-direct'])
+
+function buildLatestTurnResultRequest(
+  state: AppState,
+  workspaceId: string,
+  conversationId: string,
+  messages: Message[],
+  streamingMessages: StreamingAssistantDraft[],
+  workflowEvents: LiveWorkflowEvent[],
+): CodeWorkspaceDialogRequest | undefined {
+  const timelineItems = buildChatTimeline({
+    state,
+    workspaceId,
+    conversationId,
+    messages,
+    streamingMessages,
+    workflowEvents,
+  })
+  const latestTurn = [...timelineItems]
+    .reverse()
+    .find((item): item is Extract<(typeof timelineItems)[number], { kind: 'turn' }> => item.kind === 'turn')
+  if (!latestTurn || latestTurn.turn.artifacts.length === 0) {
+    return undefined
+  }
+
+  const artifacts = latestTurn.turn.artifacts
+  const latestPreview = [...artifacts].filter(artifact => artifact.kind === 'preview' && Boolean(artifact.url)).at(-1)
+  const latestDiff = [...artifacts].filter(artifact => artifact.kind === 'diff').at(-1)
+  const latestReview = [...artifacts].filter(artifact => artifact.kind === 'review').at(-1)
+  const latestZip = [...artifacts].filter(artifact => artifact.kind === 'zip' && Boolean(artifact.url)).at(-1)
+  const latestDeploy = [...artifacts].filter(artifact => artifact.kind === 'deploy' && Boolean(artifact.url)).at(-1)
+  const latestText = [...artifacts].filter(artifact => artifact.kind === 'text').at(-1)
+  const latestGenericArtifact = [...artifacts].filter(artifact => artifact.kind === 'artifact').at(-1)
+  const defaultTab: CodeWorkspaceDialogTab = latestPreview || latestDeploy ? 'preview' : 'result'
+
+  const turnArtifacts: CodeWorkspaceDialogTurnArtifact[] = [
+    latestPreview,
+    latestDiff,
+    latestReview,
+    latestZip,
+    latestDeploy,
+    latestText,
+    latestGenericArtifact,
+  ]
+    .filter((artifact): artifact is NonNullable<typeof artifact> => Boolean(artifact))
+    .filter((artifact, index, list) => list.findIndex(candidate => candidate.id === artifact.id) === index)
+    .map(artifact => ({
+      id: artifact.id,
+      kind: artifact.kind,
+      title: artifact.title,
+      summary: artifact.summary,
+      url: artifact.url,
+      verdict: artifact.verdict,
+      issues: artifact.issues,
+      detailText: artifact.detailText,
+      patch: artifact.patch,
+      files: artifact.files,
+    }))
+
+  const turnResult: CodeWorkspaceDialogTurnResult = {
+    title: '查看本轮产物',
+    summary:
+      latestReview?.summary ||
+      latestPreview?.summary ||
+      latestDiff?.summary ||
+      latestDeploy?.summary ||
+      latestText?.summary ||
+      latestGenericArtifact?.summary ||
+      latestZip?.summary,
+    badges: [
+      latestPreview ? 'preview' : undefined,
+      latestDiff ? 'diff' : undefined,
+      latestReview?.verdict ? `review ${latestReview.verdict.toLowerCase()}` : latestReview ? 'review' : undefined,
+      latestZip ? 'source zip' : undefined,
+      latestDeploy ? 'deploy' : undefined,
+    ].filter((value): value is string => Boolean(value)),
+    defaultTab,
+    artifacts: turnArtifacts,
+    preview: latestPreview?.url ? {
+      title: latestPreview.title,
+      summary: latestPreview.summary,
+      url: latestPreview.url,
+    } : undefined,
+    diff: latestDiff ? {
+      changeSetId: latestDiff.id,
+      title: latestDiff.title,
+      summary: latestDiff.summary,
+      patch: latestDiff.patch,
+      files: latestDiff.files,
+    } : undefined,
+    review: latestReview ? {
+      verdict: latestReview.verdict,
+      summary: latestReview.summary,
+      issues: latestReview.issues,
+    } : undefined,
+    sourceArchiveUrl: latestZip?.url,
+    deploymentUrl: latestDeploy?.url,
+  }
+
+  return {
+    tab: defaultTab,
+    previewSurface: latestPreview?.deliverySurface ?? latestDeploy?.deliverySurface,
+    turnResult,
+  }
+}
 
 /**
  * Detects whether one temporary draft has already been persisted in the backend state.
@@ -391,6 +499,17 @@ export function App() {
   const currentStreamingMessages = Object.values(streamingMessages)
     .filter(draft => !hasCommittedMessage(committedConversationMessages, draft.message.id))
     .filter(draft => draft.message.conversationId === activeConversationId)
+  const latestTurnResultRequest = useMemo(
+    () => buildLatestTurnResultRequest(
+      state,
+      activeWorkspaceId,
+      activeConversationId,
+      currentMessages,
+      currentStreamingMessages,
+      workflowEvents,
+    ),
+    [activeConversationId, activeWorkspaceId, currentMessages, currentStreamingMessages, state, workflowEvents],
+  )
   const showBlockingState = rooms.length === 0 && (loadingState || connectionStatus === 'error')
   const canCreateWorkspace = connectionStatus === 'live' && !loadingState && !creatingWorkspace
   const composerDisabledReason =
@@ -1264,11 +1383,11 @@ export function App() {
             <button
               className="secondary-button topbar-code-button"
               type="button"
-              onClick={() => handleOpenCodeDialog()}
+              onClick={() => handleOpenCodeDialog(latestTurnResultRequest ?? { tab: 'diff' })}
               disabled={!activeProjectId || loadingState || creatingWorkspace}
             >
               <Braces size={15} />
-              代码
+              产物
             </button>
             <button
               className="icon-button"
