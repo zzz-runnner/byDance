@@ -5064,7 +5064,7 @@ function AgentConfigPage({
 
           <View style={styles.agentConfigGrid}>
             <View style={[styles.agentFormField, providerOpen && styles.agentProviderFieldOpen]}>
-              <Text style={styles.agentFormLabel}>Agent 鏈嶅姟鎻愪緵鏂?/Text>
+              <Text style={styles.agentFormLabel}>Agent 服务提供方</Text>
               <Pressable style={styles.agentSelectBox} onPress={() => setProviderOpen(open => !open)}>
                 <Text style={styles.agentFormInputText}>{providerOptions.find(option => option.value === provider)?.label}</Text>
                 <MaterialCommunityIcons name="menu-down" size={22} color="#334155" />
