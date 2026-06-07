@@ -24,7 +24,7 @@ RUN npm run build \
 FROM node:20-alpine
 
 ARG NPM_REGISTRY=https://registry.npmmirror.com
-ARG PNPM_VERSION=11.1.2
+ARG PNPM_VERSION=10.17.1
 ARG APK_REPOSITORY=https://mirrors.aliyun.com/alpine
 
 WORKDIR /app
