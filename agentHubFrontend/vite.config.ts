@@ -9,6 +9,7 @@ export default defineConfig(({ mode }) => {
     '/preview': backendTarget,
     '/build-preview': backendTarget,
     '/deploy': backendTarget,
+    '/assets': backendTarget,
   }
 
   return {

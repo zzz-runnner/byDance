@@ -56,9 +56,11 @@ const VITE_CONFIG_NAMES = [
 const MANIFEST_HASH_FILE_NAMES = new Set([
   'package.json',
   'pnpm-lock.yaml',
+  'yarn.lock',
   'package-lock.json',
   'npm-shrinkwrap.json',
   '.npmrc',
+  '.yarnrc.yml',
   'tsconfig.json',
   'tsconfig.app.json',
   'tsconfig.node.json',
@@ -123,10 +125,19 @@ type PreviewBuildRecord = {
 }
 
 type PackageManifest = {
+  packageManager?: string
   scripts?: Record<string, string>
   dependencies?: Record<string, string>
   devDependencies?: Record<string, string>
 }
+
+type SandboxInstallMarker = {
+  installedAt: string
+  packageManager: PreviewPackageManager
+  dependencies: string[]
+}
+
+type PreviewPackageManager = 'pnpm' | 'yarn' | 'npm'
 
 export type PreviewAsset =
   | {
@@ -211,8 +222,25 @@ function buildLogExcerpt(logOutput: string): string {
  * Input: project id and repo-relative path.
  * Output: frontend iframe URL.
  */
-function runtimePreviewUrl(projectId: string, relativePath: string): string {
-  return `/preview/runtime/${encodeURIComponent(projectId)}/${relativePath.replace(/\\/g, '/')}`
+function runtimePreviewUrl(projectId: string, relativePath: string, version?: string): string {
+  const pathname = `/preview/runtime/${encodeURIComponent(projectId)}/${relativePath.replace(/\\/g, '/')}`
+  if (!version) {
+    return pathname
+  }
+
+  const query = new URLSearchParams({ v: version })
+  return `${pathname}?${query.toString()}`
+}
+
+/**
+ * Returns one runtime-preview directory URL prefix for an HTML asset.
+ * Input: project id and repo-relative HTML path.
+ * Output: browser-facing folder URL ending with a slash.
+ */
+function runtimePreviewDirectoryUrl(projectId: string, relativePath: string): string {
+  const normalized = relativePath.replace(/\\/g, '/')
+  const directory = normalized.includes('/') ? normalized.slice(0, normalized.lastIndexOf('/') + 1) : ''
+  return `/preview/runtime/${encodeURIComponent(projectId)}/${directory}`
 }
 
 /**
@@ -220,8 +248,8 @@ function runtimePreviewUrl(projectId: string, relativePath: string): string {
  * Input: project id and repo-relative entry path.
  * Output: frontend iframe URL.
  */
-function moduleShellUrl(projectId: string, entryPath: string): string {
-  const query = new URLSearchParams({ entry: entryPath.replace(/\\/g, '/') })
+function moduleShellUrl(projectId: string, entryPath: string, version?: string): string {
+  const query = new URLSearchParams({ entry: entryPath.replace(/\\/g, '/'), ...(version ? { v: version } : {}) })
   return `/preview/runtime/${encodeURIComponent(projectId)}/${MODULE_SHELL_FILE_NAME}?${query.toString()}`
 }
 
@@ -391,6 +419,23 @@ async function readPackageManifest(repoPath: string): Promise<PackageManifest | 
 }
 
 /**
+ * Loads one sandbox install marker when it exists and parses cleanly.
+ * Input: absolute marker path.
+ * Output: parsed install marker or undefined.
+ */
+async function readSandboxInstallMarker(markerPath: string): Promise<SandboxInstallMarker | undefined> {
+  if (!(await pathExists(markerPath))) {
+    return undefined
+  }
+
+  try {
+    return JSON.parse(await readUtf8Text(markerPath)) as SandboxInstallMarker
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Recursively collects source file paths that should affect preview detection.
  * Input: workspace repo path and optional relative folder.
  * Output: repo-relative file paths sorted lexicographically.
@@ -501,6 +546,33 @@ async function collectHtmlTargets(rootPath: string, relativeFolder = ''): Promis
   }
 
   return targets
+}
+
+/**
+ * Collects built HTML entries from conventional output folders like dist/ and build/.
+ * Input: workspace app root.
+ * Output: repo-relative built HTML targets sorted by preview priority.
+ */
+async function collectBuiltHtmlTargets(appRootPath: string): Promise<string[]> {
+  const folders = ['dist', 'build']
+  const targets: string[] = []
+
+  for (const folder of folders) {
+    const folderPath = path.join(appRootPath, folder)
+    if (!(await pathExists(folderPath))) {
+      continue
+    }
+
+    const folderTargets = await collectHtmlTargets(folderPath)
+    for (const target of folderTargets) {
+      targets.push(path.posix.join(folder, target.replace(/\\/g, '/')))
+    }
+  }
+
+  return targets.sort((left, right) => {
+    const weightDiff = previewTargetWeight(left) - previewTargetWeight(right)
+    return weightDiff !== 0 ? weightDiff : left.localeCompare(right)
+  })
 }
 
 /**
@@ -640,10 +712,13 @@ async function detectWorkspacePreview(repoPath: string): Promise<WorkspaceDetect
   const manifest = await readPackageManifest(appRoot.appRootPath)
   const dependencies = dependencySetOf(manifest)
   const hasViteConfig = Boolean(await findFirstExistingFile(appRoot.appRootPath, VITE_CONFIG_NAMES))
+  const builtHtmlTargets = await collectBuiltHtmlTargets(appRoot.appRootPath)
   const htmlTargets = (await collectHtmlTargets(appRoot.appRootPath)).sort((left, right) => {
     const weightDiff = previewTargetWeight(left) - previewTargetWeight(right)
     return weightDiff !== 0 ? weightDiff : left.localeCompare(right)
   })
+  const preferredRuntimeTargets = builtHtmlTargets.length > 0 ? builtHtmlTargets : htmlTargets
+  const preferredPrimaryHtmlTarget = preferredRuntimeTargets[0]
   const primaryHtmlTarget = htmlTargets[0]
   const primaryHtmlNeedsBuild = primaryHtmlTarget
     ? await htmlRequiresBuild(appRoot.appRootPath, primaryHtmlTarget)
@@ -652,7 +727,7 @@ async function detectWorkspacePreview(repoPath: string): Promise<WorkspaceDetect
     dependencies.has('@angular/core') ||
     dependencies.has('@angular/cli') ||
     sourceFiles.includes('angular.json')
-  const runtimeTargets = htmlTargets
+  const runtimeTargets = preferredRuntimeTargets
     .map(targetPath => prefixWorkspaceRelativePath(appRoot.appRelativePath, targetPath))
     .filter((targetPath): targetPath is string => Boolean(targetPath))
   const prefixedFullSourceHash = hashStrings([appRoot.appRelativePath || 'repo', hashes.fullSourceHash])
@@ -685,7 +760,23 @@ async function detectWorkspacePreview(repoPath: string): Promise<WorkspaceDetect
     hasFileExtension(sourceFiles, ['.tsx', '.jsx', '.vue', '.svelte']) ||
     primaryHtmlNeedsBuild
 
-  if (primaryHtmlTarget && !primaryHtmlNeedsBuild) {
+  if (preferredPrimaryHtmlTarget && builtHtmlTargets.length > 0) {
+    const framework = hasViteLikeSignals ? detectViteFramework(dependencies, sourceFiles) : 'static-html'
+    return {
+      mode: 'static',
+      framework,
+      reason: `${detectionPrefix}检测到现成构建产物，预览直接复用 ${preferredPrimaryHtmlTarget}，不再强制重新执行 Vite 构建。`,
+      sourceHash: prefixedFullSourceHash,
+      cacheKey: prefixedFullSourceHash,
+      appRootPath: appRoot.appRootPath,
+      appRelativePath: appRoot.appRelativePath,
+      appDisplayPath: appRoot.appDisplayPath,
+      entryPath: prefixWorkspaceRelativePath(appRoot.appRelativePath, preferredPrimaryHtmlTarget),
+      runtimeTargets,
+    }
+  }
+
+  if (primaryHtmlTarget && !primaryHtmlNeedsBuild && !hasViteLikeSignals) {
     return {
       mode: 'static',
       framework: 'static-html',
@@ -792,8 +883,8 @@ async function detectWorkspacePreview(repoPath: string): Promise<WorkspaceDetect
  * Input: project id and repo-relative module entry path.
  * Output: standalone HTML document with one module script tag.
  */
-function buildModuleShellHtml(projectId: string, entryPath: string): string {
-  const scriptUrl = runtimePreviewUrl(projectId, entryPath)
+function buildModuleShellHtml(projectId: string, entryPath: string, version?: string): string {
+  const scriptUrl = runtimePreviewUrl(projectId, entryPath, version)
   return [
     '<!doctype html>',
     '<html lang="en">',
@@ -810,6 +901,61 @@ function buildModuleShellHtml(projectId: string, entryPath: string): string {
     '</body>',
     '</html>',
   ].join('\n')
+}
+
+/**
+ * Rewrites one HTML preview document so its asset URLs resolve inside the runtime preview route.
+ * Input: project id, repo-relative HTML path, and raw HTML content.
+ * Output: HTML with one injected base tag and runtime-prefixed root asset URLs.
+ */
+function rewriteRuntimePreviewHtml(projectId: string, relativePath: string, html: string): string {
+  const baseHref = runtimePreviewDirectoryUrl(projectId, relativePath)
+  const baseTag = `<base href="${baseHref}">`
+  const withBase = /<base\b/i.test(html)
+    ? html.replace(/<base\b[^>]*>/i, baseTag)
+    : /<head[^>]*>/i.test(html)
+      ? html.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`)
+      : `${baseTag}${html}`
+
+  return rewriteRuntimePreviewTextAsset(
+    projectId,
+    relativePath,
+    withBase.replace(
+      /\b(href|src|poster|action)=("|')\/(?!\/)([^"']*)\2/gi,
+      (_match, attribute: string, quote: string, assetPath: string) =>
+        `${attribute}=${quote}${baseHref}${assetPath}${quote}`,
+    ),
+  )
+}
+
+/**
+ * Rewrites root-relative static asset references inside built text assets served from runtime preview.
+ * Input: project id, repo-relative built asset path, and raw text content.
+ * Output: text with /assets-like references redirected into the runtime preview subtree.
+ */
+function rewriteRuntimePreviewTextAsset(projectId: string, relativePath: string, content: string): string {
+  const normalized = relativePath.replace(/\\/g, '/')
+  const rootFolder = normalized.startsWith('dist/') ? 'dist/' : normalized.startsWith('build/') ? 'build/' : ''
+  if (!rootFolder) {
+    return content
+  }
+
+  const baseHref = `/preview/runtime/${encodeURIComponent(projectId)}/${rootFolder}`
+  const staticAssetPattern = '(?:assets/|favicon[^"\'` )]*|icons?/|images?/|img/|static/|manifest[^"\'` )]*)'
+
+  return content
+    .replace(
+      new RegExp(`([\"'\`])\\/(${staticAssetPattern}[^\"'\`\\s)]*)\\1`, 'g'),
+      (_match, quote: string, assetPath: string) => `${quote}${baseHref}${assetPath}${quote}`,
+    )
+    .replace(
+      new RegExp(`=\\/(${staticAssetPattern}[^\\s>]+)`, 'g'),
+      (_match, assetPath: string) => `=${baseHref}${assetPath}`,
+    )
+    .replace(
+      new RegExp(`url\\((\\s*[\"']?)\\/(${staticAssetPattern}[^)\"']*)([\"']?\\s*)\\)`, 'g'),
+      (_match, leftQuote: string, assetPath: string, rightQuote: string) => `url(${leftQuote}${baseHref}${assetPath}${rightQuote})`,
+    )
 }
 
 /**
@@ -883,6 +1029,24 @@ function pnpmExecutable(): string {
 }
 
 /**
+ * Resolves the npm executable name for the current platform.
+ * Input: none.
+ * Output: platform-aware npm command.
+ */
+function npmExecutable(): string {
+  return process.platform === 'win32' ? 'npm.cmd' : 'npm'
+}
+
+/**
+ * Resolves the Yarn executable name for the current platform.
+ * Input: none.
+ * Output: platform-aware Yarn command.
+ */
+function yarnExecutable(): string {
+  return process.platform === 'win32' ? 'yarn.cmd' : 'yarn'
+}
+
+/**
  * Manages preview detection, shared pnpm installs, sandbox builds, and preview file serving.
  * Input: application config.
  * Output: project preview capability and asset access helpers.
@@ -911,7 +1075,7 @@ export class PreviewService {
     if (detection.mode === 'static') {
       const targets = detection.runtimeTargets.map(targetPath => ({
         path: targetPath,
-        url: runtimePreviewUrl(project.projectId, targetPath),
+        url: runtimePreviewUrl(project.projectId, targetPath, detection.cacheKey),
         source: 'runtime' as const,
       }))
       return {
@@ -935,7 +1099,7 @@ export class PreviewService {
         defaultTargetPath: detection.entryPath,
         targets: [{
           path: detection.entryPath,
-          url: moduleShellUrl(project.projectId, detection.entryPath),
+          url: moduleShellUrl(project.projectId, detection.entryPath, detection.cacheKey),
           source: 'module-shell',
         }],
       }
@@ -1001,7 +1165,11 @@ export class PreviewService {
       summary: '正在等待本地预览构建槽。',
       startedAt: new Date().toISOString(),
       installCommand: await this.installCommandFor(detection.appRootPath),
-      buildCommand: this.viteBuildCommand(project, detection.cacheKey),
+      buildCommand: this.viteBuildCommand(
+        project,
+        detection.cacheKey,
+        await this.detectPackageManager(detection.appRootPath),
+      ),
       logOutput: '',
     }
     this.buildRecords.set(project.workspaceId, record)
@@ -1041,7 +1209,7 @@ export class PreviewService {
       return {
         kind: 'html',
         contentType: 'text/html; charset=utf-8',
-        content: buildModuleShellHtml(project.projectId, entryPath),
+        content: buildModuleShellHtml(project.projectId, entryPath, capability.sourceHash),
       }
     }
 
@@ -1057,6 +1225,22 @@ export class PreviewService {
     const fileStat = await stat(filePath)
     if (!fileStat.isFile()) {
       throw new Error(`Preview target is not a file: ${fallbackPath}`)
+    }
+
+    if (/\.html?$/i.test(fallbackPath)) {
+      return {
+        kind: 'html',
+        contentType: 'text/html; charset=utf-8',
+        content: rewriteRuntimePreviewHtml(project.projectId, fallbackPath, await readUtf8Text(filePath)),
+      }
+    }
+
+    if ((fallbackPath.startsWith('dist/') || fallbackPath.startsWith('build/')) && /\.(css|js|mjs|json|map|svg|txt)$/i.test(fallbackPath)) {
+      return {
+        kind: 'html',
+        contentType: previewContentType(filePath),
+        content: rewriteRuntimePreviewTextAsset(project.projectId, fallbackPath, await readUtf8Text(filePath)),
+      }
     }
 
     return {
@@ -1189,26 +1373,18 @@ export class PreviewService {
       await mkdir(outputDir, { recursive: true })
 
       record.summary = '正在构建当前源码对应的页面预览产物。'
-      record.buildCommand = this.viteBuildCommand(project, detection.cacheKey)
-      const buildArgs = [
-        'exec',
-        'vite',
-        'build',
-        '--outDir',
-        outputDir,
-        '--emptyOutDir',
-        '--base',
-        `/build-preview/${encodeURIComponent(project.projectId)}/${encodeURIComponent(detection.cacheKey)}/`,
-      ]
+      const packageManager = await this.detectPackageManager(detection.appRootPath)
+      record.buildCommand = this.viteBuildCommand(project, detection.cacheKey, packageManager)
+      const buildArgs = this.viteBuildArgs(project, detection.cacheKey, packageManager, outputDir)
       const buildResult = await runWorkspaceCommand({
-        command: pnpmExecutable(),
+        command: this.packageManagerExecutable(packageManager),
         args: buildArgs,
         cwd: sandboxAppRootDir,
         timeoutMs: 300_000,
         env: {
           npm_config_fund: 'false',
           npm_config_audit: 'false',
-          pnpm_config_store_dir: this.config.pnpmStoreDir,
+          ...(packageManager === 'pnpm' ? { pnpm_config_store_dir: this.config.pnpmStoreDir } : {}),
         },
       })
       record.logOutput = appendBuildLog(record.logOutput, buildResult.logOutput)
@@ -1320,10 +1496,12 @@ export class PreviewService {
       throw new Error('当前工作区没有 package.json，无法执行前端构建。')
     }
 
+    const packageManager = await this.detectPackageManager(appRootPath)
+    const manifest = await readPackageManifest(sandboxAppRootDir)
     const nodeModulesPath = path.join(sandboxAppRootDir, 'node_modules')
     const installMarkerPath = path.join(sandboxAppRootDir, SANDBOX_INSTALL_MARKER_FILE_NAME)
-    if ((await pathExists(nodeModulesPath)) && (await pathExists(installMarkerPath))) {
-      record.logOutput = appendBuildLog(record.logOutput, 'Reusing sandbox node_modules with shared pnpm store.\n')
+    if (await this.canReuseSandboxDependencies(sandboxAppRootDir, packageManager, manifest)) {
+      record.logOutput = appendBuildLog(record.logOutput, `Reusing sandbox node_modules with ${packageManager} dependency validation.\n`)
       return
     }
     if (await pathExists(nodeModulesPath)) {
@@ -1332,21 +1510,21 @@ export class PreviewService {
     await rm(installMarkerPath, { force: true })
 
     await mkdir(this.config.pnpmStoreDir, { recursive: true })
-    const installArgs = await this.installArgsFor(appRootPath)
-    record.installCommand = this.installCommandDisplay(installArgs)
+    const installArgs = await this.installArgsFor(appRootPath, packageManager)
+    record.installCommand = this.installCommandDisplay(installArgs, packageManager)
     let installResult = await runWorkspaceCommand({
-      command: pnpmExecutable(),
+      command: this.packageManagerExecutable(packageManager),
       args: installArgs,
       cwd: sandboxAppRootDir,
       timeoutMs: 300_000,
       env: {
         npm_config_fund: 'false',
         npm_config_audit: 'false',
-        pnpm_config_store_dir: this.config.pnpmStoreDir,
+        ...(packageManager === 'pnpm' ? { pnpm_config_store_dir: this.config.pnpmStoreDir } : {}),
       },
     })
     record.logOutput = appendBuildLog(record.logOutput, installResult.logOutput)
-    if (installResult.code !== 0 && /ERR_PNPM_IGNORED_BUILDS/.test(installResult.logOutput)) {
+    if (packageManager === 'pnpm' && installResult.code !== 0 && /ERR_PNPM_IGNORED_BUILDS/.test(installResult.logOutput)) {
       record.summary = '正在批准沙箱依赖构建脚本。'
       const approvalResult = await runWorkspaceCommand({
         command: pnpmExecutable(),
@@ -1388,17 +1566,66 @@ export class PreviewService {
 
     await writeFile(
       installMarkerPath,
-      `${JSON.stringify({ installedAt: new Date().toISOString() }, null, 2)}\n`,
+      `${JSON.stringify({
+        installedAt: new Date().toISOString(),
+        packageManager,
+        dependencies: this.requiredDependencyNames(manifest),
+      } satisfies SandboxInstallMarker, null, 2)}\n`,
       'utf8',
     )
   }
 
   /**
-   * Computes the pnpm install arguments for one repo manifest state.
+   * Detects the preferred package manager for one workspace repo.
    * Input: source repo path.
-   * Output: pnpm install argument list with shared-store settings.
+   * Output: pnpm when declared by lockfile or packageManager, otherwise npm.
    */
-  private async installArgsFor(repoPath: string): Promise<string[]> {
+  private async detectPackageManager(repoPath: string): Promise<PreviewPackageManager> {
+    if (await pathExists(path.join(repoPath, 'pnpm-lock.yaml'))) {
+      return 'pnpm'
+    }
+    if (await pathExists(path.join(repoPath, 'yarn.lock'))) {
+      return 'yarn'
+    }
+
+    try {
+      const manifest = JSON.parse(await readUtf8Text(path.join(repoPath, 'package.json'))) as PackageManifest
+      if (typeof manifest.packageManager === 'string') {
+        const normalized = manifest.packageManager.toLowerCase()
+        if (normalized.startsWith('pnpm@')) {
+          return 'pnpm'
+        }
+        if (normalized.startsWith('yarn@')) {
+          return 'yarn'
+        }
+      }
+    } catch {
+      // Ignore manifest parse failures here and fall back to npm.
+    }
+
+    return 'npm'
+  }
+
+  /**
+   * Computes install arguments for one repo manifest state.
+   * Input: source repo path and resolved package manager.
+   * Output: package-manager-specific install argument list.
+   */
+  private async installArgsFor(repoPath: string, packageManager: PreviewPackageManager): Promise<string[]> {
+    if (packageManager === 'yarn') {
+      const hasYarnLock = await pathExists(path.join(repoPath, 'yarn.lock'))
+      return hasYarnLock
+        ? ['install', '--frozen-lockfile', '--non-interactive']
+        : ['install', '--non-interactive']
+    }
+
+    if (packageManager === 'npm') {
+      const hasPackageLock = await pathExists(path.join(repoPath, 'package-lock.json'))
+      return hasPackageLock
+        ? ['ci', '--prefer-offline', '--no-fund', '--no-audit']
+        : ['install', '--prefer-offline', '--no-fund', '--no-audit']
+    }
+
     const hasPnpmLock = await pathExists(path.join(repoPath, 'pnpm-lock.yaml'))
     return [
       'install',
@@ -1411,12 +1638,108 @@ export class PreviewService {
   }
 
   /**
-   * Returns the user-visible pnpm install command string for logs and UI status.
-   * Input: install argument list.
+   * Returns the user-visible install command string for logs and UI status.
+   * Input: install argument list and selected package manager.
    * Output: human-readable install command.
    */
-  private installCommandDisplay(args: string[]): string {
-    return ['pnpm', ...args.map(arg => arg === this.config.pnpmStoreDir ? '<shared-store>' : arg)].join(' ')
+  private installCommandDisplay(args: string[], packageManager: PreviewPackageManager): string {
+    const executable = packageManager
+    return [executable, ...args.map(arg => arg === this.config.pnpmStoreDir ? '<shared-store>' : arg)].join(' ')
+  }
+
+  /**
+   * Resolves the package-manager executable for one preview build.
+   * Input: detected package manager.
+   * Output: platform-aware executable name.
+   */
+  private packageManagerExecutable(packageManager: PreviewPackageManager): string {
+    if (packageManager === 'pnpm') {
+      return pnpmExecutable()
+    }
+    if (packageManager === 'yarn') {
+      return yarnExecutable()
+    }
+    return npmExecutable()
+  }
+
+  /**
+   * Computes the package-manager-specific Vite build argument list.
+   * Input: project id, cache key, package manager, and output path.
+   * Output: executable arguments that invoke the local Vite binary.
+   */
+  private viteBuildArgs(
+    project: StoredProjectRecord,
+    cacheKey: string,
+    packageManager: PreviewPackageManager,
+    outputDir: string,
+  ): string[] {
+    const baseArgs = [
+      'vite',
+      'build',
+      '--outDir',
+      outputDir,
+      '--emptyOutDir',
+      '--base',
+      `/build-preview/${encodeURIComponent(project.projectId)}/${encodeURIComponent(cacheKey)}/`,
+    ]
+    if (packageManager === 'pnpm') {
+      return ['exec', ...baseArgs]
+    }
+    if (packageManager === 'yarn') {
+      return baseArgs
+    }
+    return ['exec', '--', ...baseArgs]
+  }
+
+  /**
+   * Returns one normalized list of required dependency names from package.json.
+   * Input: parsed package manifest.
+   * Output: sorted lowercase dependency names.
+   */
+  private requiredDependencyNames(manifest: PackageManifest | undefined): string[] {
+    return Array.from(dependencySetOf(manifest)).sort((left, right) => left.localeCompare(right))
+  }
+
+  /**
+   * Validates whether one sandbox can safely reuse its installed dependencies.
+   * Input: sandbox app root, detected package manager, and parsed manifest.
+   * Output: true only when marker metadata and installed packages both match.
+   */
+  private async canReuseSandboxDependencies(
+    sandboxAppRootDir: string,
+    packageManager: PreviewPackageManager,
+    manifest: PackageManifest | undefined,
+  ): Promise<boolean> {
+    const nodeModulesPath = path.join(sandboxAppRootDir, 'node_modules')
+    const installMarkerPath = path.join(sandboxAppRootDir, SANDBOX_INSTALL_MARKER_FILE_NAME)
+    if (!(await pathExists(nodeModulesPath))) {
+      return false
+    }
+
+    const marker = await readSandboxInstallMarker(installMarkerPath)
+    if (!marker || marker.packageManager !== packageManager) {
+      return false
+    }
+
+    const requiredDependencies = this.requiredDependencyNames(manifest)
+    const markedDependencies = [...(marker.dependencies ?? [])]
+      .map(name => name.toLowerCase())
+      .sort((left, right) => left.localeCompare(right))
+    if (requiredDependencies.length !== markedDependencies.length) {
+      return false
+    }
+    if (requiredDependencies.some((name, index) => name !== markedDependencies[index])) {
+      return false
+    }
+
+    for (const dependencyName of requiredDependencies) {
+      const packageFilePath = path.join(nodeModulesPath, dependencyName, 'package.json')
+      if (!(await pathExists(packageFilePath))) {
+        return false
+      }
+    }
+
+    return true
   }
 
   /**
@@ -1424,8 +1747,13 @@ export class PreviewService {
    * Input: stored project record and preview cache key.
    * Output: human-readable build command.
    */
-  private viteBuildCommand(project: StoredProjectRecord, cacheKey: string): string {
-    return `pnpm exec vite build --outDir <preview-output> --emptyOutDir --base /build-preview/${project.projectId}/${cacheKey}/`
+  private viteBuildCommand(project: StoredProjectRecord, cacheKey: string, packageManager: PreviewPackageManager): string {
+    const commandPrefix = packageManager === 'pnpm'
+      ? 'pnpm exec'
+      : packageManager === 'yarn'
+        ? 'yarn'
+        : 'npm exec --'
+    return `${commandPrefix} vite build --outDir <preview-output> --emptyOutDir --base /build-preview/${project.projectId}/${cacheKey}/`
   }
 
   /**
@@ -1659,7 +1987,8 @@ export class PreviewService {
    * Output: human-readable command string.
    */
   private async installCommandFor(repoPath: string): Promise<string> {
-    return this.installCommandDisplay(await this.installArgsFor(repoPath))
+    const packageManager = await this.detectPackageManager(repoPath)
+    return this.installCommandDisplay(await this.installArgsFor(repoPath, packageManager), packageManager)
   }
 }
 

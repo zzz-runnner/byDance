@@ -597,7 +597,12 @@ export class ProjectsService {
     asset: PreviewAsset,
   ): Promise<void> {
     response.type(asset.contentType)
-    response.setHeader('Cache-Control', 'no-cache')
+    response.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    response.setHeader('Pragma', 'no-cache')
+    response.setHeader('Expires', '0')
+    response.setHeader('Surrogate-Control', 'no-store')
+    response.setHeader('Last-Modified', new Date(0).toUTCString())
+    response.removeHeader('ETag')
 
     if (asset.kind === 'html') {
       response.send(asset.content)

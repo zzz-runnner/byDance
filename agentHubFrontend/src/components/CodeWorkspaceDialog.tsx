@@ -502,6 +502,18 @@ function createExternalPreviewTarget(
   }
 }
 
+function normalizePreviewCapability(
+  capability: WorkspacePreviewCapability,
+): WorkspacePreviewCapability {
+  return {
+    ...capability,
+    targets: capability.targets.map(target => ({
+      ...target,
+      url: backendAssetUrl(target.url) ?? target.url,
+    })),
+  }
+}
+
 /**
  * Builds the preview source options shown in the preview toolbar.
  * Input: workspace preview state, selected runtime target, and delivery summary.
@@ -775,6 +787,10 @@ export function CodeWorkspaceDialog({
   const diffFiles = turnDiff?.files ?? []
   const diffSummary = turnDiff?.summary ?? turnReview?.summary ?? ''
   const diffStatusSummary = diffSnapshot?.status?.trim() ?? ''
+  const diffTitle = turnDiff?.title ?? (turnResultContext ? 'Turn Diff' : 'Workspace Diff')
+  const diffModeLabel = turnResultContext ? 'Turn diff view' : 'Workspace live diff view'
+  const diffDescription = diffSummary || turnResultContext?.summary || diffStatusSummary || 'This panel shows the current turn diff or the live workspace diff.'
+  const hasDiffContent = Boolean(diffPatch || diffFiles.length || diffStatusSummary)
   const currentDeliveryVersionId = deliverySummary?.currentVersion?.versionId
   const canShowPreviewFrame = Boolean(activePreviewTarget?.url) && (
     activePreviewMode !== 'workspace' ||
@@ -1050,12 +1066,13 @@ export function CodeWorkspaceDialog({
     capability: WorkspacePreviewCapability,
     preferredPreviewPath?: string,
   ) {
+    const normalizedCapability = normalizePreviewCapability(capability)
     const nextPreviewTarget =
-      capability.targets.find(target => target.path === preferredPreviewPath) ??
-      capability.targets.find(target => target.path === capability.defaultTargetPath) ??
-      capability.targets[0]
+      normalizedCapability.targets.find(target => target.path === preferredPreviewPath) ??
+      normalizedCapability.targets.find(target => target.path === normalizedCapability.defaultTargetPath) ??
+      normalizedCapability.targets[0]
 
-    setPreviewCapability(capability)
+    setPreviewCapability(normalizedCapability)
     setSelectedPreviewPath(nextPreviewTarget?.path)
     setPreviewAttempt(0)
   }
@@ -2051,9 +2068,9 @@ export function CodeWorkspaceDialog({
                 ) : panelMode === 'diff' ? (
                   <div className="code-editor-toolbar code-editor-toolbar--preview">
                     <div className="code-editor-toolbar__meta">
-                      <strong>{turnDiff?.title ?? '当前代码 Diff'}</strong>
-                      <span>{turnResultContext ? '本轮产物差异视图' : '当前工作区实时差异视图'}</span>
-                      <span>{diffSummary || turnResultContext?.summary || diffStatusSummary || '这里会展示当前本轮或当前工作区的代码差异。'}</span>
+                      <strong>{diffTitle}</strong>
+                      <span>{diffModeLabel}</span>
+                      <span>{diffDescription}</span>
                     </div>
                     <div className="code-editor-toolbar__actions code-editor-toolbar__actions--preview">
                       {turnDiff?.changeSetId ? (
@@ -2577,7 +2594,7 @@ export function CodeWorkspaceDialog({
                     </div>
                   ) : null}
 
-                  {diffPatch ? (
+                  {hasDiffContent ? (
                     <pre className="code-diff-patch">{diffPatch}</pre>
                   ) : (
                     <div className="code-preview-empty">

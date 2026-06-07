@@ -7,6 +7,10 @@ class RuntimePreviewQueryDto {
   @IsOptional()
   @IsString()
   entry?: string
+
+  @IsOptional()
+  @IsString()
+  v?: string
 }
 
 /**
