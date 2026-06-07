@@ -30,7 +30,7 @@ type AgentManagementDialogProps = {
   onDelete: (agentId: string) => Promise<void> | void
 }
 
-const PROVIDERS: AgentProvider[] = ['claude', 'codex', 'mock']
+const PROVIDERS: AgentProvider[] = ['claude', 'codex']
 const DEFAULT_RUNTIME_SECONDS = 300
 const DEFAULT_SYSTEM_PROMPT = 'You are a focused custom Agent. Follow the workspace context and return concise, actionable results.'
 
@@ -64,10 +64,7 @@ function providerLabel(provider: AgentProvider): string {
   if (provider === 'claude') {
     return 'Claude'
   }
-  if (provider === 'codex') {
-    return 'Codex'
-  }
-  return 'Mock'
+  return 'Codex'
 }
 
 function agentSearchText(agent: AgentDefinition): string {
@@ -467,7 +464,7 @@ export function AgentManagementDialog({
                     />
                   </div>
                   <div className="dialog-field">
-                    <label htmlFor="agent-provider">模型提供方</label>
+                    <label htmlFor="agent-provider">Agent 服务提供方</label>
                     <select
                       id="agent-provider"
                       value={draft.modelProvider}
