@@ -7,7 +7,7 @@ export type Agent = {
   id: string
   name: string
   role: string
-  provider: 'claude' | 'codex' | 'mock'
+  provider: 'claude' | 'codex'
   status: 'idle' | 'running' | 'reviewing'
   color: string
   skills: string[]
@@ -81,7 +81,7 @@ export const agents: Agent[] = [
     id: 'product-manager',
     name: '产品经理',
     role: '澄清需求、拆任务、定义验收标准',
-    provider: 'mock',
+    provider: 'claude',
     status: 'idle',
     color: '#f59e0b',
     skills: ['需求', '优先级', '验收'],

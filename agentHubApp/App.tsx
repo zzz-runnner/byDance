@@ -628,7 +628,6 @@ function buildArtifactViewsFromProjectState(envelope: ProjectStateEnvelope): Art
 function getProjectAgentColor(agent?: ProjectAgent): string | undefined {
   if (agent?.modelProvider === 'codex') return '#10b981'
   if (agent?.modelProvider === 'claude') return '#7c3aed'
-  if (agent?.modelProvider === 'mock') return '#64748b'
   return undefined
 }
 
@@ -647,9 +646,9 @@ function getDefaultGroupProjectAgents(): ProjectAgent[] {
 
 function mapProjectAgentToAgentView(agent: ProjectAgent, index: number): AgentView {
   const fallback = agents.find(item => item.id === agent.id)
-  const provider = agent.modelProvider === 'codex' || agent.modelProvider === 'mock' || agent.modelProvider === 'claude'
+  const provider = agent.modelProvider === 'codex' || agent.modelProvider === 'claude'
     ? agent.modelProvider
-    : fallback?.provider ?? 'mock'
+    : fallback?.provider ?? 'claude'
   const model = agent.model ?? 'default'
   const color = getProjectAgentColor(agent) ?? fallback?.color ?? ['#7c3aed', '#2563eb', '#10b981', '#f59e0b'][index % 4]
   return {
@@ -4355,7 +4354,6 @@ function AgentConfigPage({
   const providerOptions: { value: Agent['provider']; label: string }[] = [
     { value: 'claude', label: 'Claude' },
     { value: 'codex', label: 'Codex' },
-    { value: 'mock', label: 'Mock' },
   ]
 
   useEffect(() => {
@@ -4439,7 +4437,7 @@ function AgentConfigPage({
 
           <View style={styles.agentConfigGrid}>
             <View style={styles.agentFormField}>
-              <Text style={styles.agentFormLabel}>modelProvider</Text>
+              <Text style={styles.agentFormLabel}>Agent 服务提供方</Text>
               <Pressable style={styles.agentSelectBox} onPress={() => setProviderOpen(open => !open)}>
                 <Text style={styles.agentFormInputText}>{providerOptions.find(option => option.value === provider)?.label}</Text>
                 <MaterialCommunityIcons name="menu-down" size={22} color="#334155" />

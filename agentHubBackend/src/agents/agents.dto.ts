@@ -8,7 +8,7 @@ import {
   MaxLength,
 } from 'class-validator'
 
-const AGENT_PROVIDERS = ['claude', 'codex', 'mock'] as const
+const AGENT_PROVIDERS = ['claude', 'codex'] as const
 const PERMISSION_MODES = ['readonly', 'ask', 'acceptEdits', 'dangerous'] as const
 const ISOLATION_MODES = ['shared', 'worktree'] as const
 
@@ -45,7 +45,7 @@ export class CreateAgentDto {
 
   @IsOptional()
   @IsIn(AGENT_PROVIDERS)
-  modelProvider?: 'claude' | 'codex' | 'mock'
+  modelProvider?: 'claude' | 'codex'
 
   @IsOptional()
   @IsString()
@@ -125,7 +125,7 @@ export class UpdateAgentDto {
 
   @IsOptional()
   @IsIn(AGENT_PROVIDERS)
-  modelProvider?: 'claude' | 'codex' | 'mock'
+  modelProvider?: 'claude' | 'codex'
 
   @IsOptional()
   @IsString()

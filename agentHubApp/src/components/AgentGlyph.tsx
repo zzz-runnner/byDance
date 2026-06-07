@@ -17,7 +17,6 @@ const brand = require('../../assets/brand/ai-core.png')
 function colorForAgent(agentId: string, provider?: string): string {
   if (provider === 'codex') return '#10b981'
   if (provider === 'claude') return '#7c3aed'
-  if (provider === 'mock') return '#64748b'
 
   const palette = ['#2563eb', '#db2777', '#059669', '#d97706', '#7c3aed', '#0891b2']
   const index = [...agentId].reduce((sum, char) => sum + char.charCodeAt(0), 0) % palette.length
