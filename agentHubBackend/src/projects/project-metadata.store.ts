@@ -405,19 +405,6 @@ function compareProjectsBySort(
   sortBy: WorkspaceSortField,
   sortDirection: SortDirection,
 ): number {
-  if (left.pinnedAt || right.pinnedAt) {
-    if (!left.pinnedAt) {
-      return 1
-    }
-    if (!right.pinnedAt) {
-      return -1
-    }
-    const pinnedComparison = right.pinnedAt.localeCompare(left.pinnedAt)
-    if (pinnedComparison !== 0) {
-      return pinnedComparison
-    }
-  }
-
   const direction = sortDirection === 'asc' ? 1 : -1
   const valueComparison = compareStrings(projectSortValue(left, sortBy), projectSortValue(right, sortBy))
   if (valueComparison !== 0) {

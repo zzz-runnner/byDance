@@ -7,6 +7,7 @@ import {
   FileContentQueryDto,
   PreviewBuildQueryDto,
   ProjectStateQueryDto,
+  ProjectTurnRecoveryQueryDto,
   StreamProjectMessageDto,
   UpdateProjectMetadataDto,
   WriteWorkspaceFileDto,
@@ -109,6 +110,15 @@ export class ProjectsController {
     @Query() query: ProjectStateQueryDto,
   ) {
     return this.projects.getProjectState(projectId, query)
+  }
+
+  @Get(':projectId/turns/:turnId/recovery')
+  getProjectTurnRecovery(
+    @Param('projectId') projectId: string,
+    @Param('turnId') turnId: string,
+    @Query() query: ProjectTurnRecoveryQueryDto,
+  ) {
+    return this.projects.getProjectTurnRecovery(projectId, turnId, query)
   }
 
   @Get(':projectId/delivery')

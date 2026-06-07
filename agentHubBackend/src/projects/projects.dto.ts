@@ -174,6 +174,14 @@ export class ProjectStateQueryDto {
   messageCursor?: string
 }
 
+export class ProjectTurnRecoveryQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  messageLimit?: number
+}
+
 export class WorkbenchQueryDto {
   @IsOptional()
   @Type(() => Number)

@@ -85,6 +85,23 @@ export interface ProjectStateResponse {
   messagePage: ProjectStatePage
 }
 
+export interface ProjectTurnRecoveryResponse {
+  projectId: string
+  workspaceId: string
+  conversationId?: string
+  turnId: string
+  status: 'running' | 'finished' | 'failed' | 'not_found'
+  hasAssistantReply: boolean
+  lastEventType?: string
+  latestMessageCreatedAt?: string
+  latestEventCreatedAt?: string
+  messages: RuntimeMessage[]
+  workflowEvents: RuntimeWorkflowEventRecord[]
+  artifacts: RuntimeArtifact[]
+  changeSets: RuntimeChangeSet[]
+  agents: RuntimeAgent[]
+}
+
 export interface CodeSelectionReference {
   filePath: string
   selectedText: string

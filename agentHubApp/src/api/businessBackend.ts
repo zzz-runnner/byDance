@@ -392,6 +392,27 @@ export type ProjectStateInput = {
   page?: number
 }
 
+export type ProjectTurnRecoveryInput = {
+  messageLimit?: number
+}
+
+export type ProjectTurnRecoveryResponse = {
+  projectId: string
+  workspaceId: string
+  conversationId?: string
+  turnId: string
+  status: 'running' | 'finished' | 'failed' | 'not_found'
+  hasAssistantReply: boolean
+  lastEventType?: string
+  latestMessageCreatedAt?: string
+  latestEventCreatedAt?: string
+  messages: ProjectMessage[]
+  workflowEvents: ProjectWorkflowEvent[]
+  artifacts: ProjectArtifact[]
+  changeSets: ProjectChangeSet[]
+  agents: ProjectAgent[]
+}
+
 export type StreamProjectMessageInput = {
   conversationId?: string
   content: string
@@ -607,6 +628,40 @@ export async function fetchProjectState(projectId: string, input?: ProjectStateI
       error instanceof Error && error.name === 'AbortError'
         ? '加载对话状态超时。'
         : '无法加载对话状态。'
+    throw new BusinessBackendError(message)
+  } finally {
+    timeout.cancel()
+  }
+}
+
+export async function fetchProjectTurnRecovery(
+  projectId: string,
+  turnId: string,
+  input?: ProjectTurnRecoveryInput,
+): Promise<ProjectTurnRecoveryResponse> {
+  const query = new URLSearchParams()
+  if (input?.messageLimit) query.set('messageLimit', String(input.messageLimit))
+
+  const timeout = withTimeout(12000)
+
+  try {
+    const response = await fetch(
+      absoluteBackendUrl(`/api/projects/${encodeURIComponent(projectId)}/turns/${encodeURIComponent(turnId)}/recovery${query.size > 0 ? `?${query.toString()}` : ''}`),
+      {
+        method: 'GET',
+        signal: timeout.signal,
+      },
+    )
+    return await readJson<ProjectTurnRecoveryResponse>(response, 'Load project turn recovery')
+  } catch (error) {
+    if (error instanceof BusinessBackendError) {
+      throw error
+    }
+
+    const message =
+      error instanceof Error && error.name === 'AbortError'
+        ? '加载当前轮次恢复状态超时。'
+        : '无法加载当前轮次恢复状态。'
     throw new BusinessBackendError(message)
   } finally {
     timeout.cancel()

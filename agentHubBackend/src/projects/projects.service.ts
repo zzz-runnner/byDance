@@ -25,7 +25,14 @@ import type {
   ConversationType,
   ProjectDeliverySummaryResponse,
   ProjectStateResponse,
+  ProjectTurnRecoveryResponse,
   ProjectWorkspaceDiff,
+  RuntimeAgent,
+  RuntimeAppState,
+  RuntimeArtifact,
+  RuntimeChangeSet,
+  RuntimeMessage,
+  RuntimeWorkflowEventRecord,
   SortDirection,
   StoredProjectRecord,
   WorkbenchOverviewResponse,
@@ -39,6 +46,7 @@ import {
   FileContentQueryDto,
   PreviewBuildQueryDto,
   ProjectStateQueryDto,
+  ProjectTurnRecoveryQueryDto,
   StreamProjectMessageDto,
   UpdateProjectMetadataDto,
   WorkbenchQueryDto,
@@ -297,6 +305,96 @@ export class ProjectsService {
       messagePageSize: query.messagePageSize,
       messageCursor: query.messageCursor,
     })
+  }
+
+  async getProjectTurnRecovery(
+    projectId: string,
+    turnId: string,
+    query: ProjectTurnRecoveryQueryDto,
+  ): Promise<ProjectTurnRecoveryResponse> {
+    const project = await this.getProject(projectId)
+    const state = await this.agentHub.fetchState()
+    const conversationIds = new Set(
+      state.conversations
+        .filter(conversation => conversation.workspaceId === project.workspaceId)
+        .map(conversation => conversation.id),
+    )
+    const workspaceAgents = this.resolveRecoveryAgents(state, project.workspaceId, project.conversationId)
+    const scopedMessages = state.messages.filter(message =>
+      message.workspaceId === project.workspaceId || conversationIds.has(message.conversationId),
+    )
+    const scopedEvents = state.workflowEvents.filter(event =>
+      event.workspaceId === project.workspaceId || conversationIds.has(event.conversationId),
+    )
+    const matchingMessages = scopedMessages
+      .filter(message => this.readTurnId(message) === turnId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    const matchingEvents = scopedEvents
+      .filter(record => this.readTurnId(record.event) === turnId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+
+    if (matchingMessages.length === 0 && matchingEvents.length === 0) {
+      return {
+        projectId: project.projectId,
+        workspaceId: project.workspaceId,
+        conversationId: project.conversationId,
+        turnId,
+        status: 'not_found',
+        hasAssistantReply: false,
+        messages: [],
+        workflowEvents: [],
+        artifacts: [],
+        changeSets: [],
+        agents: workspaceAgents,
+      }
+    }
+
+    const artifactIds = new Set(
+      matchingEvents
+        .map(record => typeof record.event.artifactId === 'string' ? record.event.artifactId : undefined)
+        .filter((value): value is string => Boolean(value)),
+    )
+    const changeSetIds = new Set(
+      matchingEvents
+        .map(record => typeof record.event.changeSetId === 'string' ? record.event.changeSetId : undefined)
+        .filter((value): value is string => Boolean(value)),
+    )
+    const runIds = new Set(
+      matchingEvents
+        .map(record => typeof record.event.runId === 'string' ? record.event.runId : undefined)
+        .filter((value): value is string => Boolean(value)),
+    )
+    const artifacts = state.artifacts
+      .filter(artifact =>
+        artifact.workspaceId === project.workspaceId &&
+        (artifactIds.has(artifact.id) || (artifact.agentRunId ? runIds.has(artifact.agentRunId) : false)),
+      )
+      .sort((left, right) => readComparableTimestamp(left.createdAt).localeCompare(readComparableTimestamp(right.createdAt)))
+    const changeSets = state.changeSets
+      .filter(changeSet =>
+        changeSet.workspaceId === project.workspaceId &&
+        (changeSetIds.has(changeSet.id) || runIds.has(changeSet.agentRunId)),
+      )
+      .sort((left, right) => readComparableTimestamp(left.createdAt).localeCompare(readComparableTimestamp(right.createdAt)))
+    const hasAssistantReply = matchingMessages.some(message => this.readSenderType(message) === 'agent')
+    const lastEvent = matchingEvents.at(-1)
+
+    return {
+      projectId: project.projectId,
+      workspaceId: project.workspaceId,
+      conversationId: project.conversationId,
+      turnId,
+      status: this.resolveTurnRecoveryStatus(matchingMessages, matchingEvents),
+      hasAssistantReply,
+      lastEventType: typeof lastEvent?.event.type === 'string' ? lastEvent.event.type : undefined,
+      latestMessageCreatedAt: matchingMessages.at(-1)?.createdAt,
+      latestEventCreatedAt: lastEvent?.createdAt,
+      messages: limitTail(matchingMessages, query.messageLimit),
+      workflowEvents: matchingEvents,
+      artifacts,
+      changeSets,
+      agents: workspaceAgents,
+    }
   }
 
   /**
@@ -779,6 +877,59 @@ export class ProjectsService {
     })
   }
 
+  private resolveRecoveryAgents(
+    state: RuntimeAppState,
+    workspaceId: string,
+    conversationId?: string,
+  ): RuntimeAgent[] {
+    return state.agents.filter(agent => {
+      if (agent.workspaceId !== workspaceId) {
+        return false
+      }
+      if (!conversationId || !agent.conversationId) {
+        return true
+      }
+      return agent.conversationId === conversationId
+    })
+  }
+
+  private readTurnId(value: Record<string, unknown> | undefined): string | undefined {
+    return typeof value?.turnId === 'string' ? value.turnId : undefined
+  }
+
+  private readSenderType(message: RuntimeMessage): string | undefined {
+    return typeof message.senderType === 'string' ? message.senderType : undefined
+  }
+
+  private resolveTurnRecoveryStatus(
+    messages: RuntimeMessage[],
+    workflowEvents: RuntimeWorkflowEventRecord[],
+  ): ProjectTurnRecoveryResponse['status'] {
+    if (messages.length === 0 && workflowEvents.length === 0) {
+      return 'not_found'
+    }
+
+    const hasFailedEvent = workflowEvents.some(record => {
+      const type = typeof record.event.type === 'string' ? record.event.type : ''
+      const status = typeof record.event.status === 'string' ? record.event.status : ''
+      return type === 'assistant_message_error' || type === 'model_call_failed' || status === 'failed' || status === 'error'
+    })
+    if (hasFailedEvent) {
+      return 'failed'
+    }
+
+    const hasFinishedEvent = workflowEvents.some(record => {
+      const type = typeof record.event.type === 'string' ? record.event.type : ''
+      return type === 'workflow_finished' || type === 'assistant_message_finished'
+    })
+    if (hasFinishedEvent) {
+      return 'finished'
+    }
+
+    const hasAssistantReply = messages.some(message => this.readSenderType(message) === 'agent')
+    return hasAssistantReply ? 'finished' : 'running'
+  }
+
   /**
    * Creates the runtime workspace and selected room for one new business project.
    * Input: create-project payload, normalized room mode, and optional direct agent id.
@@ -1199,6 +1350,17 @@ function latestTimestamp(...values: Array<string | undefined>): string {
     .sort((left, right) => right.localeCompare(left))[0] ?? FALLBACK_TIMESTAMP
 }
 
+function readComparableTimestamp(value: unknown): string {
+  return typeof value === 'string' && value ? value : FALLBACK_TIMESTAMP
+}
+
+function limitTail<T>(items: T[], limit?: number): T[] {
+  if (!limit || limit >= items.length) {
+    return items
+  }
+  return items.slice(-limit)
+}
+
 function directConversationAgentId(
   conversation: AgentHubState['conversations'][number] | undefined,
 ): string | undefined {
@@ -1264,19 +1426,6 @@ function compareProjectsBySort(
   sortBy: WorkspaceSortField,
   sortDirection: SortDirection,
 ): number {
-  if (left.pinnedAt || right.pinnedAt) {
-    if (!left.pinnedAt) {
-      return 1
-    }
-    if (!right.pinnedAt) {
-      return -1
-    }
-    const pinnedComparison = right.pinnedAt.localeCompare(left.pinnedAt)
-    if (pinnedComparison !== 0) {
-      return pinnedComparison
-    }
-  }
-
   const direction = sortDirection === 'asc' ? 1 : -1
   const valueComparison = projectSortValue(left, sortBy).localeCompare(projectSortValue(right, sortBy))
   if (valueComparison !== 0) {
