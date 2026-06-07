@@ -164,6 +164,8 @@ export class BuildsService {
         `${sourceDir}:/workspace`,
         '-w',
         '/workspace',
+        '--user',
+        `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
         image,
         'sh',
         '-lc',
