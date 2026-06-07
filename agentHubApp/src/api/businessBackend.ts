@@ -166,6 +166,13 @@ export type ProjectConversation = {
   updatedAt?: string
 }
 
+export type ProjectMessageReplyReference = {
+  messageId: string
+  senderId: string
+  senderName?: string
+  excerpt: string
+}
+
 export type ProjectMessage = {
   id: string
   workspaceId?: string
@@ -174,6 +181,7 @@ export type ProjectMessage = {
   senderType: 'user' | 'agent' | 'system'
   senderId?: string
   content?: string
+  replyTo?: ProjectMessageReplyReference
   artifacts?: ProjectArtifact[]
   createdAt?: string
 }
@@ -417,12 +425,7 @@ export type StreamProjectMessageInput = {
   conversationId?: string
   content: string
   agentId?: string
-  replyTo?: {
-    messageId: string
-    senderId: string
-    senderName?: string
-    excerpt: string
-  }
+  replyTo?: ProjectMessageReplyReference
 }
 
 export type ProjectStreamPayload = {
