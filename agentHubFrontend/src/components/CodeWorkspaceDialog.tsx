@@ -24,6 +24,7 @@ import {
   fetchBusinessProjectDeliverySummary,
   fetchBusinessProjectVersionDiff,
   fetchBusinessProjectVersions,
+  fetchBusinessProjectState,
   fetchBusinessProjectPreviewCapability,
   fetchBusinessProjectDiff,
   fetchBusinessProjectFileContent,
@@ -36,6 +37,7 @@ import type {
   CodeWorkspaceDialogRequest,
   CodeWorkspaceDialogTab,
   CodeWorkspaceDialogTurnArtifact,
+  CodeWorkspaceDialogTurnDiff,
   CodeWorkspaceDialogTurnResult,
   CodeSelectionReference,
   WorkspaceDeliveryAsset,
@@ -715,6 +717,7 @@ export function CodeWorkspaceDialog({
   const [fileCache, setFileCache] = useState<Record<string, FileCacheEntry>>({})
   const [documentPreviewCache, setDocumentPreviewCache] = useState<Record<string, DocumentPreviewCacheEntry>>({})
   const [diffSnapshot, setDiffSnapshot] = useState<WorkspaceDiffSnapshot>()
+  const [fallbackTurnDiff, setFallbackTurnDiff] = useState<CodeWorkspaceDialogTurnDiff>()
   const [applyingChangeSet, setApplyingChangeSet] = useState(false)
   const [changeSetNotice, setChangeSetNotice] = useState('')
   const [selectionState, setSelectionState] = useState<EditorSelectionState | undefined>(undefined)
@@ -781,7 +784,7 @@ export function CodeWorkspaceDialog({
   const previewLogExcerpt = previewCapability?.build?.logExcerpt?.trim() ?? ''
   const deliveryBusy = Boolean(deliveryAction)
   const turnArtifacts = turnResultContext?.artifacts ?? []
-  const turnDiff = turnResultContext?.diff
+  const turnDiff = turnResultContext?.diff ?? fallbackTurnDiff
   const turnReview = turnResultContext?.review
   const diffPatch = turnDiff?.patch ?? diffSnapshot?.patch ?? ''
   const diffFiles = turnDiff?.files ?? []
@@ -1226,11 +1229,12 @@ export function CodeWorkspaceDialog({
     setDeliveryError('')
 
     try {
-      const [treeSnapshot, nextDiff, previewSnapshot, nextDeliverySummary] = await Promise.all([
+      const [treeSnapshot, nextDiff, previewSnapshot, nextDeliverySummary, projectState] = await Promise.all([
         fetchBusinessProjectFiles(projectId),
         fetchBusinessProjectDiff(projectId).catch(() => undefined),
         fetchBusinessProjectPreviewCapability(projectId),
         fetchBusinessProjectDeliverySummary(projectId),
+        fetchBusinessProjectState(projectId, 20).catch(() => undefined),
       ])
 
       const nextTree = treeSnapshot.entries
@@ -1243,6 +1247,18 @@ export function CodeWorkspaceDialog({
       setFileTree(nextTree)
       setTreeRootLabel(treeSnapshot.rootLabel || '')
       setDiffSnapshot(nextDiff)
+      if (!turnResultContext?.diff) {
+        const latestChangeSet = projectState?.state.changeSets
+          ?.slice()
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+        setFallbackTurnDiff(latestChangeSet ? {
+          changeSetId: latestChangeSet.id,
+          title: 'Latest Turn Diff',
+          summary: latestChangeSet.summary,
+          patch: latestChangeSet.patch,
+          files: latestChangeSet.files,
+        } : undefined)
+      }
       applyPreviewCapability(previewSnapshot, preferredPreviewPath)
       setDeliverySummary(nextDeliverySummary)
       setExpandedPaths(previous => ({
