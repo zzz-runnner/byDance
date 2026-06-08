@@ -801,6 +801,19 @@ export function CodeWorkspaceDialog({
     previewCapability?.mode === 'module-shell' ||
     previewBuildStatus === 'success'
   )
+  const previewFallbackDocumentPath =
+    activeFilePath && isDocumentPreviewableFile(activeFilePath)
+      ? activeFilePath
+      : firstDocumentPreviewableFilePath(fileTree)
+  const previewFallbackDocumentEntry = previewFallbackDocumentPath
+    ? documentPreviewCache[previewFallbackDocumentPath]
+    : undefined
+  const previewFallbackDocument = previewFallbackDocumentEntry?.preview
+  const shouldUseDocumentPreviewFallback =
+    activePreviewMode === 'workspace' &&
+    !canShowPreviewFrame &&
+    Boolean(previewFallbackDocumentPath) &&
+    !previewLoading
   const currentVersion = versions.find(version => version.isCurrent) ?? versions.find(version => version.versionId === currentDeliveryVersionId)
   const selectedVersion = versions.find(version => version.versionId === selectedVersionId)
   const diffBaseVersion = versions.find(version => version.versionId === diffBaseVersionId)
@@ -1510,6 +1523,56 @@ export function CodeWorkspaceDialog({
       cancelled = true
     }
   }, [activeFilePath, documentPreviewCache, fileCache, open, projectId])
+
+  useEffect(() => {
+    if (
+      !open ||
+      !projectId ||
+      panelMode !== 'preview' ||
+      !shouldUseDocumentPreviewFallback ||
+      !previewFallbackDocumentPath
+    ) {
+      return
+    }
+
+    const cachedPreview = documentPreviewCache[previewFallbackDocumentPath]
+    if (cachedPreview?.loading || cachedPreview?.preview || cachedPreview?.error) {
+      return
+    }
+
+    let cancelled = false
+    const currentProjectId = projectId
+    const currentFilePath = previewFallbackDocumentPath
+
+    async function loadPreviewFallbackDocument() {
+      try {
+        await loadDocumentPreviewIntoCache(currentProjectId, currentFilePath)
+      } catch (error) {
+        if (cancelled) {
+          return
+        }
+        setDocumentPreviewCache(previous => ({
+          ...previous,
+          [currentFilePath]: {
+            loading: false,
+            error: error instanceof Error ? error.message : 'Failed to load document preview.',
+          },
+        }))
+      }
+    }
+
+    void loadPreviewFallbackDocument()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    documentPreviewCache,
+    open,
+    panelMode,
+    previewFallbackDocumentPath,
+    projectId,
+    shouldUseDocumentPreviewFallback,
+  ])
 
   useEffect(() => {
     clearSelectionCommitTimer()
@@ -2368,9 +2431,13 @@ export function CodeWorkspaceDialog({
                   <>
                     <div className="code-editor-toolbar code-editor-toolbar--preview">
                       <div className="code-editor-toolbar__meta">
-                        <strong>{activePreviewTarget?.path ?? previewCapability?.entryPath ?? '暂无可预览入口'}</strong>
-                        <span>{previewSurfaceLabel(activePreviewMode, previewCapability)}</span>
-                        <span>{activePreviewOption?.summary ?? previewCapability?.reason ?? '正在识别当前工作区的预览方式。'}</span>
+                        <strong>{shouldUseDocumentPreviewFallback ? previewFallbackDocumentPath : activePreviewTarget?.path ?? previewCapability?.entryPath ?? '暂无可预览入口'}</strong>
+                        <span>{shouldUseDocumentPreviewFallback ? '文档预览 / 前端渲染' : previewSurfaceLabel(activePreviewMode, previewCapability)}</span>
+                        <span>
+                          {shouldUseDocumentPreviewFallback
+                            ? '当前工作区没有页面预览入口，已切换到可预览的文档文件。'
+                            : activePreviewOption?.summary ?? previewCapability?.reason ?? '正在识别当前工作区的预览方式。'}
+                        </span>
                       </div>
                       <div className="code-editor-toolbar__actions code-editor-toolbar__actions--preview">
                         <div className="segmented-control code-preview-source-switch">
@@ -2621,7 +2688,21 @@ export function CodeWorkspaceDialog({
                 </div>
               ) : (
                 <div className="code-preview-shell">
-                  {activePreviewMode === 'workspace' && previewLoading && !workspacePreviewCapability ? (
+                  {shouldUseDocumentPreviewFallback && previewFallbackDocumentEntry?.loading ? (
+                    <div className="code-preview-empty">
+                      <LoaderCircle className="icon-spin" size={18} />
+                      正在加载文档预览...
+                    </div>
+                  ) : shouldUseDocumentPreviewFallback && previewFallbackDocumentEntry?.error ? (
+                    <div className="code-preview-empty code-preview-empty--error">{previewFallbackDocumentEntry.error}</div>
+                  ) : shouldUseDocumentPreviewFallback && previewFallbackDocument ? (
+                    <DocumentPreviewPane preview={previewFallbackDocument} />
+                  ) : shouldUseDocumentPreviewFallback ? (
+                    <div className="code-preview-empty">
+                      <LoaderCircle className="icon-spin" size={18} />
+                      正在准备文档预览...
+                    </div>
+                  ) : activePreviewMode === 'workspace' && previewLoading && !workspacePreviewCapability ? (
                     <div className="code-preview-empty">
                       <LoaderCircle className="icon-spin" size={18} />
                       正在识别预览方式...
