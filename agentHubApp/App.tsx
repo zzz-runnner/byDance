@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Animated,
+  AppState,
   Easing,
   ImageBackground,
   Keyboard,
@@ -19,6 +20,7 @@ import {
   View,
 } from 'react-native'
 import { WebView } from 'react-native-webview'
+import Markdown from 'react-native-markdown-display'
 import { StatusBar } from 'expo-status-bar'
 import { LinearGradient } from 'expo-linear-gradient'
 import * as Clipboard from 'expo-clipboard'
@@ -29,6 +31,7 @@ import { AgentGlyph } from './src/components/AgentGlyph'
 import { GlassCard } from './src/components/GlassCard'
 import { Pill } from './src/components/Pill'
 import { createMobileScale, type LayoutTier } from './src/styles/mobileScale'
+import { normalizeAiMarkdown } from './src/utils/normalizeAiMarkdown'
 import {
   BUSINESS_API_BASE_URL,
   absoluteBackendUrl,
@@ -128,9 +131,11 @@ type ChatProcessStep = {
   time: string
   tone: 'done' | 'running' | 'waiting' | 'failed'
 }
+type ChatReplyReference = NonNullable<StreamProjectMessageInput['replyTo']>
 type ChatMessageView = ChatMessage & {
   createdAt?: string
   turnId?: string
+  replyTo?: ChatReplyReference
 }
 type AgentView = Agent & {
   source?: ProjectAgent['source']
@@ -168,6 +173,27 @@ type ChatStateView = {
 type FailedChatSend = {
   content: string
   agentId?: string
+  replyTo?: ChatReplyReference
+}
+type ChatProjectSession = {
+  chatState: ChatStateView
+  loading: boolean
+  error: string
+  streaming: boolean
+  loaded: boolean
+  lastTouchedAt: number
+  lastFailedMessage: FailedChatSend | null
+}
+type SendProjectChatMessageInput = {
+  projectId: string
+  content: string
+  agentId?: string
+  conversationId?: string
+  replyTo?: ChatReplyReference
+}
+type ChatMessageActionTarget = {
+  message: ChatMessageView
+  senderName: string
 }
 const PROCESS_PREVIEW_STEP_COUNT = 3
 const STREAM_WORKFLOW_EVENT_NAME_SET = new Set<string>(PROJECT_WORKFLOW_STREAM_EVENT_NAMES)
@@ -181,6 +207,7 @@ const CHAT_COMPOSER_INPUT_CONTENT_MAX_HEIGHT = CHAT_COMPOSER_INPUT_LINE_HEIGHT *
 const CHAT_COMPOSER_INPUT_MIN_HEIGHT = 40
 const CHAT_COMPOSER_INPUT_MAX_HEIGHT = CHAT_COMPOSER_INPUT_CONTENT_MAX_HEIGHT + CHAT_COMPOSER_INPUT_VERTICAL_PADDING * 2
 const CHAT_SCROLL_TO_BOTTOM_THRESHOLD = 140
+const CHAT_SESSION_CACHE_LIMIT = 8
 
 const tabs: { key: TabKey; label: string; icon: IconName }[] = [
   { key: 'workbench', label: '工作台', icon: 'view-dashboard-outline' },
@@ -191,6 +218,25 @@ const tabs: { key: TabKey; label: string; icon: IconName }[] = [
 const WORKBENCH_PAGE_SIZE = 10
 const PINNED_WORKBENCH_PAGE_SIZE = 50
 const DEFAULT_GROUP_AGENT_IDS = ['orchestrator', 'product-manager', 'engineer', 'reviewer'] as const
+const DEFAULT_WORKSPACE_CREATE_AGENT_IDS = ['orchestrator', 'engineer'] as const
+type DirectWorkspaceAgentId = 'claude-code-direct' | 'codex-direct'
+type DirectWorkspaceAgentOption = {
+  id: DirectWorkspaceAgentId
+  name: string
+  provider: 'claude' | 'codex'
+}
+const DIRECT_WORKSPACE_AGENT_OPTIONS: DirectWorkspaceAgentOption[] = [
+  {
+    id: 'claude-code-direct',
+    name: 'Claude Code Agent',
+    provider: 'claude',
+  },
+  {
+    id: 'codex-direct',
+    name: 'Codex Agent',
+    provider: 'codex',
+  },
+]
 const DEFAULT_GROUP_PROJECT_AGENTS: ProjectAgent[] = [
   {
     id: 'orchestrator',
@@ -284,6 +330,38 @@ function compactLongText(value?: string, maxLength = 240, fallback = '暂无内�
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
 }
 
+function normalizeReplyReference(replyTo?: ProjectMessage['replyTo'] | null): ChatReplyReference | undefined {
+  const messageId = replyTo?.messageId?.trim()
+  const senderId = replyTo?.senderId?.trim()
+  const excerpt = compactLongText(replyTo?.excerpt, 120, '')
+  if (!messageId || !senderId || !excerpt) return undefined
+  return {
+    messageId,
+    senderId,
+    senderName: replyTo?.senderName?.trim() || undefined,
+    excerpt,
+  }
+}
+
+function getReplySenderLabel(replyTo?: ChatReplyReference): string {
+  if (!replyTo) return ''
+  const senderName = replyTo.senderName?.trim()
+  if (senderName) return senderName
+  if (replyTo.senderId === 'user') return '用户'
+  return replyTo.senderId || 'Agent'
+}
+
+function createReplyReferenceFromMessage(message: ChatMessageView, senderName: string): ChatReplyReference | undefined {
+  const excerpt = compactLongText(message.text, 120, '')
+  if (!message.id || !excerpt || isLocalChatDraftMessage(message)) return undefined
+  return {
+    messageId: message.id,
+    senderId: message.sender === 'user' ? 'user' : message.agentId ?? 'agent',
+    senderName: senderName.trim() || undefined,
+    excerpt,
+  }
+}
+
 function artifactKindFromType(type?: string): ArtifactKind {
   if (type === 'web-preview' || type === 'preview') return 'preview'
   if (type === 'zip') return 'zip'
@@ -311,6 +389,10 @@ function artifactMetricForKind(kind: ArtifactKind, artifact?: Pick<ArtifactView,
   if (kind === 'deploy') return artifact?.url ? 'deployment ready' : 'deploy'
   if (kind === 'text') return 'summary'
   return 'artifact'
+}
+
+function isDeliveryPreviewArtifact(artifact: ArtifactView): boolean {
+  return artifact.deliverySurface === 'build' || artifact.deliverySurface === 'deployment'
 }
 
 function artifactStatusForKind(kind: ArtifactKind): Pick<ArtifactView, 'status' | 'statusLabel'> {
@@ -407,6 +489,7 @@ function mapProjectMessageToChatMessage(message: ProjectMessage): ChatMessageVie
     time: formatChatMessageTime(message.createdAt),
     createdAt: message.createdAt,
     turnId: message.turnId,
+    replyTo: normalizeReplyReference(message.replyTo),
   }
 }
 
@@ -642,6 +725,10 @@ function getDefaultGroupProjectAgents(): ProjectAgent[] {
     const agent = byId.get(agentId)
     return agent ? [{ ...agent }] : []
   })
+}
+
+function isDirectWorkspaceAgentId(agentId: string): agentId is DirectWorkspaceAgentId {
+  return DIRECT_WORKSPACE_AGENT_OPTIONS.some(option => option.id === agentId)
 }
 
 function mapProjectAgentToAgentView(agent: ProjectAgent, index: number): AgentView {
@@ -1017,6 +1104,101 @@ function createEmptyChatState(): ChatStateView {
   })
 }
 
+function createEmptyChatSession(): ChatProjectSession {
+  return {
+    chatState: createEmptyChatState(),
+    loading: false,
+    error: '',
+    streaming: false,
+    loaded: false,
+    lastTouchedAt: Date.now(),
+    lastFailedMessage: null,
+  }
+}
+
+function hasLocalPendingChatState(chatState: ChatStateView): boolean {
+  return chatState.messages.some(message => isLocalChatDraftMessage(message)) ||
+    chatState.processGroups.some(group => group.local || group.status === 'running')
+}
+
+function isLocalChatDraftMessage(message: ChatMessageView): boolean {
+  return message.id.startsWith('streaming-') || message.id.startsWith('local-chat-')
+}
+
+function hasCommittedReplacement(localMessage: ChatMessageView, committedMessages: ChatMessageView[]): boolean {
+  if (!isLocalChatDraftMessage(localMessage)) return false
+  if (localMessage.turnId && committedMessages.some(message => message.turnId === localMessage.turnId && message.sender === localMessage.sender)) return true
+  if (localMessage.sender === 'agent' && localMessage.id.startsWith('streaming-')) {
+    const committedMessageId = localMessage.id.slice('streaming-'.length)
+    return committedMessages.some(message => message.sender === 'agent' && message.id === committedMessageId)
+  }
+  if (localMessage.sender === 'agent') {
+    const localText = localMessage.text.trim()
+    const localTime = getTimeMs(localMessage.createdAt)
+    return committedMessages.some(message => {
+      if (message.sender !== 'agent') return false
+      if (localMessage.agentId && message.agentId !== localMessage.agentId) return false
+      const committedTime = getTimeMs(message.createdAt)
+      if (localTime > 0 && committedTime > 0 && Math.abs(committedTime - localTime) > 10 * 60 * 1000) return false
+      return !localText || message.text.includes(localText)
+    })
+  }
+
+  const localTime = getTimeMs(localMessage.createdAt)
+  return committedMessages.some(message => {
+    if (message.sender !== localMessage.sender) return false
+    if (localMessage.sender === 'user' && message.text.trim() !== localMessage.text.trim()) return false
+    if (localMessage.sender === 'agent' && localMessage.agentId && message.agentId !== localMessage.agentId) return false
+
+    const committedTime = getTimeMs(message.createdAt)
+    if (localTime === 0 || committedTime === 0) return true
+    return Math.abs(committedTime - localTime) < 5 * 60 * 1000
+  })
+}
+
+function mergeChatStateWithLocalDrafts(remote: ChatStateView, local: ChatStateView, keepLocalDrafts: boolean): ChatStateView {
+  if (!keepLocalDrafts) return remote
+
+  const localMessages = local.messages.filter(message =>
+    isLocalChatDraftMessage(message) &&
+    !hasCommittedReplacement(message, remote.messages),
+  )
+  const remoteGroupIds = new Set(remote.processGroups.map(group => group.turnId))
+  const localProcessGroups = local.processGroups.filter(group =>
+    localMessages.length > 0 &&
+    !remoteGroupIds.has(group.turnId) &&
+    (group.local || group.status === 'running'),
+  )
+
+  if (localMessages.length === 0 && localProcessGroups.length === 0) return remote
+
+  return createChatStateView({
+    ...remote,
+    messages: [...remote.messages, ...localMessages],
+    processGroups: [...remote.processGroups, ...localProcessGroups],
+  })
+}
+
+function trimChatSessionCache(sessions: Record<string, ChatProjectSession>, keepProjectId: string): Record<string, ChatProjectSession> {
+  const entries = Object.entries(sessions)
+  if (entries.length <= CHAT_SESSION_CACHE_LIMIT) return sessions
+
+  const protectedEntries = entries.filter(([projectId, session]) =>
+    projectId === keepProjectId ||
+    session.streaming ||
+    hasLocalPendingChatState(session.chatState),
+  )
+  const protectedIds = new Set(protectedEntries.map(([projectId]) => projectId))
+  const disposableEntries = entries
+    .filter(([projectId]) => !protectedIds.has(projectId))
+    .sort(([, left], [, right]) => right.lastTouchedAt - left.lastTouchedAt)
+
+  return Object.fromEntries([
+    ...protectedEntries,
+    ...disposableEntries.slice(0, Math.max(0, CHAT_SESSION_CACHE_LIMIT - protectedEntries.length)),
+  ])
+}
+
 function parseStreamPayload(rawData: string | null, fallbackType: ProjectStreamEvent): ProjectWorkflowEvent['event'] | undefined {
   if (!rawData) return fallbackType === 'message' ? undefined : { type: fallbackType }
 
@@ -1227,6 +1409,11 @@ export default function App() {
   const [workspacePanelMode, setWorkspacePanelMode] = useState<'switch' | 'create'>('switch')
   const [creatingWorkspace, setCreatingWorkspace] = useState(false)
   const [agentCreateSignal, setAgentCreateSignal] = useState(0)
+  const [chatSessionsByProject, setChatSessionsByProject] = useState<Record<string, ChatProjectSession>>({})
+  const streamRefsByProject = useRef<Record<string, ProjectMessageStream | undefined>>({})
+  const chatLoadRequestIdsRef = useRef<Record<string, number>>({})
+  const chatSyncTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>[]>>({})
+  const chatSessionsByProjectRef = useRef(chatSessionsByProject)
   const { width } = useWindowDimensions()
   const layoutTier: LayoutTier = width < 380 ? 'compact' : width < 430 ? 'standard' : 'wide'
   const mobileScale = useMemo(() => createMobileScale(layoutTier, width), [layoutTier, width])
@@ -1247,6 +1434,10 @@ export default function App() {
   const agentScreenProjectAgents = isWorkspaceAgentPage && agentRegistryWorkspaceId === currentAgentProjectId
     ? workspaceAgentRegistry
     : defaultAgentRegistry
+  const activeChatSession = useMemo(
+    () => chatSessionsByProject[currentAgentProjectId] ?? createEmptyChatSession(),
+    [chatSessionsByProject, currentAgentProjectId],
+  )
   const title = useMemo(() => {
     if (activeTab === 'workbench') return '工作台'
     if (activeTab === 'chat') return '对话'
@@ -1407,6 +1598,232 @@ export default function App() {
     })
   }
 
+  function updateChatSession(projectId: string, updater: (session: ChatProjectSession) => ChatProjectSession) {
+    setChatSessionsByProject(current => {
+      const nextSession = {
+        ...updater(current[projectId] ?? createEmptyChatSession()),
+        lastTouchedAt: Date.now(),
+      }
+      const nextSessions = trimChatSessionCache({
+        ...current,
+        [projectId]: nextSession,
+      }, projectId)
+      chatSessionsByProjectRef.current = nextSessions
+      return nextSessions
+    })
+  }
+
+  async function loadProjectChatState(projectId: string, options?: { preserveLocal?: boolean; silent?: boolean }) {
+    const requestId = (chatLoadRequestIdsRef.current[projectId] ?? 0) + 1
+    chatLoadRequestIdsRef.current[projectId] = requestId
+
+    if (!options?.silent) {
+      updateChatSession(projectId, session => ({
+        ...session,
+        loading: true,
+        error: '',
+      }))
+    }
+
+    try {
+      const envelope = await fetchProjectState(projectId, { messageLimit: 40 })
+      if (chatLoadRequestIdsRef.current[projectId] !== requestId) return
+
+      updateChatSession(projectId, session => {
+        const remoteState = buildChatStateView(envelope)
+        const keepLocalDrafts = options?.preserveLocal ?? session.streaming
+        return {
+          ...session,
+          chatState: mergeChatStateWithLocalDrafts(remoteState, session.chatState, keepLocalDrafts),
+          loading: false,
+          error: '',
+          loaded: true,
+        }
+      })
+    } catch (error) {
+      if (chatLoadRequestIdsRef.current[projectId] !== requestId) return
+      updateChatSession(projectId, session => ({
+        ...session,
+        loading: false,
+        error: error instanceof Error ? error.message : '对话加载失败。',
+      }))
+    }
+  }
+
+  function scheduleProjectChatSync(projectId: string) {
+    const previousTimers = chatSyncTimersRef.current[projectId] ?? []
+    previousTimers.forEach(timer => clearTimeout(timer))
+    chatSyncTimersRef.current[projectId] = [1600, 4200, 8600].map(delay =>
+      setTimeout(() => {
+        void loadProjectChatState(projectId, { preserveLocal: true, silent: true })
+      }, delay),
+    )
+  }
+
+  function appendStreamingMessage(projectId: string, detail: ProjectWorkflowEvent['event'], createdAt: string) {
+    if (!detail) return
+    const delta = detail.type === 'assistant_delta'
+      ? detail.delta ?? detail.content ?? detail.text ?? detail.message ?? ''
+      : ''
+    if (detail.type === 'assistant_delta' && !delta) return
+
+    updateChatSession(projectId, session => {
+      const nextMessages = upsertStreamingAssistantMessage(session.chatState.messages, {
+        messageId: detail.messageId,
+        agentId: detail.senderId ?? detail.agentId,
+        turnId: detail.turnId,
+        delta,
+        createdAt,
+      })
+      return {
+        ...session,
+        chatState: createChatStateView({ ...session.chatState, messages: nextMessages }),
+      }
+    })
+  }
+
+  function appendWorkflowEventToTimeline(projectId: string, eventType: ProjectWorkflowStreamEvent, rawData: string | null, parsedDetail?: ProjectWorkflowEvent['event']) {
+    const createdAt = new Date().toISOString()
+    let payload: Record<string, unknown> = {}
+
+    if (rawData) {
+      try {
+        payload = JSON.parse(rawData) as Record<string, unknown>
+      } catch {
+        payload = { summary: rawData }
+      }
+    }
+
+    const detailPayload = (payload.event && typeof payload.event === 'object' ? payload.event : payload) as Record<string, unknown>
+    const eventDetail = {
+      ...detailPayload,
+      type: typeof detailPayload.type === 'string' ? detailPayload.type : eventType === 'workflow_event' ? undefined : eventType,
+    } as ProjectWorkflowEvent['event']
+
+    const detail = parsedDetail ?? eventDetail
+
+    if (!detail?.type || detail.type === 'assistant_delta') return
+
+    updateChatSession(projectId, session => {
+      const workflowEvent: ProjectWorkflowEvent = {
+        id: typeof payload.id === 'string' ? payload.id : `stream-event-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        workspaceId: typeof payload.workspaceId === 'string' ? payload.workspaceId : undefined,
+        conversationId: typeof payload.conversationId === 'string' ? payload.conversationId : session.chatState.conversationId,
+        event: detail,
+        createdAt: typeof payload.createdAt === 'string' ? payload.createdAt : createdAt,
+      }
+      const step = mapWorkflowEventToStep(workflowEvent)
+      if (!step) return session
+
+      const nextGroups = appendProcessStepToGroups(session.chatState.processGroups, detail.turnId ?? 'local-streaming-turn', step, {
+        createdAt: workflowEvent.createdAt,
+      })
+      return {
+        ...session,
+        chatState: createChatStateView({ ...session.chatState, processGroups: nextGroups }),
+      }
+    })
+  }
+
+  function handleProjectChatStreamEvent(projectId: string, eventType: ProjectStreamEvent, rawData: string | null, onWorkflowFinished?: () => void) {
+    const detail = parseStreamPayload(rawData, eventType)
+    if (!detail?.type) return
+
+    if (detail.type === 'assistant_message_started' || detail.type === 'assistant_delta') {
+      appendStreamingMessage(projectId, detail, new Date().toISOString())
+    }
+
+    if (STREAM_WORKFLOW_EVENT_NAME_SET.has(detail.type)) {
+      appendWorkflowEventToTimeline(projectId, detail.type as ProjectWorkflowStreamEvent, rawData, detail)
+    }
+
+    if (detail.type === 'workflow_finished') {
+      onWorkflowFinished?.()
+    }
+  }
+
+  function finishProjectChatStream(projectId: string) {
+    streamRefsByProject.current[projectId]?.close()
+    streamRefsByProject.current[projectId] = undefined
+    updateChatSession(projectId, session => ({
+      ...session,
+      streaming: false,
+    }))
+    void loadProjectChatState(projectId, { preserveLocal: true, silent: true })
+    scheduleProjectChatSync(projectId)
+  }
+
+  function sendProjectChatMessage(input: SendProjectChatMessageInput) {
+    const projectId = input.projectId
+    const content = input.content.trim()
+    if (!content) return
+    if (streamRefsByProject.current[projectId]) return
+
+    const now = new Date().toISOString()
+    const optimisticMessage: ChatMessageView = {
+      id: `local-chat-${Date.now()}`,
+      sender: 'user',
+      text: content,
+      time: formatChatMessageTime(now),
+      createdAt: now,
+      replyTo: input.replyTo,
+    }
+    const sentProcessStep: ChatProcessStep = {
+      id: `local-process-${Date.now()}`,
+      icon: 'progress-clock',
+      title: '消息已发送',
+      summary: '正在等待后端流式响应',
+      time: formatMessageTime(now),
+      tone: 'running',
+    }
+
+    updateChatSession(projectId, session => {
+      const nextMessages = [...session.chatState.messages, optimisticMessage]
+      const nextGroups = appendProcessStepToGroups(session.chatState.processGroups, 'local-streaming-turn', sentProcessStep, {
+        local: true,
+        createdAt: now,
+      })
+      return {
+        ...session,
+        chatState: createChatStateView({ ...session.chatState, messages: nextMessages, processGroups: nextGroups }),
+        streaming: true,
+        error: '',
+        lastFailedMessage: null,
+      }
+    })
+
+    const body: StreamProjectMessageInput = {
+      conversationId: input.conversationId,
+      content,
+      agentId: input.agentId,
+      replyTo: input.replyTo,
+    }
+
+    let finalized = false
+    const finishStream = () => {
+      if (finalized) return
+      finalized = true
+      finishProjectChatStream(projectId)
+    }
+
+    streamRefsByProject.current[projectId] = streamProjectMessage(projectId, body, {
+      onEvent: ({ eventType, rawData }) => {
+        handleProjectChatStreamEvent(projectId, eventType, rawData, finishStream)
+      },
+      onError: error => {
+        updateChatSession(projectId, session => ({
+          ...session,
+          error: error.message,
+          lastFailedMessage: { content, agentId: input.agentId, replyTo: input.replyTo },
+        }))
+        finishStream()
+      },
+      onClose: () => {
+        finishStream()
+      },
+    })
+  }
+
   async function openActiveWorkspaceAgents() {
     const projectId = activeWorkspace.projectId ?? activeWorkspace.id
     setAgentEntryMode('workspace')
@@ -1561,6 +1978,40 @@ export default function App() {
     return () => clearTimeout(timeoutId)
   }, [backendStatus, workspaceQuery])
 
+  useEffect(() => {
+    chatSessionsByProjectRef.current = chatSessionsByProject
+  }, [chatSessionsByProject])
+
+  useEffect(() => {
+    if (backendStatus !== 'ready') return
+    const session = chatSessionsByProject[currentAgentProjectId]
+    if (session?.loaded || session?.loading) return
+    void loadProjectChatState(currentAgentProjectId)
+  }, [backendStatus, currentAgentProjectId])
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (nextState !== 'active') return
+
+      Object.entries(chatSessionsByProjectRef.current).forEach(([projectId, session]) => {
+        if (session.streaming || hasLocalPendingChatState(session.chatState)) {
+          void loadProjectChatState(projectId, { preserveLocal: true, silent: true })
+        }
+      })
+    })
+
+    return () => {
+      subscription.remove()
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      Object.values(streamRefsByProject.current).forEach(stream => stream?.close())
+      Object.values(chatSyncTimersRef.current).forEach(timers => timers.forEach(timer => clearTimeout(timer)))
+    }
+  }, [])
+
   return (
     <SafeAreaProvider>
       <ImageBackground source={background} style={styles.shell} resizeMode="cover">
@@ -1637,12 +2088,6 @@ export default function App() {
                     <MaterialCommunityIcons name="plus" size={mobileScale.headerIcon} color="#0f172a" />
                   </Pressable>
                 </GlassCard>
-                <GlassCard compact style={styles.headerIconButton}>
-                  <Pressable style={styles.bellWrap} onPress={() => setActivityOpen(true)}>
-                    <MaterialCommunityIcons name="bell-outline" size={mobileScale.headerIcon - 2} color="#0f172a" />
-                    <View style={styles.bellDot} />
-                  </Pressable>
-                </GlassCard>
               </View>
             ) : activeTab === 'agents' && canCreateAgent ? (
               <View style={styles.agentHeaderActions}>
@@ -1669,6 +2114,9 @@ export default function App() {
                 workspace={activeWorkspace}
                 layoutTier={layoutTier}
                 mobileScale={mobileScale}
+                chatSession={activeChatSession}
+                onRefresh={() => void loadProjectChatState(currentAgentProjectId, { preserveLocal: true })}
+                onSend={sendProjectChatMessage}
                 onOpenWorkspacePanel={() => {
                   setWorkspacePanelMode('switch')
                   setWorkspacePanelOpen(true)
@@ -2332,7 +2780,23 @@ function WorkspaceScreen({ layoutTier }: { layoutTier: LayoutTier }) {
   )
 }
 
-function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }: { workspace: Workspace; layoutTier: LayoutTier; mobileScale: MobileScale; onOpenWorkspacePanel: () => void }) {
+function ChatScreen({
+  workspace,
+  layoutTier,
+  mobileScale,
+  chatSession,
+  onRefresh,
+  onSend,
+  onOpenWorkspacePanel,
+}: {
+  workspace: Workspace
+  layoutTier: LayoutTier
+  mobileScale: MobileScale
+  chatSession: ChatProjectSession
+  onRefresh: () => void
+  onSend: (input: SendProjectChatMessageInput) => void
+  onOpenWorkspacePanel: () => void
+}) {
   const isCompact = layoutTier === 'compact'
   const isStandard = layoutTier === 'standard'
   const isWide = layoutTier === 'wide'
@@ -2342,22 +2806,25 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
   const composerBottomSpacing = Platform.OS === 'ios' ? keyboardBottomSpacing : 0
   const composerSafePadding = Platform.OS === 'ios' ? Math.max(insets.bottom, 10) : Platform.OS === 'android' ? Math.max(insets.bottom, 8) : 0
   const projectId = workspace.projectId ?? workspace.id
-  const [chatState, setChatState] = useState<ChatStateView>(() => createEmptyChatState())
+  const chatState = chatSession.chatState
+  const chatLoading = chatSession.loading
+  const chatError = chatSession.error
+  const streaming = chatSession.streaming
+  const lastFailedMessage = chatSession.lastFailedMessage
   const [draftMessage, setDraftMessage] = useState('')
+  const [replyTarget, setReplyTarget] = useState<ChatReplyReference | undefined>()
+  const [messageActionTarget, setMessageActionTarget] = useState<ChatMessageActionTarget | null>(null)
+  const [copyToastText, setCopyToastText] = useState('')
   const [composerInputHeight, setComposerInputHeight] = useState(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
   const [composerInputScrollable, setComposerInputScrollable] = useState(false)
-  const scrollToBottomButtonBottom = composerSafePadding + Math.max(56, composerInputHeight + CHAT_COMPOSER_VERTICAL_PADDING * 2) + 12
-  const [chatLoading, setChatLoading] = useState(false)
-  const [chatError, setChatError] = useState('')
-  const [streaming, setStreaming] = useState(false)
+  const scrollToBottomButtonBottom = composerSafePadding + Math.max(56, composerInputHeight + CHAT_COMPOSER_VERTICAL_PADDING * 2) + (replyTarget ? 58 : 0) + 12
   const [expandedProcessIds, setExpandedProcessIds] = useState<Set<string>>(() => new Set())
   const [draftSelection, setDraftSelection] = useState({ start: 0, end: 0 })
   const [selectedMentionAgentId, setSelectedMentionAgentId] = useState<string | undefined>()
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactView | null>(null)
   const chatScrollRef = useRef<ScrollView | null>(null)
-  const streamRef = useRef<ProjectMessageStream | null>(null)
-  const lastFailedMessageRef = useRef<FailedChatSend | null>(null)
+  const copyToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const visibleChatAgents = getVisibleChatAgents(workspace, chatState.agents, chatState.conversationId)
   const activeMentionToken = workspace.kind === 'group' ? findActiveMentionToken(draftMessage, draftSelection.start) : null
   const mentionCandidates = useMemo(() => {
@@ -2407,189 +2874,80 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
     setShowScrollToBottom(current => (current === shouldShow ? current : shouldShow))
   }
 
-  async function loadChatState() {
-    setChatLoading(true)
-    setChatError('')
-
-    try {
-      const envelope = await fetchProjectState(projectId, { messageLimit: 40 })
-      setChatState(buildChatStateView(envelope))
-    } catch (error) {
-      setChatError(error instanceof Error ? error.message : '对话加载失败。')
-    } finally {
-      setChatLoading(false)
+  function showCopyToast(label: string) {
+    if (copyToastTimerRef.current) {
+      clearTimeout(copyToastTimerRef.current)
     }
+    setCopyToastText(label)
+    copyToastTimerRef.current = setTimeout(() => {
+      setCopyToastText('')
+      copyToastTimerRef.current = null
+    }, 1400)
   }
 
+  function openMessageActions(target: ChatMessageActionTarget) {
+    Keyboard.dismiss()
+    setMessageActionTarget(target)
+  }
+
+  function copyMessage(target: ChatMessageActionTarget) {
+    const text = target.message.text.trim()
+    setMessageActionTarget(null)
+    if (!text) return
+    void Clipboard.setStringAsync(text)
+      .then(() => showCopyToast('已复制'))
+      .catch(() => showCopyToast('复制失败'))
+  }
+
+  function quoteMessage(target: ChatMessageActionTarget) {
+    const nextReplyTarget = createReplyReferenceFromMessage(target.message, target.senderName)
+    setMessageActionTarget(null)
+    if (!nextReplyTarget) return
+    setReplyTarget(nextReplyTarget)
+  }
+
+  useEffect(() => () => {
+    if (copyToastTimerRef.current) {
+      clearTimeout(copyToastTimerRef.current)
+    }
+  }, [])
+
   useEffect(() => {
-    streamRef.current?.close()
-    streamRef.current = null
-    setChatState(createEmptyChatState())
     setExpandedProcessIds(new Set())
     setDraftMessage('')
+    setReplyTarget(undefined)
+    setMessageActionTarget(null)
+    setCopyToastText('')
     setComposerInputHeight(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
     setComposerInputScrollable(false)
     setDraftSelection({ start: 0, end: 0 })
     setSelectedMentionAgentId(undefined)
     setShowScrollToBottom(false)
-    lastFailedMessageRef.current = null
-    setStreaming(false)
-    void loadChatState()
-
-    return () => {
-      streamRef.current?.close()
-      streamRef.current = null
-    }
   }, [projectId])
 
-  function appendStreamingMessage(detail: ProjectWorkflowEvent['event'], createdAt: string) {
-    if (!detail) return
-    const delta = detail.type === 'assistant_delta'
-      ? detail.delta ?? detail.content ?? detail.text ?? detail.message ?? ''
-      : ''
-    if (detail.type === 'assistant_delta' && !delta) return
-
-    setChatState(current => {
-      const nextMessages = upsertStreamingAssistantMessage(current.messages, {
-        messageId: detail.messageId,
-        agentId: detail.senderId ?? detail.agentId,
-        turnId: detail.turnId,
-        delta,
-        createdAt,
-      })
-      return createChatStateView({ ...current, messages: nextMessages })
-    })
-  }
-
-  function appendWorkflowEventToTimeline(eventType: ProjectWorkflowStreamEvent, rawData: string | null, parsedDetail?: ProjectWorkflowEvent['event']) {
-    const createdAt = new Date().toISOString()
-    let payload: Record<string, unknown> = {}
-
-    if (rawData) {
-      try {
-        payload = JSON.parse(rawData) as Record<string, unknown>
-      } catch {
-        payload = { summary: rawData }
-      }
-    }
-
-    const detailPayload = (payload.event && typeof payload.event === 'object' ? payload.event : payload) as Record<string, unknown>
-    const eventDetail = {
-      ...detailPayload,
-      type: typeof detailPayload.type === 'string' ? detailPayload.type : eventType === 'workflow_event' ? undefined : eventType,
-    } as ProjectWorkflowEvent['event']
-
-    const detail = parsedDetail ?? eventDetail
-
-    if (!detail?.type || detail.type === 'assistant_delta') return
-
-    const workflowEvent: ProjectWorkflowEvent = {
-      id: typeof payload.id === 'string' ? payload.id : `stream-event-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      workspaceId: typeof payload.workspaceId === 'string' ? payload.workspaceId : undefined,
-      conversationId: typeof payload.conversationId === 'string' ? payload.conversationId : chatState.conversationId,
-      event: detail,
-      createdAt: typeof payload.createdAt === 'string' ? payload.createdAt : createdAt,
-    }
-    const step = mapWorkflowEventToStep(workflowEvent)
-    if (!step) return
-
-    setChatState(current => {
-      const nextGroups = appendProcessStepToGroups(current.processGroups, detail.turnId ?? 'local-streaming-turn', step, {
-        createdAt: workflowEvent.createdAt,
-      })
-      return createChatStateView({ ...current, processGroups: nextGroups })
-    })
-  }
-
-  function handleProjectStreamEvent(eventType: ProjectStreamEvent, rawData: string | null, onWorkflowFinished?: () => void) {
-    const detail = parseStreamPayload(rawData, eventType)
-    if (!detail?.type) return
-
-    if (detail.type === 'assistant_message_started' || detail.type === 'assistant_delta') {
-      appendStreamingMessage(detail, new Date().toISOString())
-    }
-
-    if (STREAM_WORKFLOW_EVENT_NAME_SET.has(detail.type)) {
-      appendWorkflowEventToTimeline(detail.type as ProjectWorkflowStreamEvent, rawData, detail)
-    }
-
-    if (detail.type === 'workflow_finished') {
-      onWorkflowFinished?.()
-    }
-  }
-
-  async function sendMessage(retryPayload?: FailedChatSend) {
+  function sendMessage(retryPayload?: FailedChatSend) {
     const content = (retryPayload?.content ?? draftMessage).trim()
     if (!content || composerDisabled) return
+    const activeReplyTarget = retryPayload?.replyTo ?? replyTarget
     const targetAgentId =
       workspace.kind === 'direct'
         ? workspace.agents[0]
         : retryPayload?.agentId ?? selectedMentionAgentId ?? findMentionedProjectAgentId(content, visibleChatAgents)
 
-    const now = new Date().toISOString()
-    const optimisticMessage: ChatMessageView = {
-      id: `local-${Date.now()}`,
-      sender: 'user',
-      text: content,
-      time: formatChatMessageTime(now),
-      createdAt: now,
-    }
     if (!retryPayload) {
       setDraftMessage('')
       setComposerInputHeight(CHAT_COMPOSER_INPUT_MIN_HEIGHT)
       setComposerInputScrollable(false)
       setDraftSelection({ start: 0, end: 0 })
       setSelectedMentionAgentId(undefined)
+      setReplyTarget(undefined)
     }
-    setStreaming(true)
-    setChatError('')
-    lastFailedMessageRef.current = null
-    const sentProcessStep: ChatProcessStep = {
-      id: `local-process-${Date.now()}`,
-      icon: 'progress-clock',
-      title: '消息已发送',
-      summary: '正在等待后端流式响应',
-      time: formatMessageTime(now),
-      tone: 'running',
-    }
-
-    setChatState(current => {
-      const nextMessages = [...current.messages, optimisticMessage]
-      const nextGroups = appendProcessStepToGroups(current.processGroups, 'local-streaming-turn', sentProcessStep, {
-        local: true,
-        createdAt: now,
-      })
-      return createChatStateView({ ...current, messages: nextMessages, processGroups: nextGroups })
-    })
-
-    const body: StreamProjectMessageInput = {
+    onSend({
+      projectId,
       conversationId: chatState.conversationId,
       content,
       agentId: targetAgentId,
-    }
-
-    let finalized = false
-    const finishStream = () => {
-      if (finalized) return
-      finalized = true
-      setStreaming(false)
-      streamRef.current?.close()
-      streamRef.current = null
-      void loadChatState()
-    }
-
-    streamRef.current = streamProjectMessage(projectId, body, {
-      onEvent: ({ eventType, rawData }) => {
-        handleProjectStreamEvent(eventType, rawData, finishStream)
-      },
-      onError: error => {
-        setChatError(error.message)
-        lastFailedMessageRef.current = { content, agentId: targetAgentId }
-        finishStream()
-      },
-      onClose: () => {
-        finishStream()
-      },
+      replyTo: activeReplyTarget,
     })
   }
 
@@ -2643,13 +3001,13 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
         {chatError ? (
           <GlassCard style={styles.emptyStateCard}>
             <MaterialCommunityIcons name="alert-circle-outline" size={26} color="#dc2626" />
-            <Text style={styles.cardTitle}>{lastFailedMessageRef.current ? '发送失败' : '对话加载失败'}</Text>
+            <Text style={styles.cardTitle}>{lastFailedMessage ? '发送失败' : '对话加载失败'}</Text>
             <Text style={styles.bodyText}>{chatError}</Text>
             <Pressable style={styles.pinnedExpandButton} onPress={() => {
-              if (lastFailedMessageRef.current) {
-                void sendMessage(lastFailedMessageRef.current)
+              if (lastFailedMessage) {
+                sendMessage(lastFailedMessage)
               } else {
-                void loadChatState()
+                onRefresh()
               }
             }}>
               <Text style={styles.pinnedExpandText}>重试</Text>
@@ -2667,10 +3025,16 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
 
         {chatState.timelineItems.map(item =>
           item.type === 'message' ? (
-            <ChatMessageBubble key={item.id} message={item.message} mobileScale={mobileScale} agentList={chatState.agents} />
+            <ChatMessageBubble
+              key={`message-${item.id}`}
+              message={item.message}
+              mobileScale={mobileScale}
+              agentList={chatState.agents}
+              onLongPress={openMessageActions}
+            />
           ) : (
             <ChatProcessPanel
-              key={item.id}
+              key={`process-${item.id}`}
               group={item.group}
               mobileScale={mobileScale}
               streaming={streaming && item.group.status === 'running'}
@@ -2698,7 +3062,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
             </View>
             <View style={styles.currentArtifactGrid}>
               {chatState.artifacts.map(item => (
-                <CurrentArtifactCard key={item.id} artifact={item} mobileScale={mobileScale} onPress={() => setSelectedArtifact(item)} />
+                <CurrentArtifactCard key={`${item.type}-${item.id}`} artifact={item} mobileScale={mobileScale} onPress={() => setSelectedArtifact(item)} />
               ))}
             </View>
           </GlassCard>
@@ -2709,7 +3073,7 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
         artifact={selectedArtifact}
         projectId={projectId}
         onClose={() => setSelectedArtifact(null)}
-        onRefresh={() => void loadChatState()}
+        onRefresh={onRefresh}
       />
 
       {showScrollToBottom && !showMentionMenu ? (
@@ -2743,6 +3107,23 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
             </ScrollView>
           </GlassCard>
         ) : null}
+        {replyTarget ? (
+          <GlassCard style={styles.chatReplyComposerBar}>
+            <MaterialCommunityIcons name="message-reply-text-outline" size={18} color="#2563eb" />
+            <View style={styles.chatReplyComposerCopy}>
+              <Text style={styles.chatReplyComposerTitle} numberOfLines={1}>引用 {getReplySenderLabel(replyTarget)}</Text>
+              <Text style={styles.chatReplyComposerExcerpt} numberOfLines={1}>{replyTarget.excerpt}</Text>
+            </View>
+            <Pressable accessibilityRole="button" accessibilityLabel="取消引用" hitSlop={8} style={styles.chatReplyComposerClose} onPress={() => setReplyTarget(undefined)}>
+              <MaterialCommunityIcons name="close" size={18} color="#64748b" />
+            </Pressable>
+          </GlassCard>
+        ) : null}
+        {copyToastText ? (
+          <View pointerEvents="none" style={styles.chatCopyToast}>
+            <Text style={styles.chatCopyToastText}>{copyToastText}</Text>
+          </View>
+        ) : null}
         <GlassCard style={styles.chatComposer}>
           <TextInput
             placeholder="给工作区发送任务"
@@ -2770,11 +3151,28 @@ function ChatScreen({ workspace, layoutTier, mobileScale, onOpenWorkspacePanel }
           </Pressable>
         </GlassCard>
       </View>
+      <MessageActionSheet
+        target={messageActionTarget}
+        mobileScale={mobileScale}
+        onClose={() => setMessageActionTarget(null)}
+        onCopy={copyMessage}
+        onQuote={quoteMessage}
+      />
     </KeyboardAvoidingView>
   )
 }
 
-function ChatMessageBubble({ message, mobileScale, agentList }: { message: ChatMessageView; mobileScale: MobileScale; agentList: ProjectAgent[] }) {
+function ChatMessageBubble({
+  message,
+  mobileScale,
+  agentList,
+  onLongPress,
+}: {
+  message: ChatMessageView
+  mobileScale: MobileScale
+  agentList: ProjectAgent[]
+  onLongPress: (target: ChatMessageActionTarget) => void
+}) {
   const isUser = message.sender === 'user'
   const projectAgent = findProjectAgent(agentList, message.agentId)
   const fallbackAgent = message.agentId ? agents.find(item => item.id === message.agentId) : undefined
@@ -2783,10 +3181,13 @@ function ChatMessageBubble({ message, mobileScale, agentList }: { message: ChatM
   if (isUser) {
     return (
       <View style={styles.userMessageRow}>
-        <GlassCard style={styles.userPromptBubble}>
-          <Text style={[styles.userPromptText, { fontSize: mobileScale.messageText, lineHeight: mobileScale.messageLineHeight }]}>{message.text}</Text>
-          {message.time ? <Text style={styles.chatBubbleTime}>{message.time}</Text> : null}
-        </GlassCard>
+        <Pressable style={styles.userPromptActionTarget} delayLongPress={280} onLongPress={() => onLongPress({ message, senderName: '用户' })}>
+          <GlassCard style={[styles.userPromptBubble, styles.userPromptBubbleInAction]}>
+            <ChatReplyPreview replyTo={message.replyTo} userBubble />
+            <Text style={[styles.userPromptText, { fontSize: mobileScale.messageText, lineHeight: mobileScale.messageLineHeight }]}>{message.text}</Text>
+            {message.time ? <Text style={styles.chatBubbleTime}>{message.time}</Text> : null}
+          </GlassCard>
+        </Pressable>
         <View style={[styles.chatUserGlyph, { width: mobileScale.chatUserAvatar, height: mobileScale.chatUserAvatar, borderRadius: mobileScale.chatUserAvatar / 2 }]}>
           <MaterialCommunityIcons name="account" size={mobileScale.chatUserAvatar * 0.54} color="#fff" />
         </View>
@@ -2805,10 +3206,229 @@ function ChatMessageBubble({ message, mobileScale, agentList }: { message: ChatM
           </View>
         ) : null}
       </View>
-      <GlassCard style={styles.chatBubbleLarge}>
-        <Text style={[styles.chatBubbleText, { fontSize: mobileScale.messageText, lineHeight: mobileScale.messageLineHeight }]}>{message.text || '...'}</Text>
-      </GlassCard>
+      <Pressable style={styles.agentMessageActionTarget} delayLongPress={280} onLongPress={() => onLongPress({ message, senderName: agentName })}>
+        <GlassCard style={[styles.chatBubbleLarge, styles.chatBubbleLargeInAction]}>
+          <ChatReplyPreview replyTo={message.replyTo} />
+          <ChatMarkdownContent content={message.text || '...'} mobileScale={mobileScale} />
+        </GlassCard>
+      </Pressable>
     </View>
+  )
+}
+
+function ChatMarkdownContent({ content, mobileScale }: { content: string; mobileScale: MobileScale }) {
+  const normalizedContent = useMemo(() => normalizeAiMarkdown(content, { mode: 'bubble' }) || '...', [content])
+  const markdownStyles = useMemo(() => {
+    const bodyText = {
+      color: '#172033',
+      fontSize: mobileScale.messageText,
+      lineHeight: mobileScale.messageLineHeight,
+      fontWeight: '700' as const,
+    }
+    const monoFont = Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' })
+
+    return {
+      body: {
+        ...bodyText,
+      },
+      text: {
+        ...bodyText,
+      },
+      paragraph: {
+        marginTop: 0,
+        marginBottom: 8,
+      },
+      heading1: {
+        color: '#0f172a',
+        fontSize: mobileScale.messageText + 6,
+        lineHeight: mobileScale.messageLineHeight + 7,
+        fontWeight: '900' as const,
+        marginTop: 4,
+        marginBottom: 10,
+      },
+      heading2: {
+        color: '#0f172a',
+        fontSize: mobileScale.messageText + 4,
+        lineHeight: mobileScale.messageLineHeight + 5,
+        fontWeight: '900' as const,
+        marginTop: 4,
+        marginBottom: 9,
+      },
+      heading3: {
+        color: '#0f172a',
+        fontSize: mobileScale.messageText + 2,
+        lineHeight: mobileScale.messageLineHeight + 4,
+        fontWeight: '900' as const,
+        marginTop: 4,
+        marginBottom: 8,
+      },
+      strong: {
+        color: '#0f172a',
+        fontWeight: '900' as const,
+      },
+      em: {
+        color: '#334155',
+        fontStyle: 'italic' as const,
+      },
+      bullet_list: {
+        marginBottom: 8,
+      },
+      ordered_list: {
+        marginBottom: 8,
+      },
+      bullet_list_icon: {
+        color: '#172033',
+        fontSize: mobileScale.messageText,
+        lineHeight: mobileScale.messageLineHeight,
+      },
+      ordered_list_icon: {
+        color: '#172033',
+        fontSize: mobileScale.messageText,
+        lineHeight: mobileScale.messageLineHeight,
+      },
+      bullet_list_content: {
+        flex: 1,
+        minWidth: 0,
+      },
+      ordered_list_content: {
+        flex: 1,
+        minWidth: 0,
+      },
+      list_item: {
+        marginBottom: 3,
+      },
+      code_inline: {
+        color: '#2563eb',
+        fontFamily: monoFont,
+        fontSize: Math.max(12, mobileScale.messageText - 1),
+        fontWeight: '800' as const,
+        backgroundColor: 'rgba(37,99,235,0.1)',
+        borderRadius: 6,
+        paddingHorizontal: 5,
+        paddingVertical: 1,
+      },
+      code_block: {
+        color: '#0f172a',
+        fontFamily: monoFont,
+        fontSize: Math.max(12, mobileScale.messageText - 2),
+        lineHeight: Math.max(18, mobileScale.messageLineHeight - 4),
+        backgroundColor: 'rgba(15,23,42,0.06)',
+        borderRadius: 12,
+        padding: 10,
+        marginTop: 4,
+        marginBottom: 10,
+      },
+      fence: {
+        color: '#0f172a',
+        fontFamily: monoFont,
+        fontSize: Math.max(12, mobileScale.messageText - 2),
+        lineHeight: Math.max(18, mobileScale.messageLineHeight - 4),
+        backgroundColor: 'rgba(15,23,42,0.06)',
+        borderRadius: 12,
+        padding: 10,
+        marginTop: 4,
+        marginBottom: 10,
+      },
+      blockquote: {
+        borderLeftWidth: 3,
+        borderLeftColor: '#7c3aed',
+        backgroundColor: 'rgba(124,58,237,0.08)',
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+        marginVertical: 8,
+      },
+      link: {
+        color: '#2563eb',
+        fontWeight: '900' as const,
+      },
+      hr: {
+        backgroundColor: 'rgba(100,116,139,0.18)',
+        height: 1,
+        marginVertical: 10,
+      },
+      table: {
+        borderWidth: 1,
+        borderColor: 'rgba(148,163,184,0.5)',
+        borderRadius: 8,
+        marginVertical: 8,
+      },
+      th: {
+        backgroundColor: 'rgba(37,99,235,0.08)',
+        padding: 6,
+      },
+      td: {
+        padding: 6,
+      },
+    }
+  }, [mobileScale])
+
+  function handleLinkPress(url: string) {
+    if (!url) return false
+    void Linking.openURL(url)
+    return false
+  }
+
+  return (
+    <Markdown style={markdownStyles} onLinkPress={handleLinkPress}>
+      {normalizedContent}
+    </Markdown>
+  )
+}
+
+function ChatReplyPreview({ replyTo, userBubble = false }: { replyTo?: ChatReplyReference; userBubble?: boolean }) {
+  if (!replyTo) return null
+  return (
+    <View style={[styles.chatReplyPreview, userBubble && styles.chatReplyPreviewUser]}>
+      <Text style={styles.chatReplyPreviewTitle} numberOfLines={1}>{getReplySenderLabel(replyTo)}</Text>
+      <Text style={styles.chatReplyPreviewExcerpt} numberOfLines={2}>{replyTo.excerpt}</Text>
+    </View>
+  )
+}
+
+function MessageActionSheet({
+  target,
+  mobileScale,
+  onClose,
+  onCopy,
+  onQuote,
+}: {
+  target: ChatMessageActionTarget | null
+  mobileScale: MobileScale
+  onClose: () => void
+  onCopy: (target: ChatMessageActionTarget) => void
+  onQuote: (target: ChatMessageActionTarget) => void
+}) {
+  const canCopy = !!target?.message.text.trim()
+  const canQuote = !!target && !!createReplyReferenceFromMessage(target.message, target.senderName)
+
+  return (
+    <Modal visible={!!target} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.messageActionSheetBackdrop}>
+        <Pressable style={styles.messageActionSheetScrim} onPress={onClose} />
+        <GlassCard style={styles.messageActionSheet}>
+          <View style={styles.messageActionSheetHandle} />
+          <Text style={[styles.messageActionSheetTitle, { fontSize: mobileScale.messageText }]} numberOfLines={1}>{target?.senderName ?? '消息'}</Text>
+          <Pressable
+            accessibilityRole="button"
+            disabled={!canCopy || !target}
+            style={[styles.messageActionRow, (!canCopy || !target) && styles.messageActionRowDisabled]}
+            onPress={() => target && onCopy(target)}
+          >
+            <MaterialCommunityIcons name="content-copy" size={21} color="#2563eb" />
+            <Text style={styles.messageActionText}>复制</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={!canQuote || !target}
+            style={[styles.messageActionRow, (!canQuote || !target) && styles.messageActionRowDisabled]}
+            onPress={() => target && onQuote(target)}
+          >
+            <MaterialCommunityIcons name="message-reply-text-outline" size={21} color="#2563eb" />
+            <Text style={styles.messageActionText}>引用</Text>
+          </Pressable>
+        </GlassCard>
+      </View>
+    </Modal>
   )
 }
 
@@ -3125,14 +3745,19 @@ function WorkspacePanelModal({
   const [agentOpen, setAgentOpen] = useState(false)
   const isCompact = layoutTier === 'compact'
   const visibleWorkspaces = workspaceList.filter(workspace => !workspace.archived).slice(0, 5)
+  const directAgentOptions = DIRECT_WORKSPACE_AGENT_OPTIONS
+  const preferredDirectAgentId =
+    directAgentOptions.find(option => option.id === 'codex-direct')?.id ??
+    directAgentOptions[0]?.id ??
+    'codex-direct'
   const typeOptions: { value: Workspace['type']; label: string; helper: string }[] = [
     { value: 'dev', label: '开发工作区', helper: '适合多 Agent 协作实现、联调和交付。' },
     { value: 'research', label: '研究工作区', helper: '适合资料调研、归纳分析和报告草拟。' },
     { value: 'writing', label: '文档工作区', helper: '适合文档、方案、脚本和内容产出。' },
   ]
   const activeType = typeOptions.find(option => option.value === draftType) ?? typeOptions[0]
-  const targetAgent = agents.find(agent => agent.id === selectedAgents[0]) ?? agents.find(agent => agent.id === 'engineer') ?? agents[0]
-  const canCreate = draftName.trim().length > 0 && draftGoal.trim().length > 0 && !creating
+  const targetAgent = directAgentOptions.find(agent => agent.id === selectedAgents[0]) ?? directAgentOptions.find(agent => agent.id === preferredDirectAgentId)
+  const canCreate = draftName.trim().length > 0 && draftGoal.trim().length > 0 && !creating && (draftKind === 'group' || Boolean(targetAgent))
 
   const toggleAgent = (agentId: string) => {
     setSelectedAgents(current => {
@@ -3150,7 +3775,7 @@ function WorkspacePanelModal({
       goal: draftGoal.trim(),
       workspaceType: draftKind === 'direct' ? 'chat' : draftType,
       conversationType: draftKind,
-      agentIds: draftKind === 'direct' ? selectedAgents.slice(0, 1) : selectedAgents,
+      agentIds: draftKind === 'direct' ? [targetAgent?.id ?? preferredDirectAgentId] : selectedAgents,
     })
   }
 
@@ -3231,7 +3856,11 @@ function WorkspacePanelModal({
                         style={[styles.workspaceSegmentItem, draftKind === kind && styles.workspaceSegmentItemActive]}
                         onPress={() => {
                           setDraftKind(kind)
-                          if (kind === 'direct') setSelectedAgents(current => current.slice(0, 1))
+                          setSelectedAgents(current => {
+                            if (kind === 'direct') return [preferredDirectAgentId]
+                            const nextGroupAgents = current.filter(agentId => !isDirectWorkspaceAgentId(agentId))
+                            return nextGroupAgents.length > 0 ? nextGroupAgents : [...DEFAULT_WORKSPACE_CREATE_AGENT_IDS]
+                          })
                           setTypeOpen(false)
                           setAgentOpen(false)
                         }}
@@ -3272,12 +3901,12 @@ function WorkspacePanelModal({
                   <View style={styles.workspaceFormField}>
                     <Text style={styles.workspaceFormLabel}>目标 Agent</Text>
                     <Pressable style={styles.workspaceSelectBox} onPress={() => setAgentOpen(open => !open)}>
-                      <Text style={styles.workspaceSelectText}>{targetAgent?.name ?? '工程师 Agent'}</Text>
+                      <Text style={styles.workspaceSelectText}>{targetAgent?.name ?? 'Codex Agent'}</Text>
                       <MaterialCommunityIcons name={agentOpen ? 'chevron-up' : 'chevron-down'} size={22} color="#334155" />
                     </Pressable>
                     {agentOpen ? (
                       <View style={styles.workspaceSelectMenu}>
-                        {agents.map(agent => (
+                        {directAgentOptions.map(agent => (
                           <Pressable
                             key={agent.id}
                             style={[styles.workspaceSelectOption, targetAgent?.id === agent.id && styles.workspaceSelectOptionActive]}
@@ -3361,10 +3990,6 @@ function ArtifactDetailModal({
 
   if (!artifact) return null
 
-  const previewTargetUrl =
-    artifact.url ??
-    absoluteArtifactUrl(previewCapability?.targets.find(target => target.path === previewCapability.defaultTargetPath)?.url) ??
-    absoluteArtifactUrl(previewCapability?.targets[0]?.url)
   const sourceUrl = artifact.type === 'zip'
     ? artifact.url
     : absoluteArtifactUrl(deliverySummary?.sourceArchive.url)
@@ -3372,6 +3997,13 @@ function ArtifactDetailModal({
   const deploymentUrl = artifact.type === 'deploy'
     ? artifact.url
     : absoluteArtifactUrl(deliverySummary?.deployment.url)
+  const capabilityPreviewUrl =
+    absoluteArtifactUrl(previewCapability?.targets.find(target => target.path === previewCapability.defaultTargetPath)?.url) ??
+    absoluteArtifactUrl(previewCapability?.targets[0]?.url)
+  const latestDeliveryPreviewUrl = buildUrl ?? deploymentUrl ?? capabilityPreviewUrl
+  const previewTargetUrl = isDeliveryPreviewArtifact(artifact)
+    ? latestDeliveryPreviewUrl ?? artifact.url
+    : artifact.url ?? latestDeliveryPreviewUrl
   const statusRows = [
     {
       label: '源码快照',
@@ -3571,9 +4203,7 @@ function ArtifactDetailModal({
                   onPress={() => runArtifactAction(
                     'build',
                     async () => {
-                      const version = deliverySummary?.currentVersion?.versionId
-                        ? { versionId: deliverySummary.currentVersion.versionId }
-                        : await createProjectVersion(projectId, 'App 自动保存构建版本')
+                      const version = await createProjectVersion(projectId, 'App 自动保存构建版本')
                       return buildProjectVersion(projectId, version.versionId)
                     },
                     '构建请求已完成',
@@ -3589,12 +4219,8 @@ function ArtifactDetailModal({
                   onPress={() => runArtifactAction(
                     'deploy',
                     async () => {
-                      const version = deliverySummary?.currentVersion?.versionId
-                        ? { versionId: deliverySummary.currentVersion.versionId }
-                        : await createProjectVersion(projectId, 'App 自动保存部署版本')
-                      if (deliverySummary?.build.status !== 'ready') {
-                        await buildProjectVersion(projectId, version.versionId)
-                      }
+                      const version = await createProjectVersion(projectId, 'App 自动保存部署版本')
+                      await buildProjectVersion(projectId, version.versionId)
                       return deployProjectVersion(projectId, version.versionId)
                     },
                     '部署请求已完成',
@@ -4342,8 +4968,9 @@ function AgentConfigPage({
   onSave: (agent: AgentView, input: UpdateProjectAgentInput) => void
   onCreate: (input: CreateProjectAgentInput) => void
 }) {
+  type AgentConfigProvider = Extract<Agent['provider'], 'claude' | 'codex'>
   const [name, setName] = useState('')
-  const [provider, setProvider] = useState<Agent['provider']>('claude')
+  const [provider, setProvider] = useState<AgentConfigProvider>('claude')
   const [providerOpen, setProviderOpen] = useState(false)
   const [model, setModel] = useState('')
   const [role, setRole] = useState('Custom Agent')
@@ -4351,14 +4978,14 @@ function AgentConfigPage({
   const [description, setDescription] = useState('User-created Agent')
   const [whenToUse, setWhenToUse] = useState('Use when the user explicitly selects or mentions this Agent.')
   const [systemPrompt, setSystemPrompt] = useState('You are a focused custom Agent. Follow the workspace context and return concise, actionable output.')
-  const providerOptions: { value: Agent['provider']; label: string }[] = [
+  const providerOptions: { value: AgentConfigProvider; label: string }[] = [
     { value: 'claude', label: 'Claude' },
     { value: 'codex', label: 'Codex' },
   ]
 
   useEffect(() => {
     setName(agent?.name ?? '')
-    setProvider(agent?.provider ?? 'claude')
+    setProvider(agent?.provider === 'codex' ? 'codex' : 'claude')
     setModel(agent?.model ?? '')
     setRole(agent?.role ?? 'Custom Agent')
     setMaxRunSeconds(String(agent?.runtimePolicy?.maxRunSeconds ?? 300))
@@ -4436,14 +5063,14 @@ function AgentConfigPage({
           <AgentField label="systemPrompt" value={systemPrompt} onChangeText={setSystemPrompt} placeholder="Agent 的核心行为指令" multiline tall />
 
           <View style={styles.agentConfigGrid}>
-            <View style={styles.agentFormField}>
+            <View style={[styles.agentFormField, providerOpen && styles.agentProviderFieldOpen]}>
               <Text style={styles.agentFormLabel}>Agent 服务提供方</Text>
               <Pressable style={styles.agentSelectBox} onPress={() => setProviderOpen(open => !open)}>
                 <Text style={styles.agentFormInputText}>{providerOptions.find(option => option.value === provider)?.label}</Text>
                 <MaterialCommunityIcons name="menu-down" size={22} color="#334155" />
               </Pressable>
               {providerOpen ? (
-                <GlassCard compact style={styles.agentProviderMenu}>
+                <View style={styles.agentProviderMenu}>
                   {providerOptions.map(option => (
                     <Pressable
                       key={option.value}
@@ -4456,7 +5083,7 @@ function AgentConfigPage({
                       <Text style={[styles.agentProviderOptionText, provider === option.value && styles.agentProviderOptionTextActive]}>{option.label}</Text>
                     </Pressable>
                   ))}
-                </GlassCard>
+                </View>
               ) : null}
             </View>
             <AgentField label="model" value={model} onChangeText={setModel} placeholder="不填用默认模型" />
@@ -5845,12 +6472,19 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: 10,
   },
+  userPromptActionTarget: {
+    maxWidth: '78%',
+    alignSelf: 'flex-end',
+  },
   userPromptBubble: {
     maxWidth: '78%',
     paddingHorizontal: 18,
     paddingVertical: 15,
     borderRadius: 24,
     backgroundColor: 'rgba(219,234,254,0.48)',
+  },
+  userPromptBubbleInAction: {
+    maxWidth: '100%',
   },
   userPromptText: {
     color: '#172033',
@@ -5864,6 +6498,11 @@ const styles = StyleSheet.create({
   },
   agentMessageBlock: {
     gap: 8,
+  },
+  agentMessageActionTarget: {
+    marginLeft: 66,
+    maxWidth: '84%',
+    alignSelf: 'flex-start',
   },
   agentMessageMetaRow: {
     minHeight: 54,
@@ -5906,6 +6545,10 @@ const styles = StyleSheet.create({
     padding: 18,
     borderRadius: 23,
   },
+  chatBubbleLargeInAction: {
+    marginLeft: 0,
+    maxWidth: '100%',
+  },
   engineerBubble: {
     marginLeft: 62,
     maxWidth: '78%',
@@ -5923,6 +6566,30 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 12,
     fontWeight: '800',
+  },
+  chatReplyPreview: {
+    marginBottom: 10,
+    gap: 2,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#2563eb',
+    borderRadius: 12,
+    backgroundColor: 'rgba(37,99,235,0.08)',
+  },
+  chatReplyPreviewUser: {
+    backgroundColor: 'rgba(255,255,255,0.44)',
+  },
+  chatReplyPreviewTitle: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  chatReplyPreviewExcerpt: {
+    color: '#64748b',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   chatUserGlyph: {
     alignItems: 'center',
@@ -6158,6 +6825,54 @@ const styles = StyleSheet.create({
   modalScrim: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(15,23,42,0.28)',
+  },
+  messageActionSheetBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  messageActionSheetScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15,23,42,0.3)',
+  },
+  messageActionSheet: {
+    marginHorizontal: 12,
+    marginBottom: Platform.select({ ios: 18, android: 12, default: 16 }),
+    paddingTop: 8,
+    paddingHorizontal: 12,
+    paddingBottom: Platform.select({ ios: 22, android: 16, default: 20 }),
+    borderRadius: 24,
+    gap: 8,
+  },
+  messageActionSheetHandle: {
+    alignSelf: 'center',
+    width: 38,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(100,116,139,0.34)',
+  },
+  messageActionSheetTitle: {
+    color: '#475569',
+    fontSize: 15,
+    fontWeight: '900',
+    paddingHorizontal: 4,
+    paddingBottom: 2,
+  },
+  messageActionRow: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    backgroundColor: 'rgba(239,246,255,0.72)',
+  },
+  messageActionRowDisabled: {
+    opacity: 0.42,
+  },
+  messageActionText: {
+    color: '#172033',
+    fontSize: 15,
+    fontWeight: '900',
   },
   artifactDetailSheet: {
     maxHeight: '82%',
@@ -6837,6 +7552,10 @@ const styles = StyleSheet.create({
     gap: 6,
     zIndex: 1,
   },
+  agentProviderFieldOpen: {
+    zIndex: 50,
+    elevation: 50,
+  },
   agentFormLabel: {
     color: '#334155',
     fontSize: 12,
@@ -6889,17 +7608,18 @@ const styles = StyleSheet.create({
     top: 74,
     left: 0,
     right: 0,
-    zIndex: 20,
+    zIndex: 60,
     padding: 4,
     borderWidth: 1,
     borderColor: '#dbe4ee',
     borderRadius: 14,
     backgroundColor: '#ffffff',
+    overflow: 'hidden',
     shadowColor: '#0f172a',
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 8,
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 18,
   },
   agentProviderOption: {
     minHeight: 38,
@@ -6922,6 +7642,53 @@ const styles = StyleSheet.create({
   chatComposerDock: {
     paddingHorizontal: 12,
     paddingTop: 2,
+  },
+  chatReplyComposerBar: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 18,
+  },
+  chatReplyComposerCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  chatReplyComposerTitle: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  chatReplyComposerExcerpt: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  chatReplyComposerClose: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
+    backgroundColor: 'rgba(226,232,240,0.72)',
+  },
+  chatCopyToast: {
+    alignSelf: 'center',
+    minHeight: 30,
+    justifyContent: 'center',
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    borderRadius: 15,
+    backgroundColor: 'rgba(15,23,42,0.82)',
+  },
+  chatCopyToastText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '900',
   },
   mentionAgentMenu: {
     maxHeight: 232,
