@@ -1,5 +1,7 @@
 import path from 'node:path'
 
+const DEFAULT_TRUNCATED_OUTPUT_BYTES = 10 * 1024
+
 /**
  * Resolves a CLI binary name for direct Node spawning on Windows and Unix.
  * Input: configured binary name or path. Output: executable command string.
@@ -38,4 +40,25 @@ export function buildAgentPrompt(task: string, contextPackage: string, expectedO
  */
 export function buildStdinPrompt(systemPrompt: string, taskPrompt: string): string {
   return ['--- Agent System Prompt ---', systemPrompt, '--- Agent Task Prompt ---', taskPrompt].join('\n\n')
+}
+
+/**
+ * Truncates large process output before persisting it into app state.
+ * Input: stdout/stderr text and optional byte limit. Output: bounded log string.
+ */
+export function truncateProcessOutput(output: string, maxBytes = DEFAULT_TRUNCATED_OUTPUT_BYTES): string {
+  if (!output) {
+    return output
+  }
+
+  const encoded = Buffer.from(output, 'utf8')
+  if (encoded.byteLength <= maxBytes) {
+    return output
+  }
+
+  const suffix = `\n...[truncated to ${maxBytes} bytes from ${encoded.byteLength} bytes]`
+  const suffixBytes = Buffer.byteLength(suffix, 'utf8')
+  const headBytes = Math.max(0, maxBytes - suffixBytes)
+
+  return `${encoded.subarray(0, headBytes).toString('utf8')}${suffix}`
 }

@@ -41,6 +41,7 @@ USER node
 
 ENV NODE_ENV=production
 ENV PORT=8787
+ENV NODE_OPTIONS=--max-old-space-size=4096
 ENV MIMO2CODEX_BIN=mimo2codex
 ENV CLAUDE_CODE_SIMPLE=1
 EXPOSE 8787
@@ -48,4 +49,4 @@ EXPOSE 8787
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || '8787') + '/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
-CMD ["node_modules/.bin/tsx", "src/server/main.ts"]
+CMD ["node", "--max-old-space-size=4096", "node_modules/.bin/tsx", "src/server/main.ts"]

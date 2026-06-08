@@ -44,6 +44,18 @@ const POSTGRES_CONNECTION_TIMEOUT_MS = 10_000
 const POSTGRES_IDLE_TIMEOUT_MS = 30_000
 const POSTGRES_LOCK_TIMEOUT_MS = 10_000
 const POSTGRES_STATEMENT_TIMEOUT_MS = 120_000
+const PROCESS_LOG_MAX_BYTES = 10 * 1024
+const CHANGE_SET_PATCH_MAX_BYTES = 500 * 1024
+const MESSAGE_LIMIT = 1_000
+const AGENT_RUN_LIMIT = 100
+const CHANGE_SET_LIMIT = 200
+const AGENT_SESSION_LIMIT = 200
+const AGENT_SESSION_MESSAGE_LIMIT = 1_000
+const TASK_HANDOFF_LIMIT = 200
+const ARTIFACT_LIMIT = 300
+const CONTEXT_SNAPSHOT_LIMIT = 300
+const WORKFLOW_EVENT_LIMIT = 1_000
+const DIAGNOSTIC_LOG_LIMIT = 2_000
 
 type QueryClient = {
   query: Pool['query']
@@ -55,6 +67,52 @@ type QueryClient = {
  */
 function isSameState(left: AppState, right: AppState): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function truncateUtf8Text(value: string, maxBytes: number, label: string): string {
+  if (!value) {
+    return value
+  }
+
+  const encoded = Buffer.from(value, 'utf8')
+  if (encoded.byteLength <= maxBytes) {
+    return value
+  }
+
+  const suffix = `\n...[${label} truncated to ${maxBytes} bytes from ${encoded.byteLength} bytes]`
+  const suffixBytes = Buffer.byteLength(suffix, 'utf8')
+  const headBytes = Math.max(0, maxBytes - suffixBytes)
+  return `${encoded.subarray(0, headBytes).toString('utf8')}${suffix}`
+}
+
+function retainRecent<T>(items: T[], limit: number): T[] {
+  if (items.length <= limit) {
+    return items
+  }
+  return items.slice(-limit)
+}
+
+function pruneState(state: AppState): AppState {
+  const next = cloneState(state)
+
+  next.messages = retainRecent(next.messages, MESSAGE_LIMIT)
+  next.agentSessions = retainRecent(next.agentSessions, AGENT_SESSION_LIMIT)
+  next.agentSessionMessages = retainRecent(next.agentSessionMessages, AGENT_SESSION_MESSAGE_LIMIT)
+  next.taskHandoffs = retainRecent(next.taskHandoffs, TASK_HANDOFF_LIMIT)
+  next.agentRuns = retainRecent(next.agentRuns, AGENT_RUN_LIMIT).map(run => ({
+    ...run,
+    logs: run.logs.map(log => truncateUtf8Text(log, PROCESS_LOG_MAX_BYTES, 'process output')),
+  }))
+  next.artifacts = retainRecent(next.artifacts, ARTIFACT_LIMIT)
+  next.changeSets = retainRecent(next.changeSets, CHANGE_SET_LIMIT).map(changeSet => ({
+    ...changeSet,
+    patch: changeSet.patch ? truncateUtf8Text(changeSet.patch, CHANGE_SET_PATCH_MAX_BYTES, 'change set patch') : undefined,
+  }))
+  next.contextSnapshots = retainRecent(next.contextSnapshots, CONTEXT_SNAPSHOT_LIMIT)
+  next.workflowEvents = retainRecent(next.workflowEvents, WORKFLOW_EVENT_LIMIT)
+  next.diagnosticLogs = retainRecent(next.diagnosticLogs, DIAGNOSTIC_LOG_LIMIT)
+
+  return next
 }
 
 /**
@@ -807,6 +865,170 @@ async function readStateFromDatabase(client: QueryClient): Promise<AppState> {
   })
 }
 
+async function prunePersistedState(client: QueryClient): Promise<void> {
+  await client.query(
+    `
+      update ${TABLES.changeSets}
+      set patch = case
+        when patch is null or octet_length(patch) <= $1 then patch
+        else left(patch, $2) || $3
+      end
+      where patch is not null and octet_length(patch) > $1
+    `,
+    [
+      CHANGE_SET_PATCH_MAX_BYTES,
+      CHANGE_SET_PATCH_MAX_BYTES,
+      `\n...[change set patch truncated to ${CHANGE_SET_PATCH_MAX_BYTES} bytes]`,
+    ],
+  )
+
+  await client.query(
+    `
+      update ${TABLES.agentRuns}
+      set logs = coalesce((
+        select jsonb_agg(
+          case
+            when octet_length(entry.value) <= $1 then to_jsonb(entry.value)
+            else to_jsonb(left(entry.value, $2) || $3)
+          end
+        )
+        from jsonb_array_elements_text(logs) as entry(value)
+      ), '[]'::jsonb)
+      where exists (
+        select 1
+        from jsonb_array_elements_text(logs) as entry(value)
+        where octet_length(entry.value) > $1
+      )
+    `,
+    [
+      PROCESS_LOG_MAX_BYTES,
+      PROCESS_LOG_MAX_BYTES,
+      `\n...[process output truncated to ${PROCESS_LOG_MAX_BYTES} bytes]`,
+    ],
+  )
+
+  await client.query(
+    `
+      delete from ${TABLES.messages}
+      where id in (
+        select id
+        from ${TABLES.messages}
+        order by created_at desc
+        offset $1
+      )
+    `,
+    [MESSAGE_LIMIT],
+  )
+  await client.query(
+    `
+      delete from ${TABLES.agentSessions}
+      where id in (
+        select id
+        from ${TABLES.agentSessions}
+        order by created_at desc
+        offset $1
+      )
+    `,
+    [AGENT_SESSION_LIMIT],
+  )
+  await client.query(
+    `
+      delete from ${TABLES.agentSessionMessages}
+      where id in (
+        select id
+        from ${TABLES.agentSessionMessages}
+        order by created_at desc
+        offset $1
+      )
+    `,
+    [AGENT_SESSION_MESSAGE_LIMIT],
+  )
+  await client.query(
+    `
+      delete from ${TABLES.taskHandoffs}
+      where id in (
+        select id
+        from ${TABLES.taskHandoffs}
+        order by created_at desc
+        offset $1
+      )
+    `,
+    [TASK_HANDOFF_LIMIT],
+  )
+  await client.query(
+    `
+      delete from ${TABLES.agentRuns}
+      where id in (
+        select id
+        from ${TABLES.agentRuns}
+        order by started_at desc
+        offset $1
+      )
+    `,
+    [AGENT_RUN_LIMIT],
+  )
+  await client.query(
+    `
+      delete from ${TABLES.artifacts}
+      where id in (
+        select id
+        from ${TABLES.artifacts}
+        order by created_at desc
+        offset $1
+      )
+    `,
+    [ARTIFACT_LIMIT],
+  )
+  await client.query(
+    `
+      delete from ${TABLES.changeSets}
+      where id in (
+        select id
+        from ${TABLES.changeSets}
+        order by created_at desc
+        offset $1
+      )
+    `,
+    [CHANGE_SET_LIMIT],
+  )
+  await client.query(
+    `
+      delete from ${TABLES.contextSnapshots}
+      where id in (
+        select id
+        from ${TABLES.contextSnapshots}
+        order by created_at desc
+        offset $1
+      )
+    `,
+    [CONTEXT_SNAPSHOT_LIMIT],
+  )
+  await client.query(
+    `
+      delete from ${TABLES.workflowEvents}
+      where id in (
+        select id
+        from ${TABLES.workflowEvents}
+        order by created_at desc
+        offset $1
+      )
+    `,
+    [WORKFLOW_EVENT_LIMIT],
+  )
+  await client.query(
+    `
+      delete from ${TABLES.diagnosticLogs}
+      where id in (
+        select id
+        from ${TABLES.diagnosticLogs}
+        order by created_at desc
+        offset $1
+      )
+    `,
+    [DIAGNOSTIC_LOG_LIMIT],
+  )
+}
+
 /**
  * Replaces the full normalized state in PostgreSQL inside one transaction.
  * Input: transaction client and application state. Output: promise resolved after write.
@@ -830,6 +1052,8 @@ async function writeStateToDatabase(pool: Pool, state: AppState): Promise<void> 
  * Input: transaction client and application state. Output: promise resolved after write.
  */
 async function writeStateToClient(client: QueryClient, state: AppState): Promise<void> {
+  const prunedState = pruneState(state)
+
   await client.query(`delete from ${TABLES.diagnosticLogs}`)
   await client.query(`delete from ${TABLES.workflowEvents}`)
   await client.query(`delete from ${TABLES.contextSnapshots}`)
@@ -845,7 +1069,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
   await client.query(`delete from ${TABLES.agents}`)
   await client.query(`delete from ${TABLES.workspaces}`)
 
-  for (const workspace of state.workspaces) {
+  for (const workspace of prunedState.workspaces) {
     await client.query(
         `
           insert into ${TABLES.workspaces} (
@@ -869,7 +1093,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     )
   }
 
-  for (const conversation of state.conversations) {
+  for (const conversation of prunedState.conversations) {
     await client.query(
         `
           insert into ${TABLES.conversations} (
@@ -888,7 +1112,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     )
   }
 
-  for (const message of state.messages) {
+  for (const message of prunedState.messages) {
     await client.query(
         `
           insert into ${TABLES.messages} (
@@ -910,15 +1134,15 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     )
   }
 
-  for (const agent of state.agents) {
+  for (const agent of prunedState.agents) {
     await insertAgentToClient(client, agent)
   }
 
-  for (const member of state.workspaceAgentMembers) {
+  for (const member of prunedState.workspaceAgentMembers) {
     await insertWorkspaceAgentMemberToClient(client, member)
   }
 
-  for (const session of state.agentSessions) {
+  for (const session of prunedState.agentSessions) {
     await client.query(
         `
           insert into ${TABLES.agentSessions} (
@@ -938,7 +1162,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     )
   }
 
-  for (const sessionMessage of state.agentSessionMessages) {
+  for (const sessionMessage of prunedState.agentSessionMessages) {
     await client.query(
         `
           insert into ${TABLES.agentSessionMessages} (
@@ -960,7 +1184,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     )
   }
 
-  for (const handoff of state.taskHandoffs) {
+  for (const handoff of prunedState.taskHandoffs) {
     await client.query(
         `
           insert into ${TABLES.taskHandoffs} (
@@ -987,7 +1211,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     )
   }
 
-  for (const run of state.agentRuns) {
+  for (const run of prunedState.agentRuns) {
     await client.query(
         `
           insert into ${TABLES.agentRuns} (
@@ -1014,7 +1238,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     )
   }
 
-  for (const artifact of state.artifacts) {
+  for (const artifact of prunedState.artifacts) {
     await client.query(
         `
           insert into ${TABLES.artifacts} (
@@ -1037,7 +1261,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     )
   }
 
-  for (const changeSet of state.changeSets) {
+  for (const changeSet of prunedState.changeSets) {
     await client.query(
         `
           insert into ${TABLES.changeSets} (
@@ -1057,7 +1281,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     )
   }
 
-  for (const workflowEvent of state.workflowEvents) {
+  for (const workflowEvent of prunedState.workflowEvents) {
     await client.query(
         `
           insert into ${TABLES.workflowEvents} (
@@ -1075,7 +1299,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     )
   }
 
-  for (const snapshot of state.contextSnapshots) {
+  for (const snapshot of prunedState.contextSnapshots) {
     await client.query(
         `
           insert into ${TABLES.contextSnapshots} (
@@ -1097,7 +1321,7 @@ async function writeStateToClient(client: QueryClient, state: AppState): Promise
     )
   }
 
-  for (const log of state.diagnosticLogs) {
+  for (const log of prunedState.diagnosticLogs) {
     await client.query(
         `
           insert into ${TABLES.diagnosticLogs} (
@@ -1145,7 +1369,9 @@ export class PostgresStateStore implements StateStore {
       await beginStateTransaction(client)
       const result = await client.query(`select count(*)::int as count from ${TABLES.workspaces}`)
       if ((result.rows[0]?.count ?? 0) === 0) {
-        await writeStateToClient(client, AppStateSchema.parse(this.seed))
+        await writeStateToClient(client, pruneState(AppStateSchema.parse(this.seed)))
+      } else {
+        await prunePersistedState(client)
       }
       await client.query('commit')
     } catch (error) {
@@ -1167,11 +1393,11 @@ export class PostgresStateStore implements StateStore {
       const result = await client.query(`select count(*)::int as count from ${TABLES.workspaces}`)
       if ((result.rows[0]?.count ?? 0) === 0) {
         await client.query('commit')
-        return cloneState(this.seed)
+        return pruneState(this.seed)
       }
       const state = await readStateFromDatabase(client)
       await client.query('commit')
-      return state
+      return pruneState(state)
     } catch (error) {
       await client.query('rollback')
       throw error
@@ -1223,7 +1449,7 @@ export class PostgresStateStore implements StateStore {
       const current = await readStateFromDatabase(client)
       const draft = cloneState(current)
       const value = mutator(draft)
-      const next = AppStateSchema.parse(draft)
+      const next = pruneState(AppStateSchema.parse(draft))
       if (!isSameState(current, next)) {
         await writeStateToClient(client, next)
       }

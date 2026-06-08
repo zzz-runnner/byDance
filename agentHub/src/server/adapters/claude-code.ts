@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { isoNow } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import type { LocalToolGateway } from '../tool-gateway'
-import { buildAgentPrompt, buildStdinPrompt, resolveCliCommand } from './command'
+import { buildAgentPrompt, buildStdinPrompt, resolveCliCommand, truncateProcessOutput } from './command'
 import { createAgentOutputEmitter } from './stream-events'
 import type { AgentAdapter, AgentAdapterInput, AgentAdapterResult } from './types'
 
@@ -262,6 +262,12 @@ function buildProcessWarnings(code: number | null, timedOut: boolean): string[] 
   return warnings
 }
 
+function buildPersistedLogs(...entries: Array<string | undefined>): string[] {
+  return entries
+    .filter((entry): entry is string => Boolean(entry))
+    .map(entry => truncateProcessOutput(entry))
+}
+
 /**
  * Maps AgentHub permission mode to Claude Code print-mode permission mode.
  * Input: AgentHub permission mode. Output: Claude Code permission mode.
@@ -347,7 +353,7 @@ export function createClaudeCodeAdapter(env: ServerEnv, toolGateway: LocalToolGa
           status: 'failed',
           content: result.stderr || `Claude Code returned an empty response. exitCode=${result.code}`,
           artifacts: [],
-          logs: [result.stdout, result.stderr].filter(Boolean),
+          logs: buildPersistedLogs(result.stdout, result.stderr),
         }
       }
 
@@ -359,7 +365,7 @@ export function createClaudeCodeAdapter(env: ServerEnv, toolGateway: LocalToolGa
           status: 'failed',
           content: failedByModel ? content : result.stderr || `Claude Code exited with code ${result.code}.`,
           artifacts: [],
-          logs: [result.stdout, result.stderr].filter(Boolean),
+          logs: buildPersistedLogs(result.stdout, result.stderr),
         }
       }
 
@@ -378,7 +384,7 @@ export function createClaudeCodeAdapter(env: ServerEnv, toolGateway: LocalToolGa
             createdAt: isoNow(),
           },
         ],
-        logs: [...warnings, result.stderr].filter(Boolean),
+        logs: buildPersistedLogs(...warnings, result.stderr),
       }
     },
   }

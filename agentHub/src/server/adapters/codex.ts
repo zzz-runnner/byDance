@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, unlink } from 'node:fs/promises'
 import { isoNow } from '@shared/contracts'
 import type { ServerEnv } from '../env'
 import type { LocalToolGateway } from '../tool-gateway'
-import { buildAgentPrompt, buildStdinPrompt, resolveCliCommand } from './command'
+import { buildAgentPrompt, buildStdinPrompt, resolveCliCommand, truncateProcessOutput } from './command'
 import { checkCodexBridge } from './codex-bridge'
 import { createAgentOutputEmitter } from './stream-events'
 import type { AgentAdapter, AgentAdapterInput, AgentAdapterResult } from './types'
@@ -296,6 +296,12 @@ function buildProcessWarnings(code: number | null, timedOut: boolean): string[] 
   return warnings
 }
 
+function buildPersistedLogs(...entries: Array<string | undefined>): string[] {
+  return entries
+    .filter((entry): entry is string => Boolean(entry))
+    .map(entry => truncateProcessOutput(entry))
+}
+
 /**
  * Creates a Codex adapter backed by the local codex CLI.
  * Input: server environment. Output: AgentHub adapter implementation.
@@ -310,10 +316,10 @@ export function createCodexAdapter(env: ServerEnv, toolGateway: LocalToolGateway
           status: 'failed',
           content: bridgeCheck.message,
           artifacts: [],
-          logs: [
+          logs: buildPersistedLogs(
             'codex_bridge_unavailable',
             bridgeCheck.message,
-          ],
+          ),
         }
       }
       const outputPath = path.join(tmpdir(), `agenthub-codex-${randomUUID()}.txt`)
@@ -366,7 +372,7 @@ export function createCodexAdapter(env: ServerEnv, toolGateway: LocalToolGateway
           status: 'failed',
           content: content || result.stderr || `Codex exited with code ${result.code}.`,
           artifacts: [],
-          logs: [result.stdout, result.stderr].filter(Boolean),
+          logs: buildPersistedLogs(result.stdout, result.stderr),
         }
       }
 
@@ -385,7 +391,7 @@ export function createCodexAdapter(env: ServerEnv, toolGateway: LocalToolGateway
             createdAt: isoNow(),
           },
         ],
-        logs: [...warnings, result.stderr].filter(Boolean),
+        logs: buildPersistedLogs(...warnings, result.stderr),
       }
     },
   }
