@@ -118,11 +118,6 @@ type BackendRetryDialogState = {
   retrying?: boolean
   onRetry: () => void
 }
-type BackendResponseDialogState = {
-  visible: boolean
-  title: string
-  body: string
-}
 type ChatProcessStep = {
   id: string
   icon: IconName
@@ -1380,11 +1375,6 @@ export default function App() {
     message: '',
     onRetry: () => undefined,
   })
-  const [backendResponseDialog, setBackendResponseDialog] = useState<BackendResponseDialogState>({
-    visible: false,
-    title: '',
-    body: '',
-  })
   const [retryCount, setRetryCount] = useState(0)
   const [activeTab, setActiveTab] = useState<TabKey>('workbench')
   const [agentEntryMode, setAgentEntryMode] = useState<AgentEntryMode>('global')
@@ -1463,7 +1453,6 @@ export default function App() {
   async function loadWorkbenchPage(input?: {
     cursor?: string
     append?: boolean
-    showResponse?: boolean
     query?: string
     filters?: WorkbenchFilterState
   }) {
@@ -1486,13 +1475,6 @@ export default function App() {
 
     try {
       const overview = await fetchWorkbenchOverview(request)
-      if (input?.showResponse) {
-        setBackendResponseDialog({
-          visible: true,
-          title: '筛选工作区响应体',
-          body: JSON.stringify({ request, response: overview }, null, 2),
-        })
-      }
       const nextWorkspaces = overview.rooms.map(mapWorkbenchRoomToWorkspace)
       const scopedAgents = await fetchAgentsForWorkspaces(nextWorkspaces)
       setWorkbenchAgentList(mergeProjectAgents(overview.agents ?? [], scopedAgents))
@@ -1562,7 +1544,6 @@ export default function App() {
     void loadWorkbenchPage({
       query: workspaceQuery,
       filters: nextFilters,
-      showResponse: true,
     })
   }
 
@@ -1588,14 +1569,6 @@ export default function App() {
     } finally {
       setCreatingWorkspace(false)
     }
-  }
-
-  function showBackendResponseDialog(title: string, payload: unknown) {
-    setBackendResponseDialog({
-      visible: true,
-      title,
-      body: JSON.stringify(payload, null, 2),
-    })
   }
 
   function updateChatSession(projectId: string, updater: (session: ChatProjectSession) => ChatProjectSession) {
@@ -1835,13 +1808,6 @@ export default function App() {
     try {
       const nextAgents = await fetchProjectAgents(projectId)
       setWorkspaceAgentRegistry(nextAgents)
-      showBackendResponseDialog('当前工作区 Agent 响应体', {
-        request: {
-          method: 'GET',
-          url: `/api/projects/${projectId}/agents`,
-        },
-        response: nextAgents,
-      })
     } catch (error) {
       const message = error instanceof Error ? error.message : '当前工作区 Agent 加载失败。'
       showBackendRetryDialog({
@@ -1857,14 +1823,11 @@ export default function App() {
     }
   }
 
-  async function handleUpdateWorkspaceMetadata(workspace: Workspace, input: { pinned?: boolean; archived?: boolean }, options?: { showResponse?: boolean }) {
+  async function handleUpdateWorkspaceMetadata(workspace: Workspace, input: { pinned?: boolean; archived?: boolean }) {
     const projectId = workspace.projectId ?? workspace.id
 
     try {
-      const response = await updateWorkspaceMetadata(projectId, input)
-      if (options?.showResponse) {
-        showBackendResponseDialog(input.archived ? '归档响应体' : '取消归档响应体', response)
-      }
+      await updateWorkspaceMetadata(projectId, input)
       await loadWorkbenchPage()
     } catch (error) {
       const message = error instanceof Error ? error.message : '更新工作区状态失败。'
@@ -1883,8 +1846,7 @@ export default function App() {
     const projectId = workspace.projectId ?? workspace.id
 
     try {
-      const response = workspace.pinned ? await unpinWorkspace(projectId) : await pinWorkspace(projectId)
-      showBackendResponseDialog(workspace.pinned ? '取消置顶响应体' : '置顶响应体', response)
+      await (workspace.pinned ? unpinWorkspace(projectId) : pinWorkspace(projectId))
       await loadWorkbenchPage()
     } catch (error) {
       const message = error instanceof Error ? error.message : '更新工作区置顶状态失败。'
@@ -1903,8 +1865,7 @@ export default function App() {
     const projectId = workspace.projectId ?? workspace.id
 
     try {
-      const response = workspace.archived ? await unarchiveWorkspace(projectId) : await archiveWorkspace(projectId)
-      showBackendResponseDialog(workspace.archived ? '取消归档响应体' : '归档响应体', response)
+      await (workspace.archived ? unarchiveWorkspace(projectId) : archiveWorkspace(projectId))
       await loadWorkbenchPage()
     } catch (error) {
       const message = error instanceof Error ? error.message : '更新工作区归档状态失败。'
@@ -2185,7 +2146,6 @@ export default function App() {
                   workspace={activeWorkspace}
                   projectAgents={agentScreenProjectAgents}
                   loading={isWorkspaceAgentPage && agentRegistryLoading}
-                  onShowResponse={showBackendResponseDialog}
                   onShowError={showBackendRetryDialog}
                 />
               ) : null}
@@ -2234,12 +2194,6 @@ export default function App() {
               backendRetryDialog.onRetry()
             }}
             onClose={hideBackendRetryDialog}
-          />
-          <BackendResponseDialog
-            visible={backendResponseDialog.visible}
-            title={backendResponseDialog.title}
-            body={backendResponseDialog.body}
-            onClose={() => setBackendResponseDialog(previous => ({ ...previous, visible: false }))}
           />
         </SafeAreaView>
       </ImageBackground>
@@ -2400,68 +2354,6 @@ function WorkspaceFilterDropdown<T extends string>({
         </GlassCard>
       ) : null}
     </View>
-  )
-}
-
-function BackendResponseDialog({
-  visible,
-  title,
-  body,
-  onClose,
-}: {
-  visible: boolean
-  title: string
-  body: string
-  onClose: () => void
-}) {
-  const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    if (!visible) {
-      setCopied(false)
-    }
-  }, [visible])
-
-  async function copyResponseBody() {
-    await Clipboard.setStringAsync(body)
-    setCopied(true)
-  }
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.backendDialogBackdrop}>
-        <Pressable style={styles.backendDialogScrim} onPress={onClose} />
-        <GlassCard style={styles.responseDialogCard}>
-          <View style={styles.activityCenterHead}>
-            <View style={styles.workspacePanelTitleCopy}>
-              <Text style={styles.homeWorkspaceEyebrow}>BACKEND RESPONSE</Text>
-              <Text style={styles.backendDialogTitle}>{title}</Text>
-            </View>
-            <Pressable style={styles.artifactCloseButton} onPress={onClose}>
-              <MaterialCommunityIcons name="close" size={22} color="#0f172a" />
-            </Pressable>
-          </View>
-          <View style={styles.responseDialogContent}>
-            <TextInput
-              value={body}
-              multiline
-              editable={false}
-              selectTextOnFocus
-              scrollEnabled
-              textAlignVertical="top"
-              style={styles.responseDialogTextInput}
-            />
-          </View>
-          <Pressable style={styles.responseCopyButton} onPress={copyResponseBody}>
-            <MaterialCommunityIcons name={copied ? 'check' : 'content-copy'} size={18} color="#2563eb" />
-            <Text style={styles.responseCopyText}>{copied ? '已复制' : '复制响应体'}</Text>
-          </Pressable>
-          <Pressable style={styles.filterTestConfirmButton} onPress={onClose}>
-            <Text style={styles.backendDialogPrimaryText}>关闭</Text>
-          </Pressable>
-        </GlassCard>
-      </View>
-    </Modal>
   )
 }
 
@@ -3058,7 +2950,7 @@ function ChatScreen({
           <GlassCard style={styles.currentArtifactsPanel}>
             <View style={styles.currentArtifactsHead}>
               <Text style={styles.currentArtifactsTitle}>最新产物</Text>
-              <Text style={styles.currentArtifactsSubtitle}>来自本工作区响应体</Text>
+              <Text style={styles.currentArtifactsSubtitle}>来自本工作区交付记录</Text>
             </View>
             <View style={styles.currentArtifactGrid}>
               {chatState.artifacts.map(item => (
@@ -4403,7 +4295,6 @@ function AgentScreen({
   workspace,
   projectAgents,
   loading,
-  onShowResponse,
   onShowError,
 }: {
   layoutTier: LayoutTier
@@ -4414,7 +4305,6 @@ function AgentScreen({
   workspace: Workspace
   projectAgents: ProjectAgent[]
   loading: boolean
-  onShowResponse: (title: string, payload: unknown) => void
   onShowError: (input: Omit<BackendRetryDialogState, 'visible'>) => void
 }) {
   const showFullRegistry = layoutTier === 'wide'
@@ -4456,14 +4346,6 @@ function AgentScreen({
       refreshAgentFromResponse(response)
       setSelectedAgent(null)
       setAgentConfigOpen(false)
-      onShowResponse('新建 Agent 响应体', {
-        request: {
-          method: 'POST',
-          url: `/api/projects/${projectId}/agents`,
-          body: input,
-        },
-        response,
-      })
     } catch (error) {
       onShowError({
         title: '新建 Agent 失败',
@@ -4479,16 +4361,9 @@ function AgentScreen({
     if (isBuiltInAgentView(agent)) return
     const projectId = workspace.projectId ?? workspace.id
     try {
-      const response = await deleteProjectAgent(projectId, agent.id)
+      await deleteProjectAgent(projectId, agent.id)
       setVisibleAgents(current => current.filter(item => item.id !== agent.id))
       if (selectedAgent?.id === agent.id) setSelectedAgent(null)
-      onShowResponse('删除 Agent 响应体', {
-        request: {
-          method: 'DELETE',
-          url: `/api/projects/${projectId}/agents/${agent.id}`,
-        },
-        response,
-      })
     } catch (error) {
       onShowError({
         title: '删除 Agent 失败',
@@ -4508,14 +4383,6 @@ function AgentScreen({
       refreshAgentFromResponse(response)
       setSelectedAgent(null)
       setAgentConfigOpen(false)
-      onShowResponse('编辑 Agent 响应体', {
-        request: {
-          method: 'PATCH',
-          url: `/api/projects/${projectId}/agents/${nextAgent.id}`,
-          body: input,
-        },
-        response,
-      })
     } catch (error) {
       onShowError({
         title: '编辑 Agent 失败',
@@ -5378,66 +5245,6 @@ const styles = StyleSheet.create({
   backendDialogPrimaryText: {
     color: '#fff',
     fontSize: 15,
-    fontWeight: '900',
-  },
-  filterTestConfirmButton: {
-    alignSelf: 'stretch',
-    minHeight: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 16,
-    backgroundColor: '#2563eb',
-  },
-  responseDialogCard: {
-    width: '100%',
-    maxWidth: 380,
-    maxHeight: '76%',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 18,
-    borderRadius: 24,
-  },
-  responseDialogScroll: {
-    alignSelf: 'stretch',
-    maxHeight: 360,
-  },
-  responseDialogContent: {
-    alignSelf: 'stretch',
-    minHeight: 220,
-    maxHeight: 360,
-    padding: 12,
-    borderRadius: 14,
-    backgroundColor: 'rgba(15,23,42,0.86)',
-  },
-  responseDialogText: {
-    color: '#e2e8f0',
-    fontSize: 12,
-    lineHeight: 18,
-    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
-  },
-  responseDialogTextInput: {
-    minHeight: 220,
-    maxHeight: 360,
-    color: '#e2e8f0',
-    fontSize: 12,
-    lineHeight: 18,
-    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
-  },
-  responseCopyButton: {
-    alignSelf: 'stretch',
-    minHeight: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 7,
-    borderWidth: 1,
-    borderColor: 'rgba(37,99,235,0.28)',
-    borderRadius: 15,
-    backgroundColor: 'rgba(239,246,255,0.8)',
-  },
-  responseCopyText: {
-    color: '#2563eb',
-    fontSize: 14,
     fontWeight: '900',
   },
   header: {
