@@ -262,6 +262,46 @@ function mergeWorkspaceRooms(currentRooms: WorkspaceRoom[], nextRooms: Workspace
   ]
 }
 
+/**
+ * Applies deterministic workspace ordering for the left rail.
+ * Input: room list plus current sort field and direction.
+ * Output: rooms with pinned workspaces always first, then user-selected ordering.
+ */
+function sortWorkspaceRooms(
+  rooms: WorkspaceRoom[],
+  sortBy: WorkspaceSortField,
+  sortDirection: SortDirection,
+): WorkspaceRoom[] {
+  const direction = sortDirection === 'asc' ? 1 : -1
+
+  return [...rooms].sort((left, right) => {
+    const leftPinned = left.workspace.pinnedAt ? 1 : 0
+    const rightPinned = right.workspace.pinnedAt ? 1 : 0
+    if (leftPinned !== rightPinned) {
+      return rightPinned - leftPinned
+    }
+
+    let comparison = 0
+    if (sortBy === 'name') {
+      comparison = left.title.localeCompare(right.title, 'zh-CN')
+    } else {
+      const leftValue = sortBy === 'createdAt' ? left.workspace.createdAt : left.workspace.updatedAt
+      const rightValue = sortBy === 'createdAt' ? right.workspace.createdAt : right.workspace.updatedAt
+      comparison = leftValue.localeCompare(rightValue)
+    }
+
+    if (comparison !== 0) {
+      return comparison * direction
+    }
+
+    if (left.workspace.pinnedAt && right.workspace.pinnedAt && left.workspace.pinnedAt !== right.workspace.pinnedAt) {
+      return right.workspace.pinnedAt.localeCompare(left.workspace.pinnedAt)
+    }
+
+    return right.workspace.updatedAt.localeCompare(left.workspace.updatedAt) || left.id.localeCompare(right.id)
+  })
+}
+
 type ChronologicalRecord = {
   id: string
   createdAt?: string
@@ -565,7 +605,11 @@ export function App() {
     const resolvedOverview = input?.merge
       ? {
           agents: nextOverview.agents,
-          rooms: mergeWorkspaceRooms(overviewRef.current.rooms, nextOverview.rooms),
+          rooms: sortWorkspaceRooms(
+            mergeWorkspaceRooms(overviewRef.current.rooms, nextOverview.rooms),
+            input?.sortBy ?? workspaceSortBy,
+            input?.sortDirection ?? workspaceSortDirection,
+          ),
           page: {
             limit: mergeWorkspaceRooms(overviewRef.current.rooms, nextOverview.rooms).length,
             nextCursor: nextOverview.page.nextCursor,
@@ -573,7 +617,14 @@ export function App() {
             total: nextOverview.page.total,
           },
         }
-      : nextOverview
+      : {
+          ...nextOverview,
+          rooms: sortWorkspaceRooms(
+            nextOverview.rooms,
+            input?.sortBy ?? workspaceSortBy,
+            input?.sortDirection ?? workspaceSortDirection,
+          ),
+        }
 
     loadedWorkspaceCountRef.current = Math.max(
       resolvedOverview.rooms.length,
