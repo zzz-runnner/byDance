@@ -86,9 +86,21 @@ export function backendAssetUrl(url: string | undefined): string | undefined {
     return undefined
   }
 
-  return url.startsWith('/') || /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(url) || url.startsWith('data:') || url.startsWith('blob:')
-    ? url
-    : `/${url}`
+  const normalized = url.trim()
+  if (!normalized) {
+    return undefined
+  }
+
+  if (
+    normalized.startsWith('/') ||
+    /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(normalized) ||
+    normalized.startsWith('data:') ||
+    normalized.startsWith('blob:')
+  ) {
+    return normalized
+  }
+
+  return `/${normalized.replace(/^\.\/+/, '')}`
 }
 
 export type CreateBusinessAgentInput = {
