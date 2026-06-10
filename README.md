@@ -19,7 +19,7 @@ AgentHub 是一个以 IM 聊天为核心交互的多 Agent 协作平台。用户
   "ok": true,
   "service": "agenthub-backend",
   "agentHubBaseUrl": "http://agenthub:8787",
-  "storageRoot": "/app/data"
+  "storageRoot": "/opt/agenthub/agenthub-backend-data"
 }
 ```
 
