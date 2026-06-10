@@ -1,438 +1,263 @@
-# byDance
+﻿# AgentHub 多 Agent 协作平台
 
-This repository keeps the byDance project in one Git repository while local workspace source files live under `agentHub` and local preview runtime assets are managed by `agentHubBackend`.
+AgentHub 是一个以 IM 聊天为核心交互的多 Agent 协作平台。用户在项目工作区中发起需求、发送消息、`@Agent`、查看执行过程和预览产物；平台由 Orchestrator 调度产品经理、工程师、Reviewer 等子 Agent，共同完成需求澄清、代码实现、审查、预览、版本和交付。
 
-## Workspaces
+一句话概括：AgentHub 把 AI Agent 从“单个工具回答”升级为“项目工作区中的多 Agent 协作与产物交付”。
 
-- `agentHub/` - AgentHub local runtime, API, CLI, orchestration, adapters, workspace runtime, and storage.
-- `agentHubBackend/` - Unified Nest backend on `127.0.0.1:8790`. It is now both the frontend-facing local adapter and the business backend shell.
-- `agentHubFrontend/` - AgentHub Web frontend with its own Vite/React dependencies and lockfile.
+## 在线访问
 
-## Current Local Architecture
+| 类型 | 地址 |
+| --- | --- |
+| Web 公网 Demo | http://120.79.130.49:5173 |
+| 业务后端健康检查 | http://120.79.130.49:8790/api/health |
+| GitHub 仓库 | https://github.com/zzz-runnner/byDance |
 
-The current local live path is:
+后端健康检查当前应返回类似：
 
-`agentHubFrontend -> agentHubBackend -> agentHub runtime -> real agents`
+```json
+{
+  "ok": true,
+  "service": "agenthub-backend",
+  "agentHubBaseUrl": "http://agenthub:8787",
+  "storageRoot": "/app/data"
+}
+```
 
-The deprecated `locateBackend/` adapter has been removed from the repository. The unified local backend path is now only `agentHubBackend/`.
+## 核心能力
 
-The current local chain covers:
+- 工作区式项目管理：一个工作区保存项目目标、聊天上下文、Agent 成员、产物和版本状态。
+- IM 协作体验：支持群聊、单聊、`@Agent`、消息引用、消息 pin、Markdown 渲染和流式回复。
+- 多 Agent 调度：Orchestrator 根据任务阶段调度产品经理、工程师、Reviewer 等子 Agent。
+- 用户自建 Agent：支持在工作区内创建、编辑和调用自定义 Agent。
+- 产物交付闭环：支持网页预览、文件树、源码查看、Diff、文档预览、版本、构建、部署预览和源码 zip。
+- 多端支持：Web 是完整工程工作台，App 是轻量协作入口，可查看/触达聊天、Agent、产物、构建和部署状态。
+- AI 协作沉淀：项目保留 Spec、rules、专项 Skills、真实链路验收和交付文档。
 
-- `GET /api/health`
-- `GET /api/agents`
-- `GET /api/agents/:agentId`
-- `GET /api/workspaces/:workspaceId/agents`
-- `GET /api/workspaces/:workspaceId/agents/:agentId`
-- `POST /api/workspaces/:workspaceId/agents`
-- `PATCH /api/workspaces/:workspaceId/agents/:agentId`
-- `DELETE /api/workspaces/:workspaceId/agents/:agentId`
-- `GET /api/workbench`
-- `GET /api/projects`
-- `GET /api/projects/:projectId`
-- `GET /api/projects/:projectId/agents`
-- `GET /api/projects/:projectId/agents/:agentId`
-- `POST /api/projects/:projectId/agents`
-- `PATCH /api/projects/:projectId/agents/:agentId`
-- `DELETE /api/projects/:projectId/agents/:agentId`
-- `PATCH /api/projects/:projectId/metadata`
-- `PUT /api/projects/:projectId/pin`
-- `DELETE /api/projects/:projectId/pin`
-- `PUT /api/projects/:projectId/messages/:messageId/pin`
-- `DELETE /api/projects/:projectId/messages/:messageId/pin`
-- `PUT /api/projects/:projectId/archive`
-- `DELETE /api/projects/:projectId/archive`
-- `GET /api/projects/:projectId/state`
-- `GET /api/projects/:projectId/files`
-- `GET /api/projects/:projectId/files/content`
-- `GET /api/projects/:projectId/files/preview`
-- `GET /api/projects/:projectId/diff`
-- `POST /api/projects/:projectId/change-sets/:changeSetId/apply`
-- `GET /api/projects/:projectId/delivery`
-- `GET /api/projects/:projectId/preview-targets`
-- `GET /api/projects/:projectId/preview-capability`
-- `POST /api/projects`
-- `POST /api/projects/:projectId/messages/stream`
-- `POST /api/projects/:projectId/versions`
-- `GET /api/projects/:projectId/versions`
-- `GET /api/projects/:projectId/version-diff`
-- `POST /api/projects/:projectId/versions/:versionId/restore`
-- `GET /api/projects/:projectId/source.zip`
-- `POST /api/projects/:projectId/builds`
-- `POST /api/projects/:projectId/deploy`
-- `POST /api/projects/:projectId/preview-build`
-- `GET /api/workspaces/:workspaceId/zip`
-- `GET /preview/runtime/*`
-- `GET /preview/*`
-- `GET /build-preview/*`
+## 项目结构
 
-Global mutating `/api/agents` routes are no longer the write path. They now reject writes and point callers to the workspace-scoped agent routes.
+| 目录 | 职责 |
+| --- | --- |
+| `agentHub/` | AgentHub Runtime，负责 Orchestrator、子 Agent 调度、Adapter、workflow events、workspace repo、preview、zip 和存储 |
+| `agentHubBackend/` | Nest 业务后端，负责项目元数据、工作台接口、版本、构建、部署预览、预览代理和统一 API |
+| `agentHubFrontend/` | React/Vite Web 工作台，负责工作区、聊天、过程卡片、产物卡片、代码工作区、Diff、预览、版本和交付 |
+| `agentHubApp/` | Expo/React Native 移动端 App，负责轻量工作区、聊天、产物摘要、Agent 状态和结果触达 |
+| `docs/` | 架构、接口、AI 协作、交付材料和内部整理文档 |
 
-The backend still keeps the Nest business modules for:
+本地 Web 链路：
 
-- project metadata
-- versions
-- builds
-- deployments
+```text
+agentHubFrontend -> agentHubBackend -> agentHub Runtime -> Agent adapters
+```
 
-## 2026-06-03 Local Status
+默认端口：
 
-- One workspace equals one main chat window.
-- Built-in agents are now registered as global templates, while every workspace auto-initializes its own locked default members:
-  - `orchestrator`
-  - `product-manager`
-  - `engineer`
-  - `reviewer`
-- Group rooms support three effective routing inputs:
-  - explicit `@main` or `@agent`
-  - quoted child-agent reply follow-up
-  - code selection, which defaults to `engineer` when no explicit target is given
-- Direct rooms stay fixed to one agent and do not show the mention picker.
-- Direct-room creation is limited to the dedicated built-in targets `claude-code-direct` and `codex-direct`; custom child agents can only be added from group workspaces.
-- The built-in orchestrator keeps the stable id `orchestrator`, while its default display name is now `项目经理 Agent`.
-- Agent `name` is now the editable display identity, while `id` stays the stable key for routing, storage, session binding, and conversation participants.
-- Built-in workspace members are locked and non-deletable. They only allow per-workspace edits to:
-  - display name
-  - model provider
-  - model
-- Workspace custom agents are isolated per group workspace. Create, edit, and delete actions affect only the current workspace.
-- Visible speaker identity now resolves from the current agent registry instead of flattening replies to one built-in coordinator label.
-- Editing an agent name now refreshes direct-room titles, agent-session titles, direct-room composer copy, and reply sender labels that can still resolve through the live agent registry.
-- Group-room explicit mentions now match `@main`, stable ids, full current display names, and short display-name aliases.
-- Group-room explicit `@agent` turns are now hard-locked to that one agent:
-  - only the mentioned agent executes
-  - only the mentioned agent can publish the final visible reply
-  - auto reviewer insertion, auto repair, and orchestrator final synthesis are skipped for that turn
-  - mentioning more than one agent in the same group-turn now returns a validation error instead of guessing
-- The frontend agent management dialog now uses `/api/projects/:projectId/agents`, which proxies to workspace-scoped AgentHub routes through `agentHubBackend`.
-- The left workspace rail uses server-backed paging through `/api/workbench`.
-- The left workspace rail also supports backend-backed search, status filtering, sorting, pinning, and archiving.
-- The right chat pane loads only the active workspace state through `/api/projects/:projectId/state`.
-- Older messages load incrementally through `messagePageSize + messageCursor` instead of loading the full conversation at startup.
-- The chat surface renders one grouped turn:
-  - user message
-  - process block
-  - one unified turn result card for preview, diff, and source outputs
-  - final agent reply
-- Turn-level runtime preview URLs and code diffs no longer render as separate duplicate cards in chat.
-- The turn result entry now opens the workspace dialog directly, and the dialog can switch across:
-  - `Result`
-  - `Diff`
-  - `源码`
-  - `预览`
-- Result-only turns now open the dedicated `Result` tab first, so review/text-only runs no longer fall through to an empty code panel.
-- Frontend artifact affordances now stay capability-aware:
-  - entries without a real URL no longer advertise a fake external page
-  - preview and delivery open actions only appear when a real target exists
-- Workspace bootstrap now prefers real text files and document-preview assets correctly:
-  - `.docx/.pptx/.pdf` no longer get misclassified as editor text files
-  - one bad initial file preload no longer kills the whole workspace dialog
-- When one turn contains multiple repair attempts, the main chat flow now collapses them into one result entry instead of repeating similar preview and diff cards.
-- Quote replies and code selections are structured inputs, not plain text hacks.
-- AI output, process summaries, and artifact text use the unified Markdown renderer.
-- The code dialog is scoped to the current workspace repo only. It includes:
-  - file tree
-  - file content
-  - diff view
-  - code quoting
-  - preview panel
-  - saved source version history
-  - version-to-version diff
-  - one-click restore with auto snapshot protection
-  - near-fullscreen modal layout with internal scrolling
-  - whole-dialog bootstrap loading before the first screen renders
-  - open and close transition animations
-  - preview iframe and artifact iframe loading overlays
-- Delivery artifact cards in chat now reuse the code dialog preview area:
-  - local build artifacts open the dialog directly on the build preview surface
-  - local deployment artifacts open the dialog directly on the deployment preview surface
-  - raw source zip artifacts still keep direct download behavior
-- New workspaces no longer auto-seed a placeholder `index.html`.
-- If no previewable entry exists yet, the preview panel stays empty instead of fabricating a page.
-- Chat history recovery now uses turn-safe grouping:
-  - user messages, workflow events, and final replies are grouped by `turnId` when available
-  - older historical messages without `turnId` fall back to the nearest visible unmatched user turn
-  - the frontend no longer groups turns by array index
-- Project state recovery now keeps message and event windows aligned:
-  - `/api/projects/:projectId/state` returns the latest message page first and exposes `messagePage.nextCursor` for older history
-  - returned `workflowEvents` are now restricted to the visible message window turns instead of full-history replay
-- The chat surface no longer fabricates routing placeholder bubbles such as "main brain is deciding who should reply".
-- Waiting placeholders are now limited to turns with a real streaming reply, so completed history no longer shows empty running cards after refresh.
-- Streaming chat replies now keep a frontend handoff stage:
-  - `streaming` while SSE deltas are arriving
-  - `awaiting_commit` after SSE finishes but before the persisted message is reloaded
-  - the streamed reply bubble stays visible during `awaiting_commit`, so the chat does not show a blank gap between stream finish and persisted reply recovery
-  - the persisted final reply appears first, and only then does the process block auto-collapse
-- Workspace messages can now be pinned and unpinned through the business backend, and the runtime pinned context list stays in sync with the current workspace.
-- The code dialog diff tab can now apply the current turn change-set directly through `/api/projects/:projectId/change-sets/:changeSetId/apply`.
-- The code dialog document preview now supports `pdf`, `docx`, and `pptx`:
-  - PDF previews keep the original file URL for iframe display
-  - DOCX previews render directly in the browser through `docx-preview`
-  - PPTX previews render directly in the browser through `@aiden0z/pptx-renderer`
-- Lightweight child-agent replies now use each agent's configured provider and model instead of always falling back to the global main-brain model path.
-- Windows-created Office archives are now normalized during local preview loading, so `Compress-Archive` generated `.docx` and `.pptx` files preview correctly.
+| 服务 | 端口 | 说明 |
+| --- | ---: | --- |
+| `agentHub` | `8787` | Runtime API |
+| Codex bridge | `8788` | 可选，本地 Codex 适配桥 |
+| `agentHubBackend` | `8790` | 业务后端 API |
+| `agentHubFrontend` | `5173` | Web 工作台 |
+| `agentHubApp` | Expo 默认端口 | Expo Dev Server |
 
-## Local Preview
+## 环境要求
 
-`agentHubBackend` now provides the first local preview chain inside the unified Nest backend.
+- Node.js 20+ 建议。
+- npm 可直接运行本仓库四个子工程。
+- Expo Go 或 Android/iOS 模拟器用于移动端调试。
+- 可选：PostgreSQL。默认本地开发可使用文件/本地存储配置。
 
-Supported preview modes:
+每个子工程独立维护依赖和 lockfile。仓库根目录不是 npm workspace，因此需要分别安装依赖。
 
-- Static HTML
-- Browser-native ES modules without bare-package imports
-- Vite React
-- Vite Vue
-- Vite Svelte
+## 本地启动 Web 端
 
-Preview runtime behavior:
-
-- user-facing source files stay in `agentHub/data/workspaces/{workspaceId}/repo`
-- frontend preview and delivery builds can auto-detect one nested app root such as `repo/voting-app`
-- shared pnpm store stays in `agentHubBackend/data/pnpm-store`
-- build sandboxes stay in `agentHubBackend/data/build-sandboxes/{workspaceId}/{manifestHash}`
-- built preview outputs stay in `agentHubBackend/data/preview-outputs/{workspaceId}/{cacheKey}`
-- preview build does not write `node_modules`, `dist`, or runtime lockfiles back into the user workspace repo
-- preview build and delivery build fall back to host-side install and build when Docker CLI is unavailable
-
-## Dependency Management
-
-The repository root is not an npm workspace and does not contain a shared `package.json`.
+下面命令默认当前终端已经位于仓库根目录。第一次启动先安装依赖：
 
 ```powershell
-cd E:\byDance\agentHub
+cd agentHub
 npm install
 
-cd E:\byDance\agentHubBackend
+cd ..\agentHubBackend
 npm install
 
-cd E:\byDance\agentHubFrontend
+cd ..\agentHubFrontend
 npm install
 ```
 
-## Local Startup
+按顺序打开 3-4 个终端启动服务。
 
-Start the local live chain in this order:
+终端 1：启动 AgentHub Runtime。
 
 ```powershell
-cd E:\byDance\agentHub
+cd agentHub
 npm run dev:api
 ```
 
+终端 2：可选，启动 Codex bridge。只有需要本机 Codex adapter 时启动；普通 mock/Claude 路径可先跳过。
+
 ```powershell
-cd E:\byDance\agentHub
+cd agentHub
 npm run codex:bridge
 ```
 
+终端 3：启动业务后端。
+
 ```powershell
-cd E:\byDance\agentHubBackend
+cd agentHubBackend
 npm run dev
 ```
 
+终端 4：启动 Web 工作台。
+
 ```powershell
-cd E:\byDance\agentHubFrontend
+cd agentHubFrontend
 npm run dev
 ```
 
-Expected local ports:
+启动后访问：
 
-- `8787` - `agentHub`
-- `8788` - Codex bridge
-- `8790` - `agentHubBackend`
-- `5173` - frontend dev server
+- Web 工作台：http://127.0.0.1:5173
+- 后端健康检查：http://127.0.0.1:8790/api/health
+- Runtime 健康检查：http://127.0.0.1:8787/api/health
 
-## Verification
+### 后端本地配置
 
-This checkpoint was verified with:
+`agentHubBackend` 默认读取本地配置即可运行。需要自定义时复制 `.env.example`：
 
 ```powershell
-cd E:\byDance\agentHub
+cd agentHubBackend
+Copy-Item .env.example .env
+```
+
+常用配置：
+
+```text
+PORT=8790
+CORS_ORIGIN=http://127.0.0.1:5173
+AGENTHUB_BASE_URL=http://127.0.0.1:8787
+AGENTHUB_RUNTIME_ROOT=../agentHub/data/workspaces
+APP_STORAGE_ROOT=data
+APP_METADATA_STORE=local
+```
+
+如果需要 PostgreSQL metadata storage，可额外配置：
+
+```text
+DATABASE_URL=postgres://agenthub:agenthub@127.0.0.1:5432/agenthub_business
+```
+
+## 本地启动 App 端
+
+第一次启动先安装依赖：
+
+```powershell
+cd agentHubApp
+npm install
+```
+
+默认情况下，App 使用公网业务后端：
+
+```text
+http://120.79.130.49:8790
+```
+
+直接启动 Expo：
+
+```powershell
+cd agentHubApp
+npm run start
+```
+
+然后使用 Expo Go 扫码，或在终端中按提示打开 Android/iOS 模拟器。
+
+如果希望 App 连接本机后端，需要先启动 Web 端本地链路中的 `agentHub` 和 `agentHubBackend`，再设置 `EXPO_PUBLIC_BUSINESS_API_BASE_URL`。
+
+Windows PowerShell 示例：
+
+```powershell
+cd agentHubApp
+$env:EXPO_PUBLIC_BUSINESS_API_BASE_URL='http://127.0.0.1:8790'
+npm run start
+```
+
+注意：
+
+- 如果使用手机真机访问本机后端，`127.0.0.1` 指的是手机自身，不是电脑。
+- 真机调试时请把地址改成电脑在同一局域网下的 IP，例如 `http://192.168.1.23:8790`。
+- Android 模拟器访问宿主机时通常可使用 `http://10.0.2.2:8790`。
+
+常用 App 命令：
+
+```powershell
+cd agentHubApp
+npm run start
+npm run android
+npm run ios
+npm run web
+npm run check
+```
+
+## 验证命令
+
+各端常用检查：
+
+```powershell
+cd agentHub
 npm run check
 npm test
 
-cd E:\byDance\agentHubBackend
+cd ..\agentHubBackend
 npm run check
 npm run build
 
-cd E:\byDance\agentHubFrontend
+cd ..\agentHubFrontend
 npm run check
 npm run build
+
+cd ..\agentHubApp
+npm run check
 ```
 
-Result:
-
-- `agentHub` TypeScript check passed
-- `agentHub` unit and integration tests passed
-- `agentHubBackend` TypeScript check passed
-- `agentHubBackend` Nest build passed
-- `agentHubFrontend` TypeScript check passed
-- `agentHubFrontend` production build passed
-
-Real local service smoke also passed on 2026-06-01:
-
-- `GET http://127.0.0.1:8787/api/health` returned `ok: true` with PostgreSQL storage and real agents enabled.
-- `GET http://127.0.0.1:8790/api/health` returned `ok: true`.
-- `GET http://127.0.0.1:5173` returned `200`.
-- Agent CRUD smoke passed through `agentHubBackend`:
-  - create custom agent
-  - update provider and description
-  - reject deleting built-in agent
-  - delete custom agent
-- Workspace metadata smoke passed through `agentHubBackend`:
-  - update `pinned`
-  - update `archived`
-  - read filtered `status=archived`
-  - restore metadata cleanly
-- Real group-room message stream smoke passed through `POST /api/projects/:projectId/messages/stream`:
-  - explicit `@product-manager` message returned `speaker_direct`
-
-Workspace-agent membership smoke also passed on 2026-06-03 through the live services already running on `127.0.0.1:8787` and `127.0.0.1:8790`:
-
-- Created two fresh validation projects:
-  - workspace A: `proj-282948e3-7bdb-42e9-a26a-9ac946bf725c`
-  - workspace B: `proj-e95b6764-ca17-4e2d-9ef6-a121cd920ff6`
-- Workspace A renamed built-in `product-manager` to `PM-Workspace-A` and switched its stored provider/model override to `mock / workspace-pm-model`.
-- Workspace B kept the same built-in id `product-manager` with the default display name `产品经理` and default provider/model `claude / default`.
-- Workspace A created one custom agent `notes-agent-013014` named `Workspace Notes`; workspace B did not receive that agent.
-- Workspace A group participants were automatically synchronized to include `notes-agent-013014`.
-- Real mention routing by display name passed:
-  - `@PM-Workspace-A Give one short bullet about this workspace goal.`
-  - persisted reply sender id stayed `product-manager`
-  - workflow events resolved `agentName: PM-Workspace-A`
-- Real custom-agent execution passed through `POST /api/projects/:projectId/messages/stream` with:
-  - `@notes-agent-013014 /run Return 3 concise bullet notes about this workspace goal.`
-  - persisted `agentRun.id = run-17782b5b-e865-48c6-b1ea-62dd30d896bf`
-  - persisted `agentRun.provider = mock`
-  - persisted `agentRun.status = success`
-  - final reply sender id stayed `notes-agent-013014`
-  - final reply content came from the mock adapter and produced run artifacts
-
-Additional local preview smoke passed on 2026-06-02:
-
-- `GET http://127.0.0.1:8790/api/projects/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/preview-capability` detected `voting-app` as the workspace app root and returned `mode: build`.
-- `POST http://127.0.0.1:8790/api/projects/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/preview-build` completed successfully and produced one preview target at `index.html`.
-- `GET http://127.0.0.1:8790/build-preview/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/47280d926db374ad/index.html` returned `200`.
-- `POST http://127.0.0.1:8790/api/projects/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/builds` rebuilt delivery version `v20260602_135651` successfully.
-- `GET http://127.0.0.1:8790/build-preview/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/v20260602_135651/index.html` returned `200`.
-
-Focused feature verification also passed on 2026-06-03:
-
-- Type checks and builds re-ran successfully after the final fixes:
-  - `cd E:\byDance\agentHub && npm run check`
-  - `cd E:\byDance\agentHubBackend && npm run check && npm run build`
-- Message pin and unpin passed through the live backend:
-  - `PUT /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/messages/msg-adf54d9d-8f4a-4445-b6b5-bf93cfd632bd/pin`
-  - runtime workspace `ws-2a8c2774-669a-4d1e-8199-fd28fb0cf8b5` immediately reflected the pinned message id
-  - `DELETE` on the same route restored the pinned list to empty
-- Lightweight child-agent provider routing passed with real live events:
-  - `POST /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/messages/stream` with `@PM-Workspace-A ...` emitted the expected `agent_session` reply through `provider=mock` and `model=workspace-pm-model`
-  - `POST /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/messages/stream` with `agentId=engineer` emitted the expected `agent_session` reply through `provider=codex`
-  - the `codex` reply path was re-verified after a model-fallback fix, and `model_call_started` / `model_call_finished` both reported `deepseek-v4-flash`
-- Change-set apply passed through the live backend:
-  - `POST /api/projects/proj-a5bcf10b-9cc9-4441-a159-c1842158f59b/change-sets/changeset-3e9a90f6-d731-4dd7-85d6-32e46692d081/apply`
-  - returned `status: already_applied`
-  - this path now uses a temporary patch file on Windows so `already_applied` detection works reliably on larger change-sets
-- Document preview passed through the live backend:
-  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.pdf` returned a PDF preview payload with a runtime `sourceUrl`
-  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.docx` returned `kind: docx` with a runtime `sourceUrl` for browser-side rendering
-  - `GET /api/projects/proj-282948e3-7bdb-42e9-a26a-9ac946bf725c/files/preview?path=__preview_verify__/sample.pptx` returned `kind: pptx` with a runtime `sourceUrl` for browser-side rendering
-  - all temporary preview fixtures were removed after validation, and the validation workspace diff returned empty again
-  - final visible reply sender was `product-manager`
-  - SSE stream completed and state reload reflected the persisted reply
-
-Additional custom-agent interaction verification passed on 2026-06-04 through the live services already running on `127.0.0.1:8787` and `127.0.0.1:8790`:
-
-- Created one fresh validation project:
-  - project: `proj-f114d6cb-48b5-41e1-bad3-931a6171efe1`
-  - workspace: `ws-dc027d8e-a489-4471-8bd2-bdaf22b9071b`
-- Created one workspace custom agent:
-  - `ux-copy-agent-verify`
-  - display name: `UX Copy Agent`
-  - provider: `mock`
-- Frontend create-agent dialog regression was fixed:
-  - clicking `New Agent` no longer exits create mode immediately
-  - the dialog now stays in create mode until the user selects an existing agent or finishes creation
-- Real explicit mention routing passed:
-  - `@ux-copy-agent-verify ...`
-  - persisted reply sender id stayed `ux-copy-agent-verify`
-  - `routing_finished.speakerAgentId` stayed `ux-copy-agent-verify`
-- Real custom-agent execution passed:
-  - `@ux-copy-agent-verify /run Return exactly three short login empty-state lines and nothing else.`
-  - persisted `agentRun.id = run-6d39db67-ffcf-4796-a451-88ab8ca98e2e`
-  - persisted `agentRun.provider = mock`
-  - persisted `agentRun.status = success`
-  - persisted handoff target stayed `ux-copy-agent-verify`
-- Real dynamic visible-speaker routing was also rechecked:
-  - English UI-copy request without `@mention` routed to `ux-copy-agent-verify`
-  - Chinese planning-style UI-copy request without `@mention` routed to `product-manager`
-  - current behavior therefore supports automatic custom-agent selection in some chat turns, but it is still sensitive to task-stage detection and routing-profile match quality
-
-Portable delivery preview smoke also passed on 2026-06-02 through one isolated backend instance on `127.0.0.1:8791`:
-
-- `POST /api/projects/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/builds` rebuilt delivery version `v20260602_135651` successfully with the updated portable HTML rewrite step.
-- `POST /api/projects/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/deploy` refreshed the local deployment successfully.
-- `GET /build-preview/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/v20260602_135651/index.html` returned `200` and now references `./favicon.svg` and `./assets/...` instead of `/favicon.svg` and `/assets/...`.
-- `GET /deploy/proj-8a85e530-cf40-43bd-8a13-556e517e5a6a/latest/index.html` returned `200` and now references the same relative asset URLs.
-- Direct asset fetches for both routes returned `200`:
-  - `/build-preview/.../assets/index-BxXBYxcm.js`
-  - `/build-preview/.../favicon.svg`
-  - `/deploy/.../latest/assets/index-BxXBYxcm.js`
-  - `/deploy/.../latest/favicon.svg`
-
-Version history smoke also passed on 2026-06-02 through a temporary isolated backend instance:
-
-- create a project bound to a temporary local workspace repo
-- save two source versions back to back
-- load `/api/projects/:projectId/versions`
-- load `/api/projects/:projectId/version-diff?v1=...&v2=...`
-- restore `/api/projects/:projectId/versions/:versionId/restore`
-- verify the workspace repo file content returned to the older version after restore
-
-Recommended real-chain verification after starting local services:
+真实 Agent 链路测试默认需要显式开启，避免日常验证消耗真实模型或 CLI：
 
 ```powershell
-cd E:\byDance\agentHub
+cd agentHub
 $env:AGENTHUB_RUN_REAL_TESTS='true'
-npx vitest run tests/real/agent-chain-probe.test.ts -t "keeps an unapproved planning request out of the engineer path" --reporter=verbose
-npx vitest run tests/real/agent-chain-probe.test.ts -t "probes the approved main chain through engineer, reviewer, and synthesis" --reporter=verbose
+npm run test:real
 ```
 
-## Local Delivery And Version Flow
+## 交付文档入口
 
-The current local frontend now exposes a first usable delivery and rollback flow inside the code workspace dialog:
+| 材料 | 链接 | 用途 |
+| --- | --- | --- |
+| 飞书交付终稿 | [docs/delivery-90/飞书交付终稿.md](docs/delivery-90/飞书交付终稿.md) | 面向评委的正文材料 |
+| AI 协作规范与 Skills 沉淀 | [docs/AI协作规范与Skills沉淀.md](docs/AI协作规范与Skills沉淀.md) | AI 协作能力证据 |
+| 架构设计文档 | [docs/AgentHub架构设计文档.md](docs/AgentHub架构设计文档.md) | 产品和技术架构 Spec |
+| 技术方案及技术栈 | [docs/开发具体方案及技术栈.md](docs/开发具体方案及技术栈.md) | 工程拆分和技术选型 |
+| 业务后端接口文档 | [docs/业务后端接口文档.md](docs/业务后端接口文档.md) | API 和字段约定 |
+| 真实链路验收与返工机制 | [docs/AgentHub真实链路验收与返工机制改造方案.md](docs/AgentHub真实链路验收与返工机制改造方案.md) | Agent 链路验收和自动返工证据 |
+| 移动端功能取舍说明 | [agentHubApp/docs/AgentHub移动端App功能取舍说明.md](agentHubApp/docs/AgentHub移动端App功能取舍说明.md) | App 职责边界说明 |
+| 移动端接口对接文档 | [agentHubApp/docs/AgentHub移动端App接口对接文档.md](agentHubApp/docs/AgentHub移动端App接口对接文档.md) | App API 接入说明 |
 
-- save the current workspace repo into a source snapshot
-- browse saved source versions
-- compare two saved versions through unified diff
-- restore one saved version back into the live workspace repo with an automatic safety snapshot
-- build a delivery artifact from the latest saved version
-- publish that built artifact into the local `/deploy/*` route
-- open the latest built preview, deployed page, or source archive directly from the UI
+## 当前边界
 
-The backend also injects the latest source/build/deploy status back into the main chat history as stable system cards, so refreshes no longer lose the latest local delivery result.
+当前版本已经完成比赛核心链路，但仍是比赛 Demo 和 MVP 阶段，不主张已经具备完整生产 SaaS 能力。
 
-## Current Limits
+- 公网 Demo 已部署，可供评委直接访问 Web 工作台。
+- 服务端已具备版本、构建预览、部署预览和源码下载链路。
+- 移动端以轻量协作为主，可展示或触达构建、部署、产物等入口；完整工程排查、复杂 Diff 和 Monaco 级代码编辑以 Web 工作台为主。
+- 多用户权限、租户隔离、弹性队列、更完整的云发布审批和发布历史属于后续增强。
 
-The current local implementation still does not cover:
+## Git 工作流
 
-- cloud deployment flow
-- richer release management flows such as approval, release channels, and publish history
-- framework preview outside the first local phase, such as Angular
-- desktop and mobile clients
-
-The current local deployment flow is still a backend-managed static publish step. It is not yet a true agent-driven cloud release workflow.
-
-## Git Workflow
-
-Git is managed from the repository root:
+从仓库根目录执行 Git 操作：
 
 ```powershell
-cd E:\byDance
+cd <你的仓库根目录>
 git status
 git add <paths>
-git commit -m "详细的本地阶段提交说明"
+git commit -m "详细的阶段提交说明"
 ```
 
-Use a detailed Chinese commit message for real checkpoints, and do not push to the remote unless explicitly requested.
+建议提交前至少运行对应端的 `check/build/test` 命令，并确认 README、飞书文档和实际项目状态一致。
 
-## Documentation
 
-Shared project documents live in `docs/`. Workspace-specific notes can stay inside their workspace directories.
