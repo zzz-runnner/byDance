@@ -70,16 +70,16 @@ agentHubFrontend -> agentHubBackend -> agentHub Runtime -> Agent adapters
 
 ## 本地启动 Web 端
 
-第一次启动先安装依赖：(注意以下需按照自身文件地址调整)
+下面命令默认当前终端已经位于仓库根目录。第一次启动先安装依赖：
 
 ```powershell
-cd D:\bydance\byDance\agentHub
+cd agentHub
 npm install
 
-cd D:\bydance\byDance\agentHubBackend
+cd ..\agentHubBackend
 npm install
 
-cd D:\bydance\byDance\agentHubFrontend
+cd ..\agentHubFrontend
 npm install
 ```
 
@@ -88,28 +88,28 @@ npm install
 终端 1：启动 AgentHub Runtime。
 
 ```powershell
-cd D:\bydance\byDance\agentHub
+cd agentHub
 npm run dev:api
 ```
 
 终端 2：可选，启动 Codex bridge。只有需要本机 Codex adapter 时启动；普通 mock/Claude 路径可先跳过。
 
 ```powershell
-cd D:\bydance\byDance\agentHub
+cd agentHub
 npm run codex:bridge
 ```
 
 终端 3：启动业务后端。
 
 ```powershell
-cd D:\bydance\byDance\agentHubBackend
+cd agentHubBackend
 npm run dev
 ```
 
 终端 4：启动 Web 工作台。
 
 ```powershell
-cd D:\bydance\byDance\agentHubFrontend
+cd agentHubFrontend
 npm run dev
 ```
 
@@ -124,7 +124,7 @@ npm run dev
 `agentHubBackend` 默认读取本地配置即可运行。需要自定义时复制 `.env.example`：
 
 ```powershell
-cd D:\bydance\byDance\agentHubBackend
+cd agentHubBackend
 Copy-Item .env.example .env
 ```
 
@@ -150,7 +150,7 @@ DATABASE_URL=postgres://agenthub:agenthub@127.0.0.1:5432/agenthub_business
 第一次启动先安装依赖：
 
 ```powershell
-cd D:\bydance\byDance\agentHubApp
+cd agentHubApp
 npm install
 ```
 
@@ -163,7 +163,7 @@ http://120.79.130.49:8790
 直接启动 Expo：
 
 ```powershell
-cd D:\bydance\byDance\agentHubApp
+cd agentHubApp
 npm run start
 ```
 
@@ -174,7 +174,7 @@ npm run start
 Windows PowerShell 示例：
 
 ```powershell
-cd D:\bydance\byDance\agentHubApp
+cd agentHubApp
 $env:EXPO_PUBLIC_BUSINESS_API_BASE_URL='http://127.0.0.1:8790'
 npm run start
 ```
@@ -188,7 +188,7 @@ npm run start
 常用 App 命令：
 
 ```powershell
-cd D:\bydance\byDance\agentHubApp
+cd agentHubApp
 npm run start
 npm run android
 npm run ios
@@ -201,26 +201,26 @@ npm run check
 各端常用检查：
 
 ```powershell
-cd D:\bydance\byDance\agentHub
+cd agentHub
 npm run check
 npm test
 
-cd D:\bydance\byDance\agentHubBackend
+cd ..\agentHubBackend
 npm run check
 npm run build
 
-cd D:\bydance\byDance\agentHubFrontend
+cd ..\agentHubFrontend
 npm run check
 npm run build
 
-cd D:\bydance\byDance\agentHubApp
+cd ..\agentHubApp
 npm run check
 ```
 
 真实 Agent 链路测试默认需要显式开启，避免日常验证消耗真实模型或 CLI：
 
 ```powershell
-cd D:\bydance\byDance\agentHub
+cd agentHub
 $env:AGENTHUB_RUN_REAL_TESTS='true'
 npm run test:real
 ```
@@ -252,11 +252,12 @@ npm run test:real
 从仓库根目录执行 Git 操作：
 
 ```powershell
-cd D:\bydance\byDance
+cd <你的仓库根目录>
 git status
 git add <paths>
 git commit -m "详细的阶段提交说明"
 ```
 
 建议提交前至少运行对应端的 `check/build/test` 命令，并确认 README、飞书文档和实际项目状态一致。
+
 
